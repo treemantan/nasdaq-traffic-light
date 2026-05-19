@@ -1,0 +1,126 @@
+name: Daily Market Report
+
+on:
+  schedule:
+    # GitHub cron is UTC and does not support Europe/London directly.
+    # Each UK target time has two UTC candidates. The Resolve email mode step
+    # keeps only the candidate that maps to the intended UK wall-clock time.
+    # UK DST rule, per GOV.UK: clocks go forward at 01:00 GMT on the last Sunday
+    # in March, and back at 02:00 BST on the last Sunday in October.
+    - cron: "30 7 * * 1-5"   # 08:30 UK when BST (UTC+1)
+    - cron: "30 8 * * 1-5"   # 08:30 UK when GMT (UTC+0)
+    - cron: "45 13 * * 1-5"  # 14:45 UK when BST
+    - cron: "45 14 * * 1-5"  # 14:45 UK when GMT
+    - cron: "0 17 * * 1-5"   # 18:00 UK when BST
+    - cron: "0 18 * * 1-5"   # 18:00 UK when GMT
+    - cron: "15 20 * * 1-5"  # 21:15 UK when BST
+    - cron: "15 21 * * 1-5"  # 21:15 UK when GMT
+  workflow_dispatch:
+    inputs:
+      email_mode:
+        description: "Email mode: none, pulse, volatility, full, auto"
+        required: false
+        default: "full"
+
+jobs:
+  build-and-send:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Resolve email mode
+        id: email-mode
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_SCHEDULE: ${{ github.event.schedule }}
+          DISPATCH_EMAIL_MODE: ${{ inputs.email_mode }}
+        run: |
+          python - <<'PY'
+          import os
+          from datetime import datetime, time, timezone
+          from zoneinfo import ZoneInfo
+
+          def emit(mode, should_run, notice):
+              with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+                  output.write(f"email_mode={mode}\n")
+                  output.write(f"should_run={'true' if should_run else 'false'}\n")
+                  output.write(f"notice={notice}\n")
+              with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env:
+                  env.write(f"EMAIL_MODE={mode}\n")
+                  env.write(f"SHOULD_RUN={'true' if should_run else 'false'}\n")
+              print(notice)
+
+          valid_modes = {"none", "pulse", "volatility", "full", "auto"}
+          if os.environ["EVENT_NAME"] == "workflow_dispatch":
+              mode = os.environ.get("DISPATCH_EMAIL_MODE") or "full"
+              if mode not in valid_modes:
+                  raise SystemExit(f"Invalid email_mode: {mode}")
+              emit(mode, True, f"manual run, EMAIL_MODE={mode}")
+              raise SystemExit(0)
+
+          schedule = os.environ["EVENT_SCHEDULE"]
+          mapping = {
+              "30 7 * * 1-5": ("08:30", "none"),
+              "30 8 * * 1-5": ("08:30", "none"),
+              "45 13 * * 1-5": ("14:45", "pulse"),
+              "45 14 * * 1-5": ("14:45", "pulse"),
+              "0 17 * * 1-5": ("18:00", "volatility"),
+              "0 18 * * 1-5": ("18:00", "volatility"),
+              "15 20 * * 1-5": ("21:15", "full"),
+              "15 21 * * 1-5": ("21:15", "full"),
+          }
+          if schedule not in mapping:
+              emit("auto", True, "unknown schedule, fallback to auto")
+              raise SystemExit(0)
+
+          target_hhmm, mode = mapping[schedule]
+          hour, minute = [int(part) for part in target_hhmm.split(":")]
+          london = ZoneInfo("Europe/London")
+          now_london = datetime.now(london)
+          target_london = datetime.combine(now_london.date(), time(hour, minute), london)
+          target_utc = target_london.astimezone(timezone.utc)
+          cron_minute, cron_hour = [int(part) for part in schedule.split()[:2]]
+          should_run = target_utc.hour == cron_hour and target_utc.minute == cron_minute
+
+          emit(
+              mode,
+              should_run,
+              f"schedule={schedule}, target_uk={target_hhmm}, "
+              + f"expected_utc={target_utc:%H:%M}, run={should_run}",
+          )
+          PY
+
+      - name: Install dependencies
+        if: steps.email-mode.outputs.should_run == 'true'
+        run: pip install -r requirements.txt
+
+      - name: Generate report
+        if: steps.email-mode.outputs.should_run == 'true'
+        run: python -m market_report --config config.example.json --dry-run
+
+      - name: Upload report artifact
+        if: steps.email-mode.outputs.should_run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: market-report-${{ github.run_id }}-${{ steps.email-mode.outputs.email_mode }}
+          path: |
+            output/*.html
+            output/*.json
+          if-no-files-found: error
+
+      - name: Send report email
+        if: steps.email-mode.outputs.should_run == 'true'
+        env:
+          EMAIL_MODE: ${{ steps.email-mode.outputs.email_mode }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          REPORT_EMAIL_TO: ${{ secrets.REPORT_EMAIL_TO }}
+          REPORT_EMAIL_FROM: ${{ secrets.REPORT_EMAIL_FROM }}
+        run: python scripts/send_report_email.py

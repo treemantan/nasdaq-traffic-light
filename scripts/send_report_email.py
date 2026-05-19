@@ -1,0 +1,331 @@
+from __future__ import annotations
+
+import json
+import os
+import re
+import sys
+from datetime import date, datetime, time, timezone
+from html import escape
+from pathlib import Path
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:  # pragma: no cover - keeps older local Python installs usable.
+    ZoneInfo = None
+
+from market_report.time_utils import _timezone_for
+
+
+REQUIRED_SEND_ENV = ("RESEND_API_KEY", "REPORT_EMAIL_TO", "REPORT_EMAIL_FROM")
+VALID_MODES = {"none", "pulse", "volatility", "full", "auto"}
+LONDON = ZoneInfo("Europe/London") if ZoneInfo else None
+
+
+def main() -> int:
+    requested_mode = os.environ.get("EMAIL_MODE", "full").strip().lower()
+    if requested_mode not in VALID_MODES:
+        print(f"Invalid EMAIL_MODE '{requested_mode}'. Expected one of: {', '.join(sorted(VALID_MODES))}", file=sys.stderr)
+        return 2
+
+    mode = _infer_email_mode() if requested_mode == "auto" else requested_mode
+    if mode == "none":
+        print("EMAIL_MODE=none; report email skipped successfully.")
+        return 0
+
+    missing = [name for name in REQUIRED_SEND_ENV if not os.environ.get(name)]
+    if missing:
+        print(f"Missing required environment variable(s): {', '.join(missing)}", file=sys.stderr)
+        return 3
+
+    output_dir = Path(os.environ.get("REPORT_OUTPUT_DIR", "output"))
+    report_path = _latest_html_report(output_dir)
+    if report_path is None:
+        print("No HTML market report found in output directory.", file=sys.stderr)
+        return 4
+
+    html = report_path.read_text(encoding="utf-8")
+    if not html.strip():
+        print(f"HTML report is empty: {report_path}", file=sys.stderr)
+        return 5
+
+    payload = _load_payload(report_path)
+    if mode in {"pulse", "volatility"} and payload is None:
+        print(f"Structured report payload not found for lightweight EMAIL_MODE={mode}: {report_path.with_suffix('.json')}", file=sys.stderr)
+        return 6
+
+    recipients = _parse_recipients(os.environ["REPORT_EMAIL_TO"])
+    if not recipients:
+        print("REPORT_EMAIL_TO does not contain any valid recipient address.", file=sys.stderr)
+        return 7
+
+    subject, message_html, message_text = _render_message(mode, report_path, html, payload)
+
+    try:
+        import resend
+
+        resend.api_key = os.environ["RESEND_API_KEY"]
+        response = resend.Emails.send(
+            {
+                "from": os.environ["REPORT_EMAIL_FROM"],
+                "to": recipients,
+                "subject": subject,
+                "html": message_html,
+                "text": message_text,
+            }
+        )
+    except Exception as exc:
+        print(f"Failed to send market report via Resend: {exc}", file=sys.stderr)
+        return 8
+
+    message_id = _response_id(response)
+    suffix = f" Message id: {message_id}" if message_id else ""
+    print(f"Market report email sent successfully. Mode: {mode}. Recipients: {len(recipients)}. Report: {report_path}.{suffix}")
+    return 0
+
+
+def _infer_email_mode(now: datetime | None = None) -> str:
+    local_now = _london_now(now)
+    current = local_now.time()
+    if current < time(12, 0):
+        return "none"
+    if current < time(16, 30):
+        return "pulse"
+    if current < time(20, 0):
+        return "volatility"
+    return "full"
+
+
+def _latest_html_report(output_dir: Path) -> Path | None:
+    if not output_dir.exists():
+        return None
+    reports = sorted(output_dir.glob("*.html"), key=lambda path: path.stat().st_mtime, reverse=True)
+    return reports[0] if reports else None
+
+
+def _load_payload(report_path: Path) -> dict | None:
+    payload_path = report_path.with_suffix(".json")
+    if not payload_path.exists():
+        return None
+    return json.loads(payload_path.read_text(encoding="utf-8"))
+
+
+def _render_message(mode: str, report_path: Path, full_html: str, payload: dict | None) -> tuple[str, str, str]:
+    report_date = _report_date(report_path)
+    if mode == "full":
+        subject = f"Daily Market Report - {report_date}"
+        text = (
+            f"Daily Market Report - {report_date}\n\n"
+            "The HTML market report was generated successfully, but your email client may not support HTML rendering. "
+            "Please open the GitHub Actions artifact named market-report to view the full report."
+        )
+        return subject, full_html, text
+    if mode == "pulse":
+        return _render_pulse(payload or {})
+    if mode == "volatility":
+        return _render_volatility(payload or {})
+    raise ValueError(f"Unsupported email mode: {mode}")
+
+
+def _render_pulse(payload: dict) -> tuple[str, str, str]:
+    stamp = _uk_stamp()
+    regime = payload.get("regime", {})
+    iron = payload.get("iron_condor", {})
+    risks = (payload.get("risks") or [])[:5]
+    blockers = iron.get("blockers") or []
+    subject = f"Market Pulse - {stamp}"
+    rows = [
+        ("综合风险分", f"{payload.get('overall_score', 'N/A')}/100"),
+        ("红绿灯状态", payload.get("light_label", "N/A")),
+        ("主导宏观框架", regime.get("label", "N/A")),
+        ("Regime置信度", f"{regime.get('confidence_score', 'N/A')}/100"),
+        ("Iron Condor环境", f"{iron.get('label', 'N/A')} · {iron.get('score', 'N/A')}/100"),
+    ]
+    html = _html_shell(
+        "Market Pulse",
+        _definition_table(rows)
+        + _bullet_section("关键风险变化", risks)
+        + _bullet_section("触发警报 / 阻断项", blockers)
+        + "<p style='color:#9ca3af;'>Full report will be sent after the US market close.</p>",
+    )
+    text = "\n".join(
+        [
+            subject,
+            f"Overall risk score: {payload.get('overall_score', 'N/A')}/100",
+            f"Light label: {payload.get('light_label', 'N/A')}",
+            f"Macro regime: {regime.get('label', 'N/A')}",
+            f"Regime confidence: {regime.get('confidence_score', 'N/A')}/100",
+            f"Iron Condor: {iron.get('label', 'N/A')} · {iron.get('score', 'N/A')}/100",
+            "Key risks: " + ("; ".join(risks) if risks else "N/A"),
+            "Alerts/blockers: " + ("; ".join(blockers) if blockers else "N/A"),
+            "Full report will be sent after the US market close.",
+        ]
+    )
+    return subject, html, text
+
+
+def _render_volatility(payload: dict) -> tuple[str, str, str]:
+    stamp = _uk_stamp()
+    iron = payload.get("iron_condor", {})
+    blockers = iron.get("blockers") or []
+    warnings = iron.get("warnings") or []
+    worsening = _short_vol_environment_answer(iron)
+    subject = f"Volatility Regime Update - {stamp}"
+    rows = [
+        ("VIX", _metric_line(payload, "vix")),
+        ("VVIX", _metric_line(payload, "vvix")),
+        ("MOVE", _metric_line(payload, "move")),
+        ("Nasdaq 100", _metric_pct_line(payload, "nasdaq")),
+        ("S&P 500", _metric_pct_line(payload, "sp500")),
+        ("10Y Treasury", _metric_value_change_line(payload, "treasury_10y")),
+        ("DXY", _metric_pct_line(payload, "dxy")),
+        ("Iron Condor环境", f"{iron.get('label', 'N/A')} · {iron.get('score', 'N/A')}/100"),
+    ]
+    body = (
+        f"<p><strong>核心判断：</strong>{escape(worsening)}</p>"
+        + _definition_table(rows)
+        + _bullet_section("短波动策略相关阻断项", blockers)
+        + _bullet_section("短波动策略相关风险提示", warnings[:6])
+        + "<p style='color:#9ca3af;'>本邮件仅评估宏观与波动率环境，不构成期权交易建议。</p>"
+    )
+    html = _html_shell("Volatility / Iron Condor Regime", body)
+    text = "\n".join(
+        [
+            subject,
+            f"Core answer: {worsening}",
+            f"VIX: {_metric_line(payload, 'vix')}",
+            f"VVIX: {_metric_line(payload, 'vvix')}",
+            f"MOVE: {_metric_line(payload, 'move')}",
+            f"Nasdaq 100: {_metric_pct_line(payload, 'nasdaq')}",
+            f"S&P 500: {_metric_pct_line(payload, 'sp500')}",
+            f"10Y Treasury: {_metric_value_change_line(payload, 'treasury_10y')}",
+            f"DXY: {_metric_pct_line(payload, 'dxy')}",
+            f"Iron Condor: {iron.get('label', 'N/A')} · {iron.get('score', 'N/A')}/100",
+            "Blockers: " + ("; ".join(blockers) if blockers else "N/A"),
+            "Warnings: " + ("; ".join(warnings[:6]) if warnings else "N/A"),
+            "This message evaluates market environment only and is not options trading advice.",
+        ]
+    )
+    return subject, html, text
+
+
+def _short_vol_environment_answer(iron: dict) -> str:
+    score = iron.get("score")
+    blockers = iron.get("blockers") or []
+    if blockers or (isinstance(score, int) and score < 50):
+        return "是。当前波动率、利率波动或权益方向性压力正在恶化，区间型卖波动策略的结构性容错下降。"
+    if isinstance(score, int) and score < 75:
+        return "边际偏谨慎。环境未进入明确压力状态，但仍需要观察波动率和利率冲击是否继续扩散。"
+    return "暂未恶化。波动率与跨资产压力仍相对可控，但仍需等待后续数据确认。"
+
+
+def _metric_line(payload: dict, key: str) -> str:
+    metric = _metric(payload, key)
+    value = _fmt(metric.get("value"), metric.get("unit", ""))
+    change_pct = metric.get("change_pct")
+    pct = f"{change_pct:+.2f}%" if isinstance(change_pct, (int, float)) else "N/A"
+    return f"{value} / {pct}"
+
+
+def _metric_pct_line(payload: dict, key: str) -> str:
+    metric = _metric(payload, key)
+    change_pct = metric.get("change_pct")
+    return f"{change_pct:+.2f}%" if isinstance(change_pct, (int, float)) else "N/A"
+
+
+def _metric_value_change_line(payload: dict, key: str) -> str:
+    metric = _metric(payload, key)
+    value = _fmt(metric.get("value"), metric.get("unit", ""))
+    change = metric.get("change")
+    unit = metric.get("unit", "")
+    change_text = f"{change:+.3f}{unit}" if isinstance(change, (int, float)) else "N/A"
+    return f"{value} / {change_text}"
+
+
+def _metric(payload: dict, key: str) -> dict:
+    scored = (payload.get("metrics") or {}).get(key) or {}
+    return scored.get("metric") or {}
+
+
+def _definition_table(rows: list[tuple[str, str]]) -> str:
+    items = "".join(
+        f"<tr><td style='padding:7px 10px;color:#9ca3af;border-bottom:1px solid #263244;'>{escape(label)}</td>"
+        f"<td style='padding:7px 10px;color:#f3f4f6;border-bottom:1px solid #263244;'>{escape(str(value))}</td></tr>"
+        for label, value in rows
+    )
+    return f"<table width='100%' cellspacing='0' cellpadding='0' style='border-collapse:collapse;'>{items}</table>"
+
+
+def _bullet_section(title: str, items: list[str]) -> str:
+    if not items:
+        items = ["暂无明显信号。"]
+    bullets = "".join(f"<li>{escape(str(item))}</li>" for item in items)
+    return f"<h3 style='font-size:15px;color:#f3f4f6;margin:16px 0 8px;'>{escape(title)}</h3><ul>{bullets}</ul>"
+
+
+def _html_shell(title: str, body: str) -> str:
+    return f"""<!doctype html>
+<html lang="zh-CN">
+<body style="margin:0;padding:0;background:#0b1017;font-family:Arial,'Microsoft YaHei',sans-serif;color:#f3f4f6;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#0b1017;width:100%;">
+    <tr><td align="center" style="padding:22px 12px;">
+      <table role="presentation" width="680" cellspacing="0" cellpadding="0" style="width:680px;max-width:100%;background:#111827;border:1px solid #263244;border-radius:8px;">
+        <tr><td style="padding:20px 22px;border-bottom:1px solid #263244;">
+          <div style="font-size:24px;line-height:1.25;font-weight:700;color:#f3f4f6;">{escape(title)}</div>
+          <div style="font-size:13px;color:#9ca3af;margin-top:5px;">Nasdaq Traffic Light · UK monitor</div>
+        </td></tr>
+        <tr><td style="padding:18px 22px;color:#d1d5db;font-size:14px;line-height:1.55;">{body}</td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>"""
+
+
+def _fmt(value: object, unit: str = "") -> str:
+    if not isinstance(value, (int, float)):
+        return "N/A"
+    if unit == "%":
+        return f"{value:.3f}%"
+    if unit == "bp":
+        return f"{value:.0f}bp"
+    if abs(value) >= 1000:
+        return f"{value:,.2f}"
+    if abs(value) >= 10:
+        return f"{value:.2f}"
+    return f"{value:.4f}".rstrip("0").rstrip(".")
+
+
+def _parse_recipients(raw: str) -> list[str]:
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def _report_date(path: Path) -> str:
+    match = re.search(r"(\d{4}-\d{2}-\d{2})", path.name)
+    return match.group(1) if match else date.today().isoformat()
+
+
+def _uk_stamp() -> str:
+    return _london_now().strftime("%Y-%m-%d %H:%M UK")
+
+
+def _london_now(now: datetime | None = None) -> datetime:
+    if LONDON is not None:
+        return now.astimezone(LONDON) if now else datetime.now(LONDON)
+    utc_now = now.astimezone(timezone.utc) if now else datetime.now(timezone.utc)
+    return utc_now.astimezone(_timezone_for(utc_now, "Europe/London"))
+
+
+def _response_id(response: object) -> str | None:
+    if isinstance(response, dict):
+        value = response.get("id")
+        return str(value) if value else None
+    value = getattr(response, "id", None)
+    return str(value) if value else None
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,369 @@
+from __future__ import annotations
+
+from datetime import datetime
+from html import escape
+
+from .data_sources import MarketMetric
+from .scoring import IronCondorAssessment, ScoredMetric, ScoredReport
+from .time_utils import format_timestamp
+
+
+DISPLAY_GROUPS = [
+    ("权益风险偏好", ["nasdaq", "sp500", "russell2000"]),
+    ("情绪、波动与压力", ["cnn_fear_greed", "naaim_exposure", "vix", "vvix", "move", "credit_spread_hy"]),
+    ("利率与实际利率", ["treasury_2y", "treasury_10y", "curve_2s10s", "real_yield_10y", "inflation_expectation_10y"]),
+    ("美元与商品", ["dxy", "gbpusd", "usdjpy", "gold", "oil"]),
+    ("美元流动性", ["fed_balance_sheet", "rrp", "tga", "bank_reserves"]),
+]
+
+
+def render_html_report(report: ScoredReport, title: str) -> str:
+    groups = "\n".join(_render_group(title, keys, report.metrics) for title, keys in DISPLAY_GROUPS)
+    data_rows = "\n".join(_render_data_row(item.metric, report.fetched_timezone) for item in report.metrics.values())
+    knowns = "\n".join(f"<li>{escape(item)}</li>" for item in report.regime.knowns)
+    unknowns = "\n".join(f"<li>{escape(item)}</li>" for item in report.regime.unknowns)
+    risks = "\n".join(f"<li>{escape(item)}</li>" for item in report.risks)
+    weights = "\n".join(_render_weight_row(key, value, report.metrics) for key, value in report.weights.items())
+    health_notes = _render_health_notes(report)
+    iron_condor = _render_iron_condor(report.iron_condor)
+
+    return f"""<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{escape(title)} | {report.report_date}</title>
+  <style>
+    :root {{
+      --bg: #0b1017;
+      --panel: #111827;
+      --panel-2: #151f2d;
+      --line: #263244;
+      --muted: #9ca3af;
+      --text: #f3f4f6;
+      --subtle: #d1d5db;
+      --accent: {report.light_color};
+      --green: #2f9e44;
+      --amber: #b7791f;
+      --red: #c92a2a;
+      --blue: #2563eb;
+    }}
+    * {{ box-sizing: border-box; }}
+    body {{
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+      font-size: 15px;
+      line-height: 1.55;
+    }}
+    .page {{ max-width: 1180px; margin: 0 auto; padding: 28px 18px 34px; }}
+    .topbar {{
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 18px;
+      align-items: start;
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 18px;
+      margin-bottom: 18px;
+    }}
+    h1 {{ margin: 0; font-size: 34px; line-height: 1.15; letter-spacing: 0; }}
+    h2 {{ margin: 0 0 12px; font-size: 18px; letter-spacing: 0; }}
+    .subtitle, .muted {{ color: var(--muted); }}
+    .datebox {{ text-align: right; color: var(--subtle); }}
+    .datebox strong {{ display: block; color: var(--text); font-size: 22px; }}
+    .hero {{ display: grid; grid-template-columns: 300px 1fr 300px; gap: 14px; margin-bottom: 14px; }}
+    .panel {{ background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px; }}
+    .kicker {{ color: var(--muted); font-size: 12px; letter-spacing: .04em; text-transform: uppercase; margin-bottom: 8px; }}
+    .score {{ font-size: 64px; line-height: 1; color: var(--accent); font-weight: 760; }}
+    .score span {{ color: var(--muted); font-size: 24px; font-weight: 500; }}
+    .light {{
+      display: inline-flex; align-items: center; gap: 8px; margin-top: 12px; padding: 7px 10px;
+      border: 1px solid var(--line); border-radius: 6px; background: rgba(255,255,255,.03); font-weight: 650;
+    }}
+    .dot {{ width: 10px; height: 10px; border-radius: 50%; background: var(--accent); }}
+    .regime-title {{ font-size: 26px; line-height: 1.25; margin-bottom: 8px; font-weight: 760; }}
+    .summary {{ color: var(--subtle); }}
+    .chips {{ display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }}
+    .chip {{ border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; color: var(--subtle); background: rgba(255,255,255,.025); font-size: 13px; }}
+    .health-grid {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }}
+    .health-item {{ border: 1px solid var(--line); border-radius: 6px; padding: 8px; background: rgba(255,255,255,.025); }}
+    .health-item strong {{ display: block; font-size: 18px; }}
+    .health-notes {{ margin-top: 10px; color: var(--subtle); font-size: 13px; }}
+    .strategy-filter {{ margin-bottom: 14px; border-color: {report.iron_condor.color}; }}
+    .strategy-head {{ display: grid; grid-template-columns: 170px 1fr; gap: 16px; align-items: start; }}
+    .strategy-score {{ font-size: 46px; line-height: 1; font-weight: 760; color: {report.iron_condor.color}; }}
+    .strategy-score span {{ color: var(--muted); font-size: 18px; font-weight: 500; }}
+    .strategy-label {{ display: inline-block; color: {report.iron_condor.color}; font-weight: 760; margin-bottom: 7px; }}
+    .strategy-lists {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 14px; }}
+    .strategy-list {{ background: rgba(255,255,255,.025); border: 1px solid var(--line); border-radius: 8px; padding: 12px; }}
+    .disclaimer {{ margin-top: 12px; color: var(--muted); font-size: 12px; }}
+    .grid {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }}
+    .metric-grid {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }}
+    .metric {{ background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 12px; min-height: 148px; }}
+    .metric-head {{ display: flex; justify-content: space-between; gap: 8px; align-items: start; margin-bottom: 10px; }}
+    .metric-name {{ font-weight: 700; }}
+    .symbol {{ color: var(--muted); font-size: 12px; white-space: nowrap; }}
+    .metric-value {{ font-size: 24px; font-weight: 760; }}
+    .change-up {{ color: #f87171; }}
+    .change-down {{ color: #4ade80; }}
+    .metric-note {{ color: var(--subtle); font-size: 13px; margin-top: 8px; }}
+    .signal {{ display: inline-block; margin-top: 8px; color: #bfdbfe; font-size: 13px; }}
+    .wide {{ grid-column: 1 / -1; }}
+    .columns {{ display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; margin-top: 14px; }}
+    ul {{ margin: 0; padding-left: 19px; }}
+    li {{ margin: 6px 0; }}
+    table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
+    th, td {{ border-bottom: 1px solid var(--line); padding: 8px 6px; text-align: left; vertical-align: top; }}
+    th {{ color: var(--muted); font-weight: 600; }}
+    .status-ok {{ color: #86efac; }}
+    .status-warn {{ color: #fcd34d; }}
+    .status-bad {{ color: #fca5a5; }}
+    .bar {{ height: 8px; background: #1f2937; border-radius: 999px; overflow: hidden; margin-top: 5px; }}
+    .bar span {{ display: block; height: 100%; background: var(--blue); }}
+    .footer {{ margin-top: 16px; color: var(--muted); font-size: 12px; display: flex; justify-content: space-between; gap: 12px; border-top: 1px solid var(--line); padding-top: 12px; }}
+    @media (max-width: 980px) {{
+      .hero, .grid, .columns, .strategy-head, .strategy-lists {{ grid-template-columns: 1fr; }}
+      .datebox {{ text-align: left; }}
+    }}
+    @media (max-width: 620px) {{
+      .topbar, .metric-grid {{ grid-template-columns: 1fr; }}
+      .score {{ font-size: 52px; }}
+    }}
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="topbar">
+      <div>
+        <h1>纳斯达克红绿灯：宏观跨资产风险仪表盘</h1>
+        <div class="subtitle">Macro regime-aware cross-asset monitor | 中文机构版</div>
+      </div>
+      <div class="datebox">
+        <strong>{report.report_date}</strong>
+        <span>抓取时间（{escape(report.fetched_timezone)}）：{escape(report.fetched_at)}</span>
+      </div>
+    </section>
+
+    <section class="hero">
+      <div class="panel">
+        <div class="kicker">综合宏观风险分</div>
+        <div class="score">{report.overall_score}<span>/100</span></div>
+        <div class="light"><span class="dot"></span>{escape(report.light_label)}：{escape(report.headline)}</div>
+      </div>
+      <div class="panel">
+        <div class="kicker">主导宏观框架</div>
+        <div class="regime-title">{escape(report.regime.label)}</div>
+        <div class="summary">{escape(report.summary)}</div>
+        <div class="chips">
+          <span class="chip">Regime: {escape(report.regime.name)}</span>
+          <span class="chip">流动性：{escape(report.regime.liquidity_regime)}</span>
+          <span class="chip">收益率驱动：{escape(report.regime.yield_driver)}</span>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="kicker">数据健康度</div>
+        <div class="health-grid">
+          <div class="health-item"><span class="muted">状态</span><strong>{escape(report.data_quality)}</strong></div>
+          <div class="health-item"><span class="muted">置信度</span><strong>{report.regime.confidence_score}/100</strong></div>
+          <div class="health-item"><span class="muted">核心缓存</span><strong>{report.data_health.get("core_cached", 0)}</strong></div>
+          <div class="health-item"><span class="muted">辅助缺失</span><strong>{report.data_health.get("aux_missing", 0)}</strong></div>
+        </div>
+        <div class="health-notes">{health_notes}</div>
+      </div>
+    </section>
+
+    {iron_condor}
+
+    <section class="grid">{groups}</section>
+
+    <section class="columns">
+      <div class="panel">
+        <h2>市场已知信息</h2>
+        <ul>{knowns}</ul>
+      </div>
+      <div class="panel">
+        <h2>未决宏观变量</h2>
+        <ul>{unknowns}</ul>
+      </div>
+      <div class="panel">
+        <h2>风险与策略含义</h2>
+        <ul>{risks}</ul>
+        <p>{escape(report.action)}</p>
+      </div>
+    </section>
+
+    <section class="columns">
+      <div class="panel">
+        <h2>自适应权重</h2>
+        {weights}
+      </div>
+      <div class="panel wide">
+        <h2>数据源、最近有效值与新鲜度</h2>
+        <table>
+          <thead>
+            <tr><th>指标</th><th>Ticker</th><th>来源</th><th>最近有效值</th><th>抓取时间（{escape(report.fetched_timezone)}）</th><th>状态</th></tr>
+          </thead>
+          <tbody>{data_rows}</tbody>
+        </table>
+      </div>
+    </section>
+
+    <div class="footer">
+      <span>免责声明：本报告仅用于宏观市场监控与研究参考，不构成投资建议。</span>
+      <span>缓存、fallback、缺失与延迟状态均已显式标注；系统不会静默替代实时数据。</span>
+    </div>
+  </main>
+</body>
+</html>"""
+
+
+def _render_health_notes(report: ScoredReport) -> str:
+    notes: list[str] = []
+    if report.data_health.get("core_missing", 0):
+        notes.append("核心指标缺失，报告结论需复核。")
+    if report.data_health.get("core_cached", 0):
+        notes.append("部分核心指标使用缓存。")
+    if report.data_health.get("aux_missing", 0):
+        notes.append("辅助数据暂不可用，流动性判断基于可用市场价格推断。")
+    if not notes:
+        notes.append("核心数据源运行正常。")
+    return escape(" ".join(notes))
+
+
+def _render_iron_condor(assessment: IronCondorAssessment) -> str:
+    positives = _render_assessment_list(assessment.positives)
+    warnings = _render_assessment_list(assessment.warnings)
+    blockers = _render_assessment_list(assessment.blockers)
+    return f"""<section class="panel strategy-filter">
+      <h2>Iron Condor环境过滤器</h2>
+      <div class="strategy-head">
+        <div>
+          <div class="kicker">区间型卖波动环境</div>
+          <div class="strategy-score">{assessment.score}<span>/100</span></div>
+        </div>
+        <div>
+          <div class="strategy-label">{escape(assessment.label)}</div>
+          <div class="summary">{escape(assessment.summary)}</div>
+        </div>
+      </div>
+      <div class="strategy-lists">
+        <div class="strategy-list"><h2>支持因素</h2><ul>{positives}</ul></div>
+        <div class="strategy-list"><h2>风险提示</h2><ul>{warnings}</ul></div>
+        <div class="strategy-list"><h2>阻断项</h2><ul>{blockers}</ul></div>
+      </div>
+      <div class="disclaimer">本模块仅评估市场环境是否适合区间型卖波动策略，不构成期权交易建议。</div>
+    </section>"""
+
+
+def _render_assessment_list(items: list[str]) -> str:
+    if not items:
+        return "<li>暂无明显信号。</li>"
+    return "".join(f"<li>{escape(item)}</li>" for item in items)
+
+
+def _render_group(title: str, keys: list[str], metrics: dict[str, ScoredMetric]) -> str:
+    cards = [metrics[key] for key in keys if key in metrics]
+    if not cards:
+        return ""
+    rendered = "\n".join(_render_metric_card(item) for item in cards)
+    return f"""<section class="panel">
+      <h2>{escape(title)}</h2>
+      <div class="metric-grid">{rendered}</div>
+    </section>"""
+
+
+def _render_metric_card(item: ScoredMetric) -> str:
+    metric = item.metric
+    change_text, change_class = _change_text(metric)
+    status_class = _status_class(metric)
+    return f"""<article class="metric">
+      <div class="metric-head">
+        <div>
+          <div class="metric-name">{escape(metric.label)}</div>
+          <div class="symbol">{escape(metric.symbol)} · {escape(metric.source)}</div>
+        </div>
+        <div class="{status_class}">{escape(_status_label(metric))}</div>
+      </div>
+      <div class="metric-value">{escape(_fmt(metric.value, metric.unit))}</div>
+      <div class="{change_class}">{escape(change_text)}</div>
+      <div class="signal">{escape(item.signal)} · 风险分 {item.score}</div>
+      <div class="metric-note">{escape(item.note)}</div>
+    </article>"""
+
+
+def _render_data_row(metric: MarketMetric, timezone_name: str = "America/New_York") -> str:
+    status_class = _status_class(metric)
+    date_text = metric.as_of.isoformat() if metric.as_of else "无有效值"
+    fetched = _format_metric_time(metric.fetched_at, timezone_name)
+    return f"""<tr>
+      <td>{escape(metric.label)}</td>
+      <td>{escape(metric.symbol)}</td>
+      <td>{escape(metric.source)}</td>
+      <td>{escape(date_text)}</td>
+      <td>{escape(fetched)}</td>
+      <td class="{status_class}">{escape(_status_label(metric))}</td>
+    </tr>"""
+
+
+def _format_metric_time(timestamp: datetime, timezone_name: str) -> str:
+    return format_timestamp(timestamp, timezone_name)
+
+
+def _render_weight_row(key: str, value: float, metrics: dict[str, ScoredMetric]) -> str:
+    label = metrics[key].metric.label if key in metrics else key
+    return f"""<div>
+      <div>{escape(label)} <strong>{value:.0%}</strong></div>
+      <div class="bar"><span style="width:{value * 100:.1f}%"></span></div>
+    </div>"""
+
+
+def _change_text(metric: MarketMetric) -> tuple[str, str]:
+    if metric.change is None or metric.change_pct is None:
+        return "变化：N/A", "summary"
+    sign = "+" if metric.change >= 0 else ""
+    text = f"{sign}{_fmt(metric.change, metric.unit)} / {sign}{metric.change_pct:.2f}%"
+    css = "change-up" if metric.change >= 0 else "change-down"
+    return text, css
+
+
+def _status_label(metric: MarketMetric) -> str:
+    if metric.status == "ok" and metric.freshness == "live":
+        return "实时/收盘"
+    if metric.status == "ok" and metric.freshness == "recent-valid":
+        return "最近有效值"
+    if metric.status == "ok" and metric.freshness == "cache":
+        return "使用缓存"
+    if metric.status == "ok" and metric.freshness == "derived":
+        return "估算/派生"
+    if metric.status == "stale":
+        return "滞后"
+    if metric.status == "suspicious":
+        return "数据异常"
+    return "缺失"
+
+
+def _status_class(metric: MarketMetric) -> str:
+    if metric.status == "ok" and metric.freshness in {"live", "recent-valid", "derived"}:
+        return "status-ok"
+    if metric.status == "ok" and metric.freshness == "cache":
+        return "status-warn"
+    if metric.status in {"suspicious", "stale"}:
+        return "status-warn"
+    return "status-bad"
+
+
+def _fmt(value: float | None, unit: str = "") -> str:
+    if value is None:
+        return "N/A"
+    if unit == "%":
+        return f"{value:.3f}%"
+    if unit == "bp":
+        return f"{value:.0f}bp"
+    if unit == "USD bn":
+        return f"{value:,.0f}B"
+    if abs(value) >= 1000:
+        return f"{value:,.2f}"
+    if abs(value) >= 10:
+        return f"{value:.2f}"
+    return f"{value:.4f}".rstrip("0").rstrip(".")

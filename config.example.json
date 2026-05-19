@@ -1,0 +1,25 @@
+{
+  "report": {
+    "title": "纳斯达克红绿灯：宏观跨资产风险仪表盘",
+    "timezone": "America/New_York",
+    "output_dir": "output"
+  },
+  "weights": {
+    "nasdaq": 0.4,
+    "vix": 0.2,
+    "treasury_10y": 0.2,
+    "dxy": 0.2
+  },
+  "email": {
+    "enabled": false,
+    "smtp_host": "smtp.gmail.com",
+    "smtp_port": 587,
+    "security": "starttls",
+    "username": "your_email@example.com",
+    "password_env": "SMTP_PASSWORD",
+    "from": "your_email@example.com",
+    "to": ["recipient@example.com"],
+    "subject_prefix": "纳斯达克红绿灯",
+    "attach_html": true
+  }
+}

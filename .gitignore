@@ -1,0 +1,15 @@
+.idea/
+.vs/
+__pycache__/
+*.py[cod]
+
+logs/
+output/
+secrets/
+
+config.json
+config.email.json
+
+.env
+.venv/
+venv/
