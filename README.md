@@ -61,6 +61,19 @@ python -m market_report --config config.json
 - `REPORT_EMAIL_TO`：收件人邮箱，多个地址用英文逗号分隔
 - `REPORT_EMAIL_FROM`：Resend 已验证的发件地址或域名邮箱
 
+如果没有自己的域名，也可以改用 Gmail SMTP。设置以下 repository secrets：
+
+- `EMAIL_PROVIDER`：填 `smtp`
+- `REPORT_EMAIL_TO`：收件人邮箱，多个地址用英文逗号分隔
+- `SMTP_USERNAME`：Gmail 地址
+- `SMTP_PASSWORD`：Gmail App Password，不是网页登录密码
+- `SMTP_FROM`：可选，默认使用 `SMTP_USERNAME`
+- `SMTP_HOST`：可选，默认 `smtp.gmail.com`
+- `SMTP_PORT`：可选，默认 `587`
+- `SMTP_SECURITY`：可选，默认 `starttls`
+
+使用 SMTP 时不需要 `RESEND_API_KEY` 或 `REPORT_EMAIL_FROM`。如果 `EMAIL_PROVIDER` 不设置，默认仍走 Resend。
+
 邮件模式：
 
 - `none`：只生成报告并上传 artifact，不发送邮件

@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 import os
 import re
+import smtplib
 import sys
 from datetime import date, datetime, time, timezone
+from email.message import EmailMessage
 from html import escape
 from pathlib import Path
 
@@ -20,50 +22,71 @@ except ImportError:  # pragma: no cover - keeps older local Python installs usab
 from market_report.time_utils import _timezone_for
 
 
-REQUIRED_SEND_ENV = ("RESEND_API_KEY", "REPORT_EMAIL_TO", "REPORT_EMAIL_FROM")
+REQUIRED_RESEND_ENV = ("RESEND_API_KEY", "REPORT_EMAIL_TO", "REPORT_EMAIL_FROM")
+REQUIRED_SMTP_ENV = ("SMTP_USERNAME", "SMTP_PASSWORD", "REPORT_EMAIL_TO")
+VALID_PROVIDERS = {"resend", "smtp"}
 VALID_MODES = {"none", "pulse", "volatility", "full", "auto"}
 LONDON = ZoneInfo("Europe/London") if ZoneInfo else None
 
 
 def main() -> int:
+    provider = (os.environ.get("EMAIL_PROVIDER") or "resend").strip().lower()
+    if provider not in VALID_PROVIDERS:
+        print(f"Invalid EMAIL_PROVIDER '{provider}'. Expected one of: {', '.join(sorted(VALID_PROVIDERS))}", file=sys.stderr)
+        return 2
+
     requested_mode = os.environ.get("EMAIL_MODE", "full").strip().lower()
     if requested_mode not in VALID_MODES:
         print(f"Invalid EMAIL_MODE '{requested_mode}'. Expected one of: {', '.join(sorted(VALID_MODES))}", file=sys.stderr)
-        return 2
+        return 3
 
     mode = _infer_email_mode() if requested_mode == "auto" else requested_mode
     if mode == "none":
         print("EMAIL_MODE=none; report email skipped successfully.")
         return 0
 
-    missing = [name for name in REQUIRED_SEND_ENV if not os.environ.get(name)]
+    required_env = REQUIRED_SMTP_ENV if provider == "smtp" else REQUIRED_RESEND_ENV
+    missing = [name for name in required_env if not os.environ.get(name)]
     if missing:
         print(f"Missing required environment variable(s): {', '.join(missing)}", file=sys.stderr)
-        return 3
+        return 4
 
     output_dir = Path(os.environ.get("REPORT_OUTPUT_DIR", "output"))
     report_path = _latest_html_report(output_dir)
     if report_path is None:
         print("No HTML market report found in output directory.", file=sys.stderr)
-        return 4
+        return 5
 
     html = report_path.read_text(encoding="utf-8")
     if not html.strip():
         print(f"HTML report is empty: {report_path}", file=sys.stderr)
-        return 5
+        return 6
 
     payload = _load_payload(report_path)
     if mode in {"pulse", "volatility"} and payload is None:
         print(f"Structured report payload not found for lightweight EMAIL_MODE={mode}: {report_path.with_suffix('.json')}", file=sys.stderr)
-        return 6
+        return 7
 
     recipients = _parse_recipients(os.environ["REPORT_EMAIL_TO"])
     if not recipients:
         print("REPORT_EMAIL_TO does not contain any valid recipient address.", file=sys.stderr)
-        return 7
+        return 8
 
     subject, message_html, message_text = _render_message(mode, report_path, html, payload)
 
+    if provider == "smtp":
+        return _send_smtp(subject, message_html, message_text, recipients, mode, report_path)
+    return _send_resend(subject, message_html, message_text, recipients, mode, report_path)
+
+
+def _send_resend(
+    subject: str,
+    message_html: str,
+    message_text: str,
+    recipients: list[str],
+    mode: str,
+    report_path: Path,
+) -> int:
     try:
         import resend
 
@@ -79,11 +102,52 @@ def main() -> int:
         )
     except Exception as exc:
         print(f"Failed to send market report via Resend: {exc}", file=sys.stderr)
-        return 8
+        return 9
 
     message_id = _response_id(response)
     suffix = f" Message id: {message_id}" if message_id else ""
-    print(f"Market report email sent successfully. Mode: {mode}. Recipients: {len(recipients)}. Report: {report_path}.{suffix}")
+    print(f"Market report email sent successfully via Resend. Mode: {mode}. Recipients: {len(recipients)}. Report: {report_path}.{suffix}")
+    return 0
+
+
+def _send_smtp(
+    subject: str,
+    message_html: str,
+    message_text: str,
+    recipients: list[str],
+    mode: str,
+    report_path: Path,
+) -> int:
+    host = os.environ.get("SMTP_HOST") or "smtp.gmail.com"
+    port = int(os.environ.get("SMTP_PORT") or "587")
+    security = (os.environ.get("SMTP_SECURITY") or "starttls").strip().lower()
+    username = os.environ["SMTP_USERNAME"]
+    password = os.environ["SMTP_PASSWORD"]
+    sender = os.environ.get("SMTP_FROM") or os.environ.get("REPORT_EMAIL_FROM") or username
+
+    message = EmailMessage()
+    message["Subject"] = subject
+    message["From"] = sender
+    message["To"] = ", ".join(recipients)
+    message.set_content(message_text)
+    message.add_alternative(message_html, subtype="html")
+
+    try:
+        if security == "ssl" or port == 465:
+            with smtplib.SMTP_SSL(host, port, timeout=30) as smtp:
+                smtp.login(username, password)
+                smtp.send_message(message)
+        else:
+            with smtplib.SMTP(host, port, timeout=30) as smtp:
+                if security != "none":
+                    smtp.starttls()
+                smtp.login(username, password)
+                smtp.send_message(message)
+    except Exception as exc:
+        print(f"Failed to send market report via SMTP: {exc}", file=sys.stderr)
+        return 10
+
+    print(f"Market report email sent successfully via SMTP. Mode: {mode}. Recipients: {len(recipients)}. Report: {report_path}.")
     return 0
 
 
