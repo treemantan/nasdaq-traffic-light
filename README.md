@@ -82,6 +82,13 @@ python -m market_report --config config.json
 - `full`：发送完整 HTML 报告
 - `auto`：根据 Europe/London 当前本地时间自动推断邮件模式
 
+`auto` 的 UK 本地时间映射：
+
+- `00:00-11:59`：`none`
+- `12:00-16:29`：`pulse`
+- `16:30-19:59`：`volatility`
+- `20:00-23:59`：`full`
+
 手动运行：
 
 1. 打开 GitHub repo 的 `Actions`
