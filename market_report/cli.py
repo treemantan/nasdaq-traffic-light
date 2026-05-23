@@ -9,6 +9,7 @@ from pathlib import Path
 from .config import load_config
 from .data_sources import fetch_market_snapshot
 from .emailer import send_report_email
+from .etf_monitor import fetch_etf_monitor
 from .memory import load_previous_regime, save_current_regime
 from .render import render_html_report
 from .scoring import score_snapshot
@@ -23,8 +24,15 @@ def main() -> int:
 
     config = load_config(args.config)
     snapshot = fetch_market_snapshot()
+    etf_monitor = fetch_etf_monitor()
     previous_regime = load_previous_regime(config.output_dir)
-    scored = score_snapshot(snapshot, config.weights, previous_regime=previous_regime, report_timezone=config.report_timezone)
+    scored = score_snapshot(
+        snapshot,
+        config.weights,
+        previous_regime=previous_regime,
+        report_timezone=config.report_timezone,
+        etf_monitor=etf_monitor,
+    )
 
     output_path = Path(args.output) if args.output else config.output_dir / f"market-report-{scored.report_date}.html"
     output_path.parent.mkdir(parents=True, exist_ok=True)

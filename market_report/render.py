@@ -4,6 +4,7 @@ from datetime import datetime
 from html import escape
 
 from .data_sources import MarketMetric
+from .etf_monitor import ETFAssetMonitor, ETFMonitor
 from .scoring import IronCondorAssessment, ScoredMetric, ScoredReport
 from .time_utils import format_timestamp
 
@@ -26,6 +27,7 @@ def render_html_report(report: ScoredReport, title: str) -> str:
     weights = "\n".join(_render_weight_row(key, value, report.metrics) for key, value in report.weights.items())
     health_notes = _render_health_notes(report)
     iron_condor = _render_iron_condor(report.iron_condor)
+    etf_monitor = _render_etf_monitor(report.etf_monitor)
 
     return f"""<!doctype html>
 <html lang="zh-CN">
@@ -98,6 +100,13 @@ def render_html_report(report: ScoredReport, title: str) -> str:
     .strategy-lists {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 14px; }}
     .strategy-list {{ background: rgba(255,255,255,.025); border: 1px solid var(--line); border-radius: 8px; padding: 12px; }}
     .disclaimer {{ margin-top: 12px; color: var(--muted); font-size: 12px; }}
+    .etf-summary {{ color: var(--subtle); margin-bottom: 12px; }}
+    .etf-table td, .etf-table th {{ white-space: nowrap; }}
+    .etf-table td:nth-child(2), .etf-table th:nth-child(2) {{ white-space: normal; }}
+    .tag {{ display: inline-block; border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; color: var(--subtle); background: rgba(255,255,255,.025); font-size: 12px; }}
+    .tag-hot {{ color: #fca5a5; border-color: rgba(248,113,113,.45); }}
+    .tag-cool {{ color: #86efac; border-color: rgba(134,239,172,.35); }}
+    .small-note {{ color: var(--muted); font-size: 12px; margin-top: 8px; }}
     .grid {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }}
     .metric-grid {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }}
     .metric {{ background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 12px; min-height: 148px; }}
@@ -174,6 +183,7 @@ def render_html_report(report: ScoredReport, title: str) -> str:
     </section>
 
     {iron_condor}
+    {etf_monitor}
 
     <section class="grid">{groups}</section>
 
@@ -260,6 +270,62 @@ def _render_assessment_list(items: list[str]) -> str:
     if not items:
         return "<li>暂无明显信号。</li>"
     return "".join(f"<li>{escape(item)}</li>" for item in items)
+
+
+def _render_etf_monitor(monitor: ETFMonitor | None) -> str:
+    if monitor is None:
+        return ""
+    rows = "\n".join(_render_etf_row(asset) for asset in monitor.assets)
+    warnings = ""
+    if monitor.warnings:
+        warnings = "<div class=\"small-note\">数据提示：" + escape(" ".join(monitor.warnings[:4])) + "</div>"
+    return f"""<section class="panel">
+      <h2>UK ETF估值、趋势与拥挤度监控器</h2>
+      <div class="etf-summary">{escape(monitor.summary)}</div>
+      <table class="etf-table">
+        <thead>
+          <tr>
+            <th>ETF</th>
+            <th>主题</th>
+            <th>价格</th>
+            <th>1D</th>
+            <th>1M</th>
+            <th>RSI14</th>
+            <th>SMA13/200</th>
+            <th>PE / Forward PE / PB</th>
+            <th>PE分位</th>
+            <th>拥挤度</th>
+          </tr>
+        </thead>
+        <tbody>{rows}</tbody>
+      </table>
+      <div class="small-note">PE衡量市场为每单位盈利支付的价格，Forward PE基于未来盈利预期；PB衡量市值相对账面净资产。黄金ETC不适用PE/PB，主题ETF的估值分位需要随本地缓存逐步积累。</div>
+      {warnings}
+    </section>"""
+
+
+def _render_etf_row(asset: ETFAssetMonitor) -> str:
+    status = "tag-hot" if asset.crowding_score >= 70 else "tag-cool" if asset.crowding_score <= 35 else ""
+    price = _fmt_price(asset.value, asset.currency)
+    one_day = _fmt_pct(asset.change_pct)
+    one_month = _fmt_pct(asset.momentum_1m)
+    rsi = "N/A" if asset.rsi14 is None else f"{asset.rsi14:.1f}"
+    sma = f"{_fmt_price(asset.sma13, asset.currency)} / {_fmt_price(asset.sma200, asset.currency)}"
+    valuation = f"{_fmt_plain(asset.pe)} / {_fmt_plain(asset.forward_pe)} / {_fmt_plain(asset.pb)}"
+    pe_percentile = "样本不足" if asset.pe_percentile is None else f"{asset.pe_percentile:.0f}%"
+    symbol = f"{escape(asset.symbol)} · {escape(asset.provider)}"
+    return f"""<tr>
+      <td><strong>{symbol}</strong><br><span class="muted">{escape(asset.label)}</span></td>
+      <td>{escape(asset.theme)}<br><span class="muted">{escape(asset.trend_label)}</span></td>
+      <td>{escape(price)}</td>
+      <td>{escape(one_day)}</td>
+      <td>{escape(one_month)}</td>
+      <td>{escape(rsi)}<br><span class="muted">{escape(asset.momentum_label)}</span></td>
+      <td>{escape(sma)}<br><span class="muted">距200日线 {escape(_fmt_pct(asset.distance_sma200))}</span></td>
+      <td>{escape(valuation)}<br><span class="muted">{escape(asset.valuation_label)}</span></td>
+      <td>{escape(pe_percentile)}</td>
+      <td><span class="tag {status}">{asset.crowding_score}/100</span><br><span class="muted">{escape(asset.crowding_label)}</span></td>
+    </tr>"""
 
 
 def _render_group(title: str, keys: list[str], metrics: dict[str, ScoredMetric]) -> str:
@@ -351,6 +417,29 @@ def _status_class(metric: MarketMetric) -> str:
     if metric.status in {"suspicious", "stale"}:
         return "status-warn"
     return "status-bad"
+
+
+def _fmt_price(value: float | None, currency: str) -> str:
+    if value is None:
+        return "N/A"
+    if currency == "GBP":
+        return f"£{value:.2f}"
+    return f"{value:.2f}"
+
+
+def _fmt_plain(value: float | None) -> str:
+    if value is None:
+        return "N/A"
+    if abs(value) >= 10:
+        return f"{value:.1f}"
+    return f"{value:.2f}"
+
+
+def _fmt_pct(value: float | None) -> str:
+    if value is None:
+        return "N/A"
+    sign = "+" if value >= 0 else ""
+    return f"{sign}{value:.2f}%"
 
 
 def _fmt(value: float | None, unit: str = "") -> str:

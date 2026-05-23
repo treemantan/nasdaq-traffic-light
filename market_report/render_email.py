@@ -3,6 +3,7 @@ from __future__ import annotations
 from html import escape
 
 from .data_sources import MarketMetric
+from .etf_monitor import ETFAssetMonitor, ETFMonitor
 from .scoring import IronCondorAssessment, ScoredMetric, ScoredReport
 
 
@@ -22,6 +23,7 @@ def render_email_report(report: ScoredReport) -> str:
     risks = "".join(f"<li>{escape(item)}</li>" for item in report.risks)
     data_rows = "".join(_render_data_row(item.metric) for item in report.metrics.values())
     iron_condor = _render_iron_condor(report.iron_condor)
+    etf_monitor = _render_etf_monitor(report.etf_monitor)
     accent = report.light_color
 
     return f"""<!doctype html>
@@ -77,6 +79,7 @@ def render_email_report(report: ScoredReport) -> str:
             </td>
           </tr>
           {iron_condor}
+          {etf_monitor}
           {groups}
           <tr>
             <td style="padding:0 24px 18px;">
@@ -195,6 +198,39 @@ def _render_assessment_items(items: list[str]) -> str:
     return "".join(f"<li>{escape(item)}</li>" for item in items)
 
 
+def _render_etf_monitor(monitor: ETFMonitor | None) -> str:
+    if monitor is None:
+        return ""
+    rows = "".join(_render_etf_row(asset) for asset in monitor.assets)
+    return f"""<tr>
+      <td style="padding:0 24px 18px;">
+        <div style="font-size:19px;font-weight:700;color:#f3f4f6;margin:8px 0 8px;">UK ETF估值、趋势与拥挤度监控器</div>
+        <div style="font-size:13px;color:#d1d5db;margin-bottom:8px;">{escape(monitor.summary)}</div>
+        <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;font-size:12px;color:#d1d5db;">
+          <tr>
+            <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">ETF</th>
+            <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">主题</th>
+            <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">1M / RSI</th>
+            <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">PE / Fwd PE</th>
+            <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">拥挤度</th>
+          </tr>
+          {rows}
+        </table>
+        <div style="font-size:12px;color:#9ca3af;margin-top:8px;">PE衡量盈利倍数，PB衡量市值相对账面净资产；黄金ETC不适用PE/PB。</div>
+      </td>
+    </tr>"""
+
+
+def _render_etf_row(asset: ETFAssetMonitor) -> str:
+    return f"""<tr>
+      <td style="padding:7px;border-bottom:1px solid #263244;"><strong>{escape(asset.symbol)}</strong><br>{escape(asset.provider)}</td>
+      <td style="padding:7px;border-bottom:1px solid #263244;">{escape(asset.theme)}<br>{escape(asset.trend_label)}</td>
+      <td style="padding:7px;border-bottom:1px solid #263244;">{escape(_fmt_pct(asset.momentum_1m))} / {escape(_fmt_plain(asset.rsi14))}<br>{escape(asset.momentum_label)}</td>
+      <td style="padding:7px;border-bottom:1px solid #263244;">{escape(_fmt_plain(asset.pe))} / {escape(_fmt_plain(asset.forward_pe))}<br>{escape(asset.valuation_label)}</td>
+      <td style="padding:7px;border-bottom:1px solid #263244;">{asset.crowding_score}/100<br>{escape(asset.crowding_label)}</td>
+    </tr>"""
+
+
 def _render_metric_card(item: ScoredMetric) -> str:
     metric = item.metric
     change_text, change_color = _change_text(metric)
@@ -242,6 +278,21 @@ def _status_label(metric: MarketMetric) -> str:
     if metric.status == "stale":
         return "滞后"
     return "缺失"
+
+
+def _fmt_plain(value: float | None) -> str:
+    if value is None:
+        return "N/A"
+    if abs(value) >= 10:
+        return f"{value:.1f}"
+    return f"{value:.2f}"
+
+
+def _fmt_pct(value: float | None) -> str:
+    if value is None:
+        return "N/A"
+    sign = "+" if value >= 0 else ""
+    return f"{sign}{value:.2f}%"
 
 
 def _fmt(value: float | None, unit: str = "") -> str:

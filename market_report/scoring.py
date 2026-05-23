@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from .data_sources import MarketMetric, MarketSnapshot
+from .etf_monitor import ETFMonitor
 from .time_utils import format_timestamp, timezone_label
 
 
@@ -57,6 +58,7 @@ class ScoredReport:
     action: str
     regime: RegimeAssessment
     iron_condor: IronCondorAssessment
+    etf_monitor: ETFMonitor | None
     data_warnings: list[str]
     data_quality: str
     data_health: dict[str, int]
@@ -69,6 +71,7 @@ def score_snapshot(
     weights: dict[str, float] | None = None,
     previous_regime: str | None = None,
     report_timezone: str = "America/New_York",
+    etf_monitor: ETFMonitor | None = None,
 ) -> ScoredReport:
     scored_metrics = {key: _score_metric(key, metric, snapshot.metrics) for key, metric in snapshot.metrics.items()}
     adaptive_weights = _adaptive_weights(snapshot.metrics)
@@ -96,6 +99,7 @@ def score_snapshot(
         action=_build_action(overall, regime, health),
         regime=regime,
         iron_condor=iron_condor,
+        etf_monitor=etf_monitor,
         data_warnings=data_warnings,
         data_quality=data_quality,
         data_health=health,

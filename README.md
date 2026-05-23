@@ -122,3 +122,24 @@ Yahoo Finance、Investing、CNN、NAAIM 与 FRED 用于不同类别的数据源�
 ## 免责声明
 
 本工具用于宏观市场监控与研究参考，不构成投资建议，也不构成期权交易建议。Iron Condor 模块只评估市场环境是否适合区间型卖波动策略，不提供行权价、期限、仓位或交易指令。
+## UK ETF监控器
+
+报告包含一个面向英国可交易产品的 ETF 监控模块，用于观察你实际可能买到的 ETF 的趋势、估值可得性和短线拥挤度。默认资产池包括：
+
+- `VUAG.L`：Vanguard S&P 500 UCITS ETF
+- `CNX1.L`：iShares Nasdaq 100 UCITS ETF
+- `SEMI.L`：iShares Global Semiconductors UCITS ETF
+- `QWTM.L`：WisdomTree Quantum Computing UCITS ETF
+- `QNTM.L`：VanEck Quantum Computing UCITS ETF
+- `QANT.L`：iShares Quantum Computing UCITS ETF
+- `SGLN.L`：iShares Physical Gold ETC
+
+该模块抓取 ETF 日线价格并计算 `SMA13`、`SMA50`、`SMA200`、`RSI14`、1日/5日/1个月/3个月动量、距200日线百分比和拥挤度评分。拥挤度评分结合 RSI、距200日线、1个月动量和可用估值分位数，用于提示主题交易是否已经偏热或趋势是否仍待确认。
+
+估值字段采用 best-effort 方式抓取，不会因为估值接口失败而阻断价格和趋势监控：
+
+- `PE`：市盈率，衡量市场愿意为每单位盈利支付多少价格；对成长和科技 ETF 的利率敏感度判断较有用。
+- `Forward PE`：基于未来盈利预期的市盈率，更贴近市场当前定价逻辑，但依赖分析师盈利预测。
+- `PB`：市净率，衡量市值相对账面净资产；对金融、周期和重资产行业更有解释力，对半导体、AI、量子等轻资产主题 ETF 的解释力弱于 PE。
+
+黄金 ETC 没有盈利和净资产口径，因此不展示 PE/PB，应结合实际利率、美元和金价趋势解释。PE/PB 历史分位数会通过本地缓存逐步积累；样本不足时报告会明确显示“样本不足”，避免制造假精确。
