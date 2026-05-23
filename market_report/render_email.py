@@ -210,7 +210,7 @@ def _render_etf_monitor(monitor: ETFMonitor | None) -> str:
           <tr>
             <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">ETF</th>
             <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">主题</th>
-            <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">1M / RSI</th>
+            <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">1Dσ / 1M / RSI</th>
             <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">PE / Fwd PE</th>
             <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">拥挤度</th>
           </tr>
@@ -225,7 +225,7 @@ def _render_etf_row(asset: ETFAssetMonitor) -> str:
     return f"""<tr>
       <td style="padding:7px;border-bottom:1px solid #263244;"><strong>{escape(asset.symbol)}</strong><br>{escape(asset.provider)}</td>
       <td style="padding:7px;border-bottom:1px solid #263244;">{escape(asset.theme)}<br>{escape(asset.trend_label)}</td>
-      <td style="padding:7px;border-bottom:1px solid #263244;">{escape(_fmt_pct(asset.momentum_1m))} / {escape(_fmt_plain(asset.rsi14))}<br>{escape(asset.momentum_label)}</td>
+      <td style="padding:7px;border-bottom:1px solid #263244;">{escape(_fmt_sigma(asset.daily_sigma))} / {escape(_fmt_pct(asset.momentum_1m))} / {escape(_fmt_plain(asset.rsi14))}<br>{escape(asset.sigma_label)}</td>
       <td style="padding:7px;border-bottom:1px solid #263244;">{escape(_fmt_plain(asset.pe))} / {escape(_fmt_plain(asset.forward_pe))}<br>{escape(asset.valuation_label)}</td>
       <td style="padding:7px;border-bottom:1px solid #263244;">{asset.crowding_score}/100<br>{escape(asset.crowding_label)}</td>
     </tr>"""
@@ -293,6 +293,13 @@ def _fmt_pct(value: float | None) -> str:
         return "N/A"
     sign = "+" if value >= 0 else ""
     return f"{sign}{value:.2f}%"
+
+
+def _fmt_sigma(value: float | None) -> str:
+    if value is None:
+        return "N/Aσ"
+    sign = "+" if value >= 0 else ""
+    return f"{sign}{value:.1f}σ"
 
 
 def _fmt(value: float | None, unit: str = "") -> str:

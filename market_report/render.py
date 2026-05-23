@@ -288,7 +288,7 @@ def _render_etf_monitor(monitor: ETFMonitor | None) -> str:
             <th>ETF</th>
             <th>主题</th>
             <th>价格</th>
-            <th>1D</th>
+            <th>1D / 日波动σ</th>
             <th>1M</th>
             <th>RSI14</th>
             <th>SMA13/200</th>
@@ -308,6 +308,7 @@ def _render_etf_row(asset: ETFAssetMonitor) -> str:
     status = "tag-hot" if asset.crowding_score >= 70 else "tag-cool" if asset.crowding_score <= 35 else ""
     price = _fmt_price(asset.value, asset.currency)
     one_day = _fmt_pct(asset.change_pct)
+    sigma = _fmt_sigma(asset.daily_sigma)
     one_month = _fmt_pct(asset.momentum_1m)
     rsi = "N/A" if asset.rsi14 is None else f"{asset.rsi14:.1f}"
     sma = f"{_fmt_price(asset.sma13, asset.currency)} / {_fmt_price(asset.sma200, asset.currency)}"
@@ -318,7 +319,7 @@ def _render_etf_row(asset: ETFAssetMonitor) -> str:
       <td><strong>{symbol}</strong><br><span class="muted">{escape(asset.label)}</span></td>
       <td>{escape(asset.theme)}<br><span class="muted">{escape(asset.trend_label)}</span></td>
       <td>{escape(price)}</td>
-      <td>{escape(one_day)}</td>
+      <td>{escape(one_day)}<br><span class="muted">{escape(sigma)} · {escape(asset.sigma_label)}</span></td>
       <td>{escape(one_month)}</td>
       <td>{escape(rsi)}<br><span class="muted">{escape(asset.momentum_label)}</span></td>
       <td>{escape(sma)}<br><span class="muted">距200日线 {escape(_fmt_pct(asset.distance_sma200))}</span></td>
@@ -440,6 +441,13 @@ def _fmt_pct(value: float | None) -> str:
         return "N/A"
     sign = "+" if value >= 0 else ""
     return f"{sign}{value:.2f}%"
+
+
+def _fmt_sigma(value: float | None) -> str:
+    if value is None:
+        return "N/Aσ"
+    sign = "+" if value >= 0 else ""
+    return f"{sign}{value:.1f}σ"
 
 
 def _fmt(value: float | None, unit: str = "") -> str:

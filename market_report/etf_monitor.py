@@ -42,6 +42,8 @@ class ETFAssetMonitor:
     as_of: date | None
     fetched_at: datetime
     change_pct: float | None = None
+    daily_sigma: float | None = None
+    daily_volatility: float | None = None
     momentum_5d: float | None = None
     momentum_1m: float | None = None
     momentum_3m: float | None = None
@@ -59,6 +61,7 @@ class ETFAssetMonitor:
     momentum_label: str = "动量待确认"
     valuation_label: str = "估值数据不足"
     crowding_label: str = "拥挤度待确认"
+    sigma_label: str = "日波动待确认"
     crowding_score: int = 50
     source: str = "Yahoo"
     status: str = "ok"
@@ -105,8 +108,12 @@ def _fetch_etf_asset(spec: ETFSpec, fetched_at: datetime, cache: dict[str, Any])
         raise ValueError(f"{spec.symbol} returned insufficient price history")
     history = sorted(history, key=lambda item: item[0])
     closes = [close for _, close in history]
+    daily_returns = _daily_returns(closes)
     value = closes[-1]
     previous = closes[-2]
+    one_day_change = _pct_change(value, previous)
+    daily_volatility = _rolling_std(daily_returns, 252)
+    daily_sigma = _sigma_move(one_day_change, daily_volatility)
     valuation_fetch_warning: str | None = None
     try:
         valuations = _fetch_yahoo_valuation(spec.symbol) if spec.equity_like else {}
@@ -131,7 +138,9 @@ def _fetch_etf_asset(spec: ETFSpec, fetched_at: datetime, cache: dict[str, Any])
         previous_value=previous,
         as_of=history[-1][0],
         fetched_at=fetched_at,
-        change_pct=_pct_change(value, previous),
+        change_pct=one_day_change,
+        daily_sigma=daily_sigma,
+        daily_volatility=daily_volatility,
         momentum_5d=_momentum(closes, 5),
         momentum_1m=_momentum(closes, 21),
         momentum_3m=_momentum(closes, 63),
@@ -153,6 +162,7 @@ def _fetch_etf_asset(spec: ETFSpec, fetched_at: datetime, cache: dict[str, Any])
         distance_sma200=distance,
         trend_label=_trend_label(asset.value, asset.sma13, asset.sma50, asset.sma200),
         momentum_label=_momentum_label(asset.rsi14, asset.momentum_1m),
+        sigma_label=_sigma_label(asset.daily_sigma, asset.daily_volatility),
         valuation_label=_valuation_label(spec, pe, forward_pe, pe_percentile),
         crowding_score=_crowding_score(asset.rsi14, distance, pe_percentile, asset.momentum_1m),
     )
@@ -273,6 +283,8 @@ def _write_asset_cache(cache: dict[str, Any], asset: ETFAssetMonitor) -> None:
         "as_of": asset.as_of.isoformat() if asset.as_of else None,
         "fetched_at": asset.fetched_at.isoformat(),
         "change_pct": asset.change_pct,
+        "daily_sigma": asset.daily_sigma,
+        "daily_volatility": asset.daily_volatility,
         "momentum_5d": asset.momentum_5d,
         "momentum_1m": asset.momentum_1m,
         "momentum_3m": asset.momentum_3m,
@@ -288,6 +300,7 @@ def _write_asset_cache(cache: dict[str, Any], asset: ETFAssetMonitor) -> None:
         "pb_percentile": asset.pb_percentile,
         "trend_label": asset.trend_label,
         "momentum_label": asset.momentum_label,
+        "sigma_label": asset.sigma_label,
         "valuation_label": asset.valuation_label,
         "crowding_label": asset.crowding_label,
         "crowding_score": asset.crowding_score,
@@ -318,6 +331,8 @@ def _asset_from_cache(spec: ETFSpec, entry: dict[str, Any], fetched_at: datetime
         as_of=as_of,
         fetched_at=cached_at,
         change_pct=_safe_float(entry.get("change_pct")),
+        daily_sigma=_safe_float(entry.get("daily_sigma")),
+        daily_volatility=_safe_float(entry.get("daily_volatility")),
         momentum_5d=_safe_float(entry.get("momentum_5d")),
         momentum_1m=_safe_float(entry.get("momentum_1m")),
         momentum_3m=_safe_float(entry.get("momentum_3m")),
@@ -331,6 +346,7 @@ def _asset_from_cache(spec: ETFSpec, entry: dict[str, Any], fetched_at: datetime
         pb=_safe_float(entry.get("pb")),
         pe_percentile=_safe_float(entry.get("pe_percentile")),
         pb_percentile=_safe_float(entry.get("pb_percentile")),
+        sigma_label=entry.get("sigma_label") or "日波动待确认",
         trend_label=entry.get("trend_label") or "趋势待确认",
         momentum_label=entry.get("momentum_label") or "动量待确认",
         valuation_label=entry.get("valuation_label") or "估值数据不足",
@@ -502,6 +518,44 @@ def _momentum(values: list[float], days: int) -> float | None:
     if len(values) <= days or values[-days - 1] == 0:
         return None
     return _pct_change(values[-1], values[-days - 1])
+
+
+def _daily_returns(values: list[float]) -> list[float]:
+    returns: list[float] = []
+    for current, previous in zip(values[1:], values[:-1]):
+        pct = _pct_change(current, previous)
+        if pct is not None:
+            returns.append(pct)
+    return returns
+
+
+def _rolling_std(values: list[float], window: int) -> float | None:
+    sample = values[-window:]
+    if len(sample) < 30:
+        return None
+    mean = sum(sample) / len(sample)
+    variance = sum((item - mean) ** 2 for item in sample) / (len(sample) - 1)
+    return math.sqrt(variance)
+
+
+def _sigma_move(change_pct: float | None, daily_volatility: float | None) -> float | None:
+    if change_pct is None or daily_volatility in (None, 0):
+        return None
+    return change_pct / daily_volatility
+
+
+def _sigma_label(daily_sigma: float | None, daily_volatility: float | None) -> str:
+    if daily_sigma is None or daily_volatility is None:
+        return "历史日波动样本不足，暂不做sigma判断"
+    magnitude = abs(daily_sigma)
+    direction = "上行" if daily_sigma > 0 else "下行" if daily_sigma < 0 else "持平"
+    if magnitude >= 3:
+        return f"{direction}超过3σ，属于极端单日波动"
+    if magnitude >= 2:
+        return f"{direction}达到2σ以上，显著偏离常态日波动"
+    if magnitude >= 1:
+        return f"{direction}约1-2σ，属于偏强但仍可解释的日波动"
+    return "低于1σ，属于常态日波动范围"
 
 
 def _distance_to_sma(value: float | None, sma: float | None) -> float | None:
