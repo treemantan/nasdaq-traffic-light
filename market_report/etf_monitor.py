@@ -51,6 +51,7 @@ class ETFAssetMonitor:
     sma50: float | None = None
     sma200: float | None = None
     distance_sma200: float | None = None
+    trend_sigma_200d: float | None = None
     rsi14: float | None = None
     pe: float | None = None
     forward_pe: float | None = None
@@ -62,6 +63,7 @@ class ETFAssetMonitor:
     valuation_label: str = "估值数据不足"
     crowding_label: str = "拥挤度待确认"
     sigma_label: str = "日波动待确认"
+    trend_stretch_label: str = "趋势拉伸待确认"
     crowding_score: int = 50
     source: str = "Yahoo"
     status: str = "ok"
@@ -157,12 +159,15 @@ def _fetch_etf_asset(spec: ETFSpec, fetched_at: datetime, cache: dict[str, Any])
         warnings=tuple(warnings),
     )
     distance = _distance_to_sma(asset.value, asset.sma200)
+    trend_sigma = _trend_sigma(distance, asset.daily_volatility, 200)
     enriched = _replace_asset(
         asset,
         distance_sma200=distance,
+        trend_sigma_200d=trend_sigma,
         trend_label=_trend_label(asset.value, asset.sma13, asset.sma50, asset.sma200),
         momentum_label=_momentum_label(asset.rsi14, asset.momentum_1m),
         sigma_label=_sigma_label(asset.daily_sigma, asset.daily_volatility),
+        trend_stretch_label=_trend_stretch_label(trend_sigma),
         valuation_label=_valuation_label(spec, pe, forward_pe, pe_percentile),
         crowding_score=_crowding_score(asset.rsi14, distance, pe_percentile, asset.momentum_1m),
     )
@@ -292,6 +297,7 @@ def _write_asset_cache(cache: dict[str, Any], asset: ETFAssetMonitor) -> None:
         "sma50": asset.sma50,
         "sma200": asset.sma200,
         "distance_sma200": asset.distance_sma200,
+        "trend_sigma_200d": asset.trend_sigma_200d,
         "rsi14": asset.rsi14,
         "pe": asset.pe,
         "forward_pe": asset.forward_pe,
@@ -301,6 +307,7 @@ def _write_asset_cache(cache: dict[str, Any], asset: ETFAssetMonitor) -> None:
         "trend_label": asset.trend_label,
         "momentum_label": asset.momentum_label,
         "sigma_label": asset.sigma_label,
+        "trend_stretch_label": asset.trend_stretch_label,
         "valuation_label": asset.valuation_label,
         "crowding_label": asset.crowding_label,
         "crowding_score": asset.crowding_score,
@@ -340,6 +347,7 @@ def _asset_from_cache(spec: ETFSpec, entry: dict[str, Any], fetched_at: datetime
         sma50=_safe_float(entry.get("sma50")),
         sma200=_safe_float(entry.get("sma200")),
         distance_sma200=_safe_float(entry.get("distance_sma200")),
+        trend_sigma_200d=_safe_float(entry.get("trend_sigma_200d")),
         rsi14=_safe_float(entry.get("rsi14")),
         pe=_safe_float(entry.get("pe")),
         forward_pe=_safe_float(entry.get("forward_pe")),
@@ -347,6 +355,7 @@ def _asset_from_cache(spec: ETFSpec, entry: dict[str, Any], fetched_at: datetime
         pe_percentile=_safe_float(entry.get("pe_percentile")),
         pb_percentile=_safe_float(entry.get("pb_percentile")),
         sigma_label=entry.get("sigma_label") or "日波动待确认",
+        trend_stretch_label=entry.get("trend_stretch_label") or "趋势拉伸待确认",
         trend_label=entry.get("trend_label") or "趋势待确认",
         momentum_label=entry.get("momentum_label") or "动量待确认",
         valuation_label=entry.get("valuation_label") or "估值数据不足",
@@ -556,6 +565,32 @@ def _sigma_label(daily_sigma: float | None, daily_volatility: float | None) -> s
     if magnitude >= 1:
         return f"{direction}约1-2σ，属于偏强但仍可解释的日波动"
     return "低于1σ，属于常态日波动范围"
+
+
+def _trend_sigma(distance_pct: float | None, daily_volatility: float | None, horizon_days: int) -> float | None:
+    if distance_pct is None or daily_volatility in (None, 0):
+        return None
+    horizon_volatility = daily_volatility * math.sqrt(horizon_days)
+    if horizon_volatility == 0:
+        return None
+    return distance_pct / horizon_volatility
+
+
+def _trend_stretch_label(trend_sigma: float | None) -> str:
+    if trend_sigma is None:
+        return "历史波动样本不足，暂不做趋势拉伸判断"
+    magnitude = abs(trend_sigma)
+    if trend_sigma >= 3:
+        return "高于200日线超过3σ200，趋势极度拉伸，回撤敏感度较高"
+    if trend_sigma >= 2:
+        return "高于200日线达到2σ200以上，趋势偏热，需警惕均值回归"
+    if trend_sigma >= 1:
+        return "高于200日线约1-2σ200，趋势较强但尚未极端化"
+    if trend_sigma <= -2:
+        return "低于200日线超过2σ200，趋势压力较深，修复需要时间"
+    if trend_sigma <= -1:
+        return "低于200日线约1-2σ200，中期趋势仍偏弱"
+    return "距200日线低于1σ200，趋势拉伸度仍在常态范围"
 
 
 def _distance_to_sma(value: float | None, sma: float | None) -> float | None:

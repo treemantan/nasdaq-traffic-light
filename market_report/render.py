@@ -312,6 +312,7 @@ def _render_etf_row(asset: ETFAssetMonitor) -> str:
     one_month = _fmt_pct(asset.momentum_1m)
     rsi = "N/A" if asset.rsi14 is None else f"{asset.rsi14:.1f}"
     sma = f"{_fmt_price(asset.sma13, asset.currency)} / {_fmt_price(asset.sma200, asset.currency)}"
+    trend_sigma = _fmt_sigma_200d(asset.trend_sigma_200d)
     valuation = f"{_fmt_plain(asset.pe)} / {_fmt_plain(asset.forward_pe)} / {_fmt_plain(asset.pb)}"
     pe_percentile = "样本不足" if asset.pe_percentile is None else f"{asset.pe_percentile:.0f}%"
     symbol = f"{escape(asset.symbol)} · {escape(asset.provider)}"
@@ -322,7 +323,7 @@ def _render_etf_row(asset: ETFAssetMonitor) -> str:
       <td>{escape(one_day)}<br><span class="muted">{escape(sigma)} · {escape(asset.sigma_label)}</span></td>
       <td>{escape(one_month)}</td>
       <td>{escape(rsi)}<br><span class="muted">{escape(asset.momentum_label)}</span></td>
-      <td>{escape(sma)}<br><span class="muted">距200日线 {escape(_fmt_pct(asset.distance_sma200))}</span></td>
+      <td>{escape(sma)}<br><span class="muted">距200日线 {escape(_fmt_pct(asset.distance_sma200))} / {escape(trend_sigma)} · {escape(asset.trend_stretch_label)}</span></td>
       <td>{escape(valuation)}<br><span class="muted">{escape(asset.valuation_label)}</span></td>
       <td>{escape(pe_percentile)}</td>
       <td><span class="tag {status}">{asset.crowding_score}/100</span><br><span class="muted">{escape(asset.crowding_label)}</span></td>
@@ -448,6 +449,13 @@ def _fmt_sigma(value: float | None) -> str:
         return "N/Aσ"
     sign = "+" if value >= 0 else ""
     return f"{sign}{value:.1f}σ"
+
+
+def _fmt_sigma_200d(value: float | None) -> str:
+    if value is None:
+        return "N/Aσ200"
+    sign = "+" if value >= 0 else ""
+    return f"{sign}{value:.1f}σ200"
 
 
 def _fmt(value: float | None, unit: str = "") -> str:

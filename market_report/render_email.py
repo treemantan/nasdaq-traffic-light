@@ -224,7 +224,7 @@ def _render_etf_monitor(monitor: ETFMonitor | None) -> str:
 def _render_etf_row(asset: ETFAssetMonitor) -> str:
     return f"""<tr>
       <td style="padding:7px;border-bottom:1px solid #263244;"><strong>{escape(asset.symbol)}</strong><br>{escape(asset.provider)}</td>
-      <td style="padding:7px;border-bottom:1px solid #263244;">{escape(asset.theme)}<br>{escape(asset.trend_label)}</td>
+      <td style="padding:7px;border-bottom:1px solid #263244;">{escape(asset.theme)}<br>{escape(_fmt_sigma_200d(asset.trend_sigma_200d))} · {escape(asset.trend_stretch_label)}</td>
       <td style="padding:7px;border-bottom:1px solid #263244;">{escape(_fmt_sigma(asset.daily_sigma))} / {escape(_fmt_pct(asset.momentum_1m))} / {escape(_fmt_plain(asset.rsi14))}<br>{escape(asset.sigma_label)}</td>
       <td style="padding:7px;border-bottom:1px solid #263244;">{escape(_fmt_plain(asset.pe))} / {escape(_fmt_plain(asset.forward_pe))}<br>{escape(asset.valuation_label)}</td>
       <td style="padding:7px;border-bottom:1px solid #263244;">{asset.crowding_score}/100<br>{escape(asset.crowding_label)}</td>
@@ -300,6 +300,13 @@ def _fmt_sigma(value: float | None) -> str:
         return "N/Aσ"
     sign = "+" if value >= 0 else ""
     return f"{sign}{value:.1f}σ"
+
+
+def _fmt_sigma_200d(value: float | None) -> str:
+    if value is None:
+        return "N/Aσ200"
+    sign = "+" if value >= 0 else ""
+    return f"{sign}{value:.1f}σ200"
 
 
 def _fmt(value: float | None, unit: str = "") -> str:
