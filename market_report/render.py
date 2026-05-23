@@ -293,13 +293,13 @@ def _render_etf_monitor(monitor: ETFMonitor | None) -> str:
             <th>RSI14</th>
             <th>SMA13/200</th>
             <th>PE / Forward PE / PB</th>
-            <th>PE分位</th>
+            <th>PE位置</th>
             <th>拥挤度</th>
           </tr>
         </thead>
         <tbody>{rows}</tbody>
       </table>
-      <div class="small-note">PE衡量市场为每单位盈利支付的价格，Forward PE基于未来盈利预期；PB衡量市值相对账面净资产。估值源若标记为proxy，表示使用高度相关的同类ETF作近似参考，并非该伦敦ETF自身披露口径。黄金ETC不适用PE/PB，主题ETF的估值分位需要随本地缓存逐步积累。</div>
+      <div class="small-note">PE衡量市场为每单位盈利支付的价格，Forward PE基于未来盈利预期；PB衡量市值相对账面净资产。PE位置优先显示本地历史分位；样本不足时显示“当前PE/近一年缓存最高PE”的近似比例。估值源若标记为proxy，表示使用高度相关的同类ETF作近似参考，并非该伦敦ETF自身披露口径。黄金ETC不适用PE/PB。</div>
       {warnings}
     </section>"""
 
@@ -315,7 +315,7 @@ def _render_etf_row(asset: ETFAssetMonitor) -> str:
     trend_sigma = _fmt_sigma_200d(asset.trend_sigma_200d)
     valuation = f"{_fmt_plain(asset.pe)} / {_fmt_plain(asset.forward_pe)} / {_fmt_plain(asset.pb)}"
     valuation_source = f"估值源：{asset.valuation_source}" if asset.valuation_source != "unavailable" else "估值源：暂无"
-    pe_percentile = "样本不足" if asset.pe_percentile is None else f"{asset.pe_percentile:.0f}%"
+    pe_position = _fmt_pe_position(asset)
     symbol = f"{escape(asset.symbol)} · {escape(asset.provider)}"
     return f"""<tr>
       <td><strong>{symbol}</strong><br><span class="muted">{escape(asset.label)}</span></td>
@@ -326,9 +326,17 @@ def _render_etf_row(asset: ETFAssetMonitor) -> str:
       <td>{escape(rsi)}<br><span class="muted">{escape(asset.momentum_label)}</span></td>
       <td>{escape(sma)}<br><span class="muted">距200日线 {escape(_fmt_pct(asset.distance_sma200))} / {escape(trend_sigma)} · {escape(asset.trend_stretch_label)}</span></td>
       <td>{escape(valuation)}<br><span class="muted">{escape(asset.valuation_label)}</span><br><span class="muted">{escape(valuation_source)}</span></td>
-      <td>{escape(pe_percentile)}</td>
+      <td>{escape(pe_position)}</td>
       <td><span class="tag {status}">{asset.crowding_score}/100</span><br><span class="muted">{escape(asset.crowding_label)}</span></td>
     </tr>"""
+
+
+def _fmt_pe_position(asset: ETFAssetMonitor) -> str:
+    if asset.pe_percentile is not None:
+        return f"分位 {asset.pe_percentile:.0f}%"
+    if asset.pe_high_1y_ratio is not None:
+        return f"约{asset.pe_high_1y_ratio:.0f}% / 1Y高点"
+    return "样本不足"
 
 
 def _render_group(title: str, keys: list[str], metrics: dict[str, ScoredMetric]) -> str:

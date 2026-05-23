@@ -212,11 +212,12 @@ def _render_etf_monitor(monitor: ETFMonitor | None) -> str:
             <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">主题</th>
             <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">1Dσ / 1M / RSI</th>
             <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">PE / Fwd PE</th>
+            <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">PE位置</th>
             <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">拥挤度</th>
           </tr>
           {rows}
         </table>
-        <div style="font-size:12px;color:#9ca3af;margin-top:8px;">PE衡量盈利倍数，PB衡量市值相对账面净资产；proxy 表示使用同类ETF作近似估值参考；黄金ETC不适用PE/PB。</div>
+        <div style="font-size:12px;color:#9ca3af;margin-top:8px;">PE位置优先显示本地历史分位；样本不足时显示当前PE/近一年缓存最高PE的近似比例。proxy 表示使用同类ETF作近似估值参考；黄金ETC不适用PE/PB。</div>
       </td>
     </tr>"""
 
@@ -228,8 +229,17 @@ def _render_etf_row(asset: ETFAssetMonitor) -> str:
       <td style="padding:7px;border-bottom:1px solid #263244;">{escape(asset.theme)}<br>{escape(_fmt_sigma_200d(asset.trend_sigma_200d))} · {escape(asset.trend_stretch_label)}</td>
       <td style="padding:7px;border-bottom:1px solid #263244;">{escape(_fmt_sigma(asset.daily_sigma))} / {escape(_fmt_pct(asset.momentum_1m))} / {escape(_fmt_plain(asset.rsi14))}<br>{escape(asset.sigma_label)}</td>
       <td style="padding:7px;border-bottom:1px solid #263244;">{escape(_fmt_plain(asset.pe))} / {escape(_fmt_plain(asset.forward_pe))}<br>{escape(asset.valuation_label)}<br><span style="color:#9ca3af;">{escape(valuation_source)}</span></td>
+      <td style="padding:7px;border-bottom:1px solid #263244;">{escape(_fmt_pe_position(asset))}</td>
       <td style="padding:7px;border-bottom:1px solid #263244;">{asset.crowding_score}/100<br>{escape(asset.crowding_label)}</td>
     </tr>"""
+
+
+def _fmt_pe_position(asset: ETFAssetMonitor) -> str:
+    if asset.pe_percentile is not None:
+        return f"分位 {asset.pe_percentile:.0f}%"
+    if asset.pe_high_1y_ratio is not None:
+        return f"约{asset.pe_high_1y_ratio:.0f}% / 1Y高点"
+    return "样本不足"
 
 
 def _render_metric_card(item: ScoredMetric) -> str:

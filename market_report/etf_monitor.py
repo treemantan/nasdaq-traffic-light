@@ -60,6 +60,8 @@ class ETFAssetMonitor:
     valuation_source: str = "unavailable"
     pe_percentile: float | None = None
     pb_percentile: float | None = None
+    pe_high_1y: float | None = None
+    pe_high_1y_ratio: float | None = None
     trend_label: str = "趋势待确认"
     momentum_label: str = "动量待确认"
     valuation_label: str = "估值数据不足"
@@ -159,8 +161,10 @@ def _fetch_etf_asset(spec: ETFSpec, fetched_at: datetime, cache: dict[str, Any])
     pb = _safe_float(valuations.get("priceToBook"))
     if pe is None and forward_pe is None and pb is None:
         valuation_source = "unavailable"
-    pe_percentile, pb_percentile = _update_valuation_history(cache, spec.key, fetched_at.date(), pe, pb)
-    warnings = _valuation_warnings(spec, pe, forward_pe, pb, pe_percentile)
+    pe_percentile, pb_percentile, pe_high_1y, pe_high_1y_ratio = _update_valuation_history(
+        cache, spec.key, fetched_at.date(), pe, pb
+    )
+    warnings = _valuation_warnings(spec, pe, forward_pe, pb, pe_percentile, pe_high_1y_ratio)
     if valuation_fetch_warning:
         warnings.append(valuation_fetch_warning)
     asset = ETFAssetMonitor(
@@ -190,6 +194,8 @@ def _fetch_etf_asset(spec: ETFSpec, fetched_at: datetime, cache: dict[str, Any])
         valuation_source=valuation_source,
         pe_percentile=pe_percentile,
         pb_percentile=pb_percentile,
+        pe_high_1y=pe_high_1y,
+        pe_high_1y_ratio=pe_high_1y_ratio,
         source="Yahoo",
         warnings=tuple(warnings),
     )
@@ -364,7 +370,7 @@ def _update_valuation_history(
     day: date,
     pe: float | None,
     pb: float | None,
-) -> tuple[float | None, float | None]:
+) -> tuple[float | None, float | None, float | None, float | None]:
     history = cache.setdefault("valuation_history", {}).setdefault(key, [])
     existing = {row.get("date"): row for row in history if isinstance(row, dict)}
     existing[day.isoformat()] = {"date": day.isoformat(), "pe": pe, "pb": pb}
@@ -372,7 +378,22 @@ def _update_valuation_history(
     cache["valuation_history"][key] = rows
     pe_values = [_safe_float(row.get("pe")) for row in rows]
     pb_values = [_safe_float(row.get("pb")) for row in rows]
-    return _percentile(pe, pe_values), _percentile(pb, pb_values)
+    one_year_pe_values = [
+        _safe_float(row.get("pe"))
+        for row in rows
+        if _row_within_days(row, day, 365)
+    ]
+    pe_high_1y = max((item for item in one_year_pe_values if item is not None), default=None)
+    pe_high_1y_ratio = pe / pe_high_1y * 100 if pe is not None and pe_high_1y not in (None, 0) else None
+    return _percentile(pe, pe_values), _percentile(pb, pb_values), pe_high_1y, pe_high_1y_ratio
+
+
+def _row_within_days(row: dict[str, Any], day: date, days: int) -> bool:
+    try:
+        row_day = date.fromisoformat(str(row.get("date")))
+    except ValueError:
+        return False
+    return 0 <= (day - row_day).days <= days
 
 
 def _write_asset_cache(cache: dict[str, Any], asset: ETFAssetMonitor) -> None:
@@ -404,6 +425,8 @@ def _write_asset_cache(cache: dict[str, Any], asset: ETFAssetMonitor) -> None:
         "valuation_source": asset.valuation_source,
         "pe_percentile": asset.pe_percentile,
         "pb_percentile": asset.pb_percentile,
+        "pe_high_1y": asset.pe_high_1y,
+        "pe_high_1y_ratio": asset.pe_high_1y_ratio,
         "trend_label": asset.trend_label,
         "momentum_label": asset.momentum_label,
         "sigma_label": asset.sigma_label,
@@ -455,6 +478,8 @@ def _asset_from_cache(spec: ETFSpec, entry: dict[str, Any], fetched_at: datetime
         valuation_source=entry.get("valuation_source") or "unavailable",
         pe_percentile=_safe_float(entry.get("pe_percentile")),
         pb_percentile=_safe_float(entry.get("pb_percentile")),
+        pe_high_1y=_safe_float(entry.get("pe_high_1y")),
+        pe_high_1y_ratio=_safe_float(entry.get("pe_high_1y_ratio")),
         sigma_label=entry.get("sigma_label") or "日波动待确认",
         trend_stretch_label=entry.get("trend_stretch_label") or "趋势拉伸待确认",
         trend_label=entry.get("trend_label") or "趋势待确认",
@@ -507,6 +532,7 @@ def _valuation_warnings(
     forward_pe: float | None,
     pb: float | None,
     pe_percentile: float | None,
+    pe_high_1y_ratio: float | None,
 ) -> list[str]:
     if not spec.equity_like:
         return ["黄金ETC不适用PE/PB估值，需结合实际利率、美元和金价趋势观察。"]
@@ -515,7 +541,9 @@ def _valuation_warnings(
         warnings.append("Yahoo暂未返回可靠PE/Forward PE，估值分位数需要继续积累或使用发行商数据补充。")
     if pb is None:
         warnings.append("PB暂不可用；对科技与主题ETF而言，PB解释力本身弱于PE/Forward PE。")
-    if pe_percentile is None:
+    if pe_percentile is None and pe_high_1y_ratio is not None:
+        warnings.append("PE历史分位数样本不足，当前使用“当前PE/近一年缓存最高PE”作为近似估值位置。")
+    elif pe_percentile is None:
         warnings.append("PE历史分位数样本不足，当前只展示现值，不做长期分位判断。")
     return warnings
 
