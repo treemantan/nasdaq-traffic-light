@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import time
 import urllib.parse
 import urllib.request
@@ -56,6 +57,7 @@ class ETFAssetMonitor:
     pe: float | None = None
     forward_pe: float | None = None
     pb: float | None = None
+    valuation_source: str = "unavailable"
     pe_percentile: float | None = None
     pb_percentile: float | None = None
     trend_label: str = "趋势待确认"
@@ -86,6 +88,12 @@ DEFAULT_ETF_SPECS = [
     ETFSpec("qant", "iShares Quantum Computing ETF", "QANT.L", "Quantum Computing", "iShares"),
     ETFSpec("sgln", "iShares Physical Gold ETC", "SGLN.L", "Gold", "iShares", equity_like=False),
 ]
+
+
+VALUATION_PROXY_SYMBOLS = {
+    "VUAG.L": ("VOO", "StockAnalysis proxy: VOO"),
+    "QWTM.L": ("QTUM", "StockAnalysis proxy: QTUM"),
+}
 
 
 def fetch_etf_monitor(specs: list[ETFSpec] | None = None) -> ETFMonitor:
@@ -122,9 +130,35 @@ def _fetch_etf_asset(spec: ETFSpec, fetched_at: datetime, cache: dict[str, Any])
     except Exception as exc:
         valuations = {}
         valuation_fetch_warning = f"Yahoo估值接口暂不可用：{type(exc).__name__}"
+    valuation_source = "Yahoo" if _has_any_valuation(valuations) else "unavailable"
+    if spec.equity_like and not _has_any_valuation(valuations):
+        try:
+            valuations = _fetch_stockanalysis_valuation(spec.symbol)
+            valuation_source = "StockAnalysis" if _has_any_valuation(valuations) else "unavailable"
+        except Exception as exc:
+            fallback_warning = f"StockAnalysis PE fallback failed: {type(exc).__name__}"
+            valuation_fetch_warning = (
+                f"{valuation_fetch_warning}; {fallback_warning}"
+                if valuation_fetch_warning
+                else fallback_warning
+            )
+    if spec.equity_like and not _has_any_valuation(valuations) and spec.symbol.upper() in VALUATION_PROXY_SYMBOLS:
+        proxy_symbol, proxy_source = VALUATION_PROXY_SYMBOLS[spec.symbol.upper()]
+        try:
+            valuations = _fetch_stockanalysis_proxy_valuation(proxy_symbol)
+            valuation_source = proxy_source if _has_any_valuation(valuations) else "unavailable"
+        except Exception as exc:
+            fallback_warning = f"{proxy_source} PE fallback failed: {type(exc).__name__}"
+            valuation_fetch_warning = (
+                f"{valuation_fetch_warning}; {fallback_warning}"
+                if valuation_fetch_warning
+                else fallback_warning
+            )
     pe = _safe_float(valuations.get("trailingPE"))
     forward_pe = _safe_float(valuations.get("forwardPE"))
     pb = _safe_float(valuations.get("priceToBook"))
+    if pe is None and forward_pe is None and pb is None:
+        valuation_source = "unavailable"
     pe_percentile, pb_percentile = _update_valuation_history(cache, spec.key, fetched_at.date(), pe, pb)
     warnings = _valuation_warnings(spec, pe, forward_pe, pb, pe_percentile)
     if valuation_fetch_warning:
@@ -153,6 +187,7 @@ def _fetch_etf_asset(spec: ETFSpec, fetched_at: datetime, cache: dict[str, Any])
         pe=pe,
         forward_pe=forward_pe,
         pb=pb,
+        valuation_source=valuation_source,
         pe_percentile=pe_percentile,
         pb_percentile=pb_percentile,
         source="Yahoo",
@@ -244,6 +279,37 @@ def _fetch_yahoo_valuation(symbol: str) -> dict[str, float | None]:
     }
 
 
+def _fetch_stockanalysis_valuation(symbol: str) -> dict[str, float | None]:
+    ticker = symbol.upper()
+    if ticker.endswith(".L"):
+        ticker = ticker[:-2]
+    if not ticker or not re.fullmatch(r"[A-Z0-9]+", ticker):
+        return {}
+    url = f"https://stockanalysis.com/quote/lon/{ticker}/"
+    return _fetch_stockanalysis_valuation_url(url)
+
+
+def _fetch_stockanalysis_proxy_valuation(symbol: str) -> dict[str, float | None]:
+    ticker = symbol.upper()
+    if not ticker or not re.fullmatch(r"[A-Z0-9]+", ticker):
+        return {}
+    return _fetch_stockanalysis_valuation_url(f"https://stockanalysis.com/etf/{ticker.lower()}/")
+
+
+def _fetch_stockanalysis_valuation_url(url: str) -> dict[str, float | None]:
+    text = _read_text(url, timeout=15)
+    return {
+        "trailingPE": _extract_script_number(text, "peRatio"),
+        "forwardPE": _extract_script_number(text, "forwardPE"),
+        "priceToBook": _extract_script_number(text, "priceToBook"),
+    }
+
+
+def _has_any_valuation(valuations: dict[str, Any]) -> bool:
+    keys = ("trailingPE", "forwardPE", "priceToBook")
+    return any(_safe_float(valuations.get(key)) is not None for key in keys)
+
+
 def _read_json(url: str, timeout: int = 15, attempts: int = 3) -> dict[str, Any]:
     last_error: Exception | None = None
     for attempt in range(attempts):
@@ -257,6 +323,39 @@ def _read_json(url: str, timeout: int = 15, attempts: int = 3) -> dict[str, Any]
                 time.sleep(1.4**attempt)
     assert last_error is not None
     raise last_error
+
+
+def _read_text(url: str, timeout: int = 15, attempts: int = 3) -> str:
+    last_error: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            request = urllib.request.Request(url, headers=ETF_HEADERS)
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                return response.read().decode("utf-8", errors="replace")
+        except Exception as exc:
+            last_error = exc
+            if attempt < attempts - 1:
+                time.sleep(1.4**attempt)
+    assert last_error is not None
+    raise last_error
+
+
+def _extract_script_number(text: str, field: str) -> float | None:
+    escaped = re.escape(field)
+    patterns = [
+        rf'{escaped}:"([^"]+)"',
+        rf'"{escaped}"\s*:\s*"([^"]+)"',
+        rf'"{escaped}"\s*:\s*(-?\d+(?:\.\d+)?)',
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if not match:
+            continue
+        raw = match.group(1).replace(",", "").strip()
+        if raw.lower() in {"n/a", "na", "-", ""}:
+            return None
+        return _safe_float(raw)
+    return None
 
 
 def _update_valuation_history(
@@ -302,6 +401,7 @@ def _write_asset_cache(cache: dict[str, Any], asset: ETFAssetMonitor) -> None:
         "pe": asset.pe,
         "forward_pe": asset.forward_pe,
         "pb": asset.pb,
+        "valuation_source": asset.valuation_source,
         "pe_percentile": asset.pe_percentile,
         "pb_percentile": asset.pb_percentile,
         "trend_label": asset.trend_label,
@@ -352,6 +452,7 @@ def _asset_from_cache(spec: ETFSpec, entry: dict[str, Any], fetched_at: datetime
         pe=_safe_float(entry.get("pe")),
         forward_pe=_safe_float(entry.get("forward_pe")),
         pb=_safe_float(entry.get("pb")),
+        valuation_source=entry.get("valuation_source") or "unavailable",
         pe_percentile=_safe_float(entry.get("pe_percentile")),
         pb_percentile=_safe_float(entry.get("pb_percentile")),
         sigma_label=entry.get("sigma_label") or "日波动待确认",

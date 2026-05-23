@@ -216,17 +216,18 @@ def _render_etf_monitor(monitor: ETFMonitor | None) -> str:
           </tr>
           {rows}
         </table>
-        <div style="font-size:12px;color:#9ca3af;margin-top:8px;">PE衡量盈利倍数，PB衡量市值相对账面净资产；黄金ETC不适用PE/PB。</div>
+        <div style="font-size:12px;color:#9ca3af;margin-top:8px;">PE衡量盈利倍数，PB衡量市值相对账面净资产；proxy 表示使用同类ETF作近似估值参考；黄金ETC不适用PE/PB。</div>
       </td>
     </tr>"""
 
 
 def _render_etf_row(asset: ETFAssetMonitor) -> str:
+    valuation_source = f"估值源：{asset.valuation_source}" if asset.valuation_source != "unavailable" else "估值源：暂无"
     return f"""<tr>
       <td style="padding:7px;border-bottom:1px solid #263244;"><strong>{escape(asset.symbol)}</strong><br>{escape(asset.provider)}</td>
       <td style="padding:7px;border-bottom:1px solid #263244;">{escape(asset.theme)}<br>{escape(_fmt_sigma_200d(asset.trend_sigma_200d))} · {escape(asset.trend_stretch_label)}</td>
       <td style="padding:7px;border-bottom:1px solid #263244;">{escape(_fmt_sigma(asset.daily_sigma))} / {escape(_fmt_pct(asset.momentum_1m))} / {escape(_fmt_plain(asset.rsi14))}<br>{escape(asset.sigma_label)}</td>
-      <td style="padding:7px;border-bottom:1px solid #263244;">{escape(_fmt_plain(asset.pe))} / {escape(_fmt_plain(asset.forward_pe))}<br>{escape(asset.valuation_label)}</td>
+      <td style="padding:7px;border-bottom:1px solid #263244;">{escape(_fmt_plain(asset.pe))} / {escape(_fmt_plain(asset.forward_pe))}<br>{escape(asset.valuation_label)}<br><span style="color:#9ca3af;">{escape(valuation_source)}</span></td>
       <td style="padding:7px;border-bottom:1px solid #263244;">{asset.crowding_score}/100<br>{escape(asset.crowding_label)}</td>
     </tr>"""
 
