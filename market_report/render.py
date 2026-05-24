@@ -311,7 +311,7 @@ def _render_etf_monitor(monitor: ETFMonitor | None) -> str:
             <th>SMA13/200</th>
             <th>PE / Forward PE / PB</th>
             <th>PE位置</th>
-            <th>入场质量</th>
+            <th>新增仓位环境</th>
             <th>拥挤度</th>
           </tr>
         </thead>
@@ -378,7 +378,7 @@ def _render_etf_card(asset: ETFAssetMonitor) -> str:
         <div class="etf-card-line"><strong>RSI14</strong>{escape(rsi)}<br>{escape(asset.momentum_label)}</div>
         <div class="etf-card-line"><strong>趋势拉伸</strong>{escape(trend_line)}<br>{escape(asset.trend_stretch_label)}</div>
         <div class="etf-card-line"><strong>PE / Fwd / PB</strong>{escape(valuation)}<br>{escape(_fmt_pe_position(asset))} · {escape(valuation_source)}</div>
-        <div class="etf-card-line"><strong>入场质量 {asset.entry_score}/100</strong>{escape(asset.entry_label)}<br>{escape(asset.risk_management_note)}</div>
+        <div class="etf-card-line"><strong>新增仓位环境 {asset.entry_score}/100</strong>{escape(asset.entry_label)}<br>{escape(asset.risk_management_note)}</div>
       </div>
     </article>"""
 

@@ -213,7 +213,7 @@ def _render_etf_monitor(monitor: ETFMonitor | None) -> str:
             <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">1Dσ / 1M / RSI</th>
             <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">PE / Fwd PE</th>
             <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">PE位置</th>
-            <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">入场质量</th>
+            <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">新增仓位环境</th>
             <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">拥挤度</th>
           </tr>
           {rows}

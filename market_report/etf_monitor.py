@@ -71,8 +71,8 @@ class ETFAssetMonitor:
     trend_stretch_label: str = "趋势拉伸待确认"
     crowding_score: int = 50
     entry_score: int = 50
-    entry_label: str = "入场质量待确认"
-    entry_note: str = "历史样本不足，暂不评估入场质量。"
+    entry_label: str = "新增仓位环境待确认"
+    entry_note: str = "历史样本不足，暂不评估新增仓位环境。"
     risk_management_note: str = "仅作环境评估，不构成买卖建议。"
     source: str = "Yahoo"
     status: str = "ok"
@@ -521,8 +521,8 @@ def _asset_from_cache(spec: ETFSpec, entry: dict[str, Any], fetched_at: datetime
         crowding_label=entry.get("crowding_label") or "拥挤度待确认",
         crowding_score=int(entry.get("crowding_score") or 50),
         entry_score=int(entry.get("entry_score") or 50),
-        entry_label=entry.get("entry_label") or "入场质量待确认",
-        entry_note=entry.get("entry_note") or "历史样本不足，暂不评估入场质量。",
+        entry_label=entry.get("entry_label") or "新增仓位环境待确认",
+        entry_note=entry.get("entry_note") or "历史样本不足，暂不评估新增仓位环境。",
         risk_management_note=entry.get("risk_management_note") or "仅作环境评估，不构成买卖建议。",
         source="Yahoo cache",
         status="cache",
@@ -667,11 +667,18 @@ def _crowding_label(score: int, rsi14: float | None, distance_sma200: float | No
 
 
 def _entry_quality(asset: ETFAssetMonitor) -> tuple[int, str, str, str]:
+    if asset.key == "sgln" or not _is_equity_entry_model_asset(asset):
+        return (
+            50,
+            "非权益资产，需宏观确认",
+            "黄金不适用成长股ETF新增仓位模型，应结合实际利率、美元与风险偏好解释。",
+            "风险管理重点：关注实际利率与美元是否同步上行；若两者走强，黄金配置环境通常承压。",
+        )
     if asset.value is None or asset.sma200 is None:
         return (
             50,
-            "样本不足 / 待观察",
-            "200日趋势样本不足，暂不判断入场质量。",
+            "历史样本不足，暂不评级",
+            "200日趋势样本不足，暂不判断新增仓位环境。",
             "等待更完整的价格历史后再评估趋势框架。",
         )
 
@@ -752,12 +759,12 @@ def _entry_quality(asset: ETFAssetMonitor) -> tuple[int, str, str, str]:
 
 def _entry_label(score: int) -> str:
     if score >= 75:
-        return "趋势延续，回调可观察"
+        return "趋势结构完好，等待回调确认"
     if score >= 60:
-        return "入场质量中性偏好"
+        return "新增仓位环境中性偏好"
     if score >= 45:
-        return "等待更清晰回调/确认"
-    return "追高或趋势转弱，谨慎"
+        return "信号分歧，等待确认"
+    return "追高风险或趋势压力较高"
 
 
 def _entry_note(asset: ETFAssetMonitor, score: int) -> str:
@@ -772,7 +779,7 @@ def _entry_note(asset: ETFAssetMonitor, score: int) -> str:
         if distance_50 is not None and 0 <= distance_50 <= 4 and asset.value >= asset.sma200:
             return "长期趋势仍在，价格靠近50日线，属于相对有质量的趋势内回调。"
     if score >= 75:
-        return "趋势结构、动量和拉伸度相对均衡，入场环境优于追高状态。"
+        return "趋势结构、动量和拉伸度相对均衡，但新增仓位仍宜等待有序回调确认。"
     if score >= 60:
         return "趋势尚可，但动量或估值位置需要继续观察，适合分批观察而非一次性追涨。"
     return "趋势、动量或波动条件尚未形成清晰优势，等待更明确的回调质量或突破确认。"
@@ -788,6 +795,10 @@ def _risk_management_note(asset: ETFAssetMonitor, score: int) -> str:
     if score >= 70:
         return "风险管理重点：以趋势延续框架观察，若跌破50日线且动量转负，入场质量会明显下降。"
     return "风险管理重点：等待价格、RSI和中期均线重新形成一致性，避免在信号分歧时放大敞口。"
+
+
+def _is_equity_entry_model_asset(asset: ETFAssetMonitor) -> bool:
+    return asset.key != "sgln"
 
 
 def _sma(values: list[float], window: int) -> float | None:
