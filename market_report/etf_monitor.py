@@ -115,23 +115,28 @@ VALUATION_PROXY_SYMBOLS = {
 }
 
 
-def fetch_etf_monitor(specs: list[ETFSpec] | None = None) -> ETFMonitor:
+def fetch_etf_monitor(specs: list[ETFSpec] | None = None, macro_metrics: dict[str, Any] | None = None) -> ETFMonitor:
     fetched_at = datetime.now(timezone.utc)
     cache = _load_cache()
     assets: list[ETFAssetMonitor] = []
     warnings: list[str] = []
     for spec in specs or DEFAULT_ETF_SPECS:
         try:
-            asset = _fetch_etf_asset(spec, fetched_at, cache)
+            asset = _fetch_etf_asset(spec, fetched_at, cache, macro_metrics)
         except Exception as exc:
-            asset = _cached_or_failed(spec, fetched_at, cache, f"{type(exc).__name__}: {exc}")
+            asset = _cached_or_failed(spec, fetched_at, cache, f"{type(exc).__name__}: {exc}", macro_metrics)
         assets.append(asset)
         warnings.extend(asset.warnings)
     _save_cache(cache)
     return ETFMonitor(summary=_build_summary(assets), assets=assets, warnings=list(dict.fromkeys(warnings)))
 
 
-def _fetch_etf_asset(spec: ETFSpec, fetched_at: datetime, cache: dict[str, Any]) -> ETFAssetMonitor:
+def _fetch_etf_asset(
+    spec: ETFSpec,
+    fetched_at: datetime,
+    cache: dict[str, Any],
+    macro_metrics: dict[str, Any] | None = None,
+) -> ETFAssetMonitor:
     history = _fetch_yahoo_history(spec.symbol)
     if len(history) < 2:
         raise ValueError(f"{spec.symbol} returned insufficient price history")
@@ -232,7 +237,7 @@ def _fetch_etf_asset(spec: ETFSpec, fetched_at: datetime, cache: dict[str, Any])
         crowding_score=_crowding_score(asset.rsi14, distance, pe_percentile, asset.momentum_1m),
     )
     enriched = _replace_asset(enriched, crowding_label=_crowding_label(enriched.crowding_score, enriched.rsi14, enriched.distance_sma200))
-    entry_score, entry_label, entry_note, risk_note = _entry_quality(enriched)
+    entry_score, entry_label, entry_note, risk_note = _entry_quality(enriched, macro_metrics)
     enriched = _replace_asset(
         enriched,
         entry_score=entry_score,
@@ -244,11 +249,26 @@ def _fetch_etf_asset(spec: ETFSpec, fetched_at: datetime, cache: dict[str, Any])
     return enriched
 
 
-def _cached_or_failed(spec: ETFSpec, fetched_at: datetime, cache: dict[str, Any], reason: str) -> ETFAssetMonitor:
+def _cached_or_failed(
+    spec: ETFSpec,
+    fetched_at: datetime,
+    cache: dict[str, Any],
+    reason: str,
+    macro_metrics: dict[str, Any] | None = None,
+) -> ETFAssetMonitor:
     entry = (cache.get("assets") or {}).get(spec.key)
     if entry:
         asset = _asset_from_cache(spec, entry, fetched_at, reason)
         if asset is not None:
+            if not spec.equity_like:
+                entry_score, entry_label, entry_note, risk_note = _entry_quality(asset, macro_metrics)
+                return _replace_asset(
+                    asset,
+                    entry_score=entry_score,
+                    entry_label=entry_label,
+                    entry_note=entry_note,
+                    risk_management_note=risk_note,
+                )
             return asset
     return ETFAssetMonitor(
         key=spec.key,
@@ -666,14 +686,9 @@ def _crowding_label(score: int, rsi14: float | None, distance_sma200: float | No
     return "拥挤度中性：尚未出现极端过热或超卖"
 
 
-def _entry_quality(asset: ETFAssetMonitor) -> tuple[int, str, str, str]:
+def _entry_quality(asset: ETFAssetMonitor, macro_metrics: dict[str, Any] | None = None) -> tuple[int, str, str, str]:
     if asset.key == "sgln" or not _is_equity_entry_model_asset(asset):
-        return (
-            50,
-            "非权益资产，需宏观确认",
-            "黄金不适用成长股ETF新增仓位模型，应结合实际利率、美元与风险偏好解释。",
-            "风险管理重点：关注实际利率与美元是否同步上行；若两者走强，黄金配置环境通常承压。",
-        )
+        return _gold_entry_quality(asset, macro_metrics)
     if asset.value is None or asset.sma200 is None:
         return (
             50,
@@ -767,6 +782,108 @@ def _entry_label(score: int) -> str:
     return "追高风险或趋势压力较高"
 
 
+def _gold_entry_quality(asset: ETFAssetMonitor, macro_metrics: dict[str, Any] | None = None) -> tuple[int, str, str, str]:
+    score = 50.0
+    real_yield = _metric_value(macro_metrics, "real_yield_10y")
+    real_yield_change = _metric_change(macro_metrics, "real_yield_10y")
+    dxy_change_pct = _metric_change_pct(macro_metrics, "dxy")
+    ten_year_change = _metric_change(macro_metrics, "treasury_10y")
+    nasdaq_change_pct = _metric_change_pct(macro_metrics, "nasdaq")
+    vix_change_pct = _metric_change_pct(macro_metrics, "vix")
+    gold_change_pct = _metric_change_pct(macro_metrics, "gold")
+
+    if asset.value is not None and asset.sma200 is not None:
+        score += 8 if asset.value >= asset.sma200 else -8
+    if asset.sma50 is not None and asset.sma200 is not None:
+        score += 4 if asset.sma50 >= asset.sma200 else -4
+    if asset.trend_sigma_200d is not None:
+        if asset.trend_sigma_200d >= 2:
+            score -= 8
+        elif 0 <= asset.trend_sigma_200d <= 1.5:
+            score += 4
+    if asset.rsi14 is not None:
+        if 45 <= asset.rsi14 <= 65:
+            score += 5
+        elif asset.rsi14 >= 75:
+            score -= 10
+        elif asset.rsi14 <= 30:
+            score -= 5
+
+    if real_yield is not None:
+        if real_yield >= 2.1:
+            score -= 10
+        elif real_yield <= 1.7:
+            score += 6
+    if real_yield_change is not None:
+        if real_yield_change > 0.03:
+            score -= 10
+        elif real_yield_change < -0.03:
+            score += 10
+    if dxy_change_pct is not None:
+        if dxy_change_pct > 0.3:
+            score -= 8
+        elif dxy_change_pct <= 0:
+            score += 5
+    if ten_year_change is not None and dxy_change_pct is not None and ten_year_change > 0.04 and dxy_change_pct > 0:
+        score -= 6
+    if nasdaq_change_pct is not None and gold_change_pct is not None and nasdaq_change_pct < -0.5 and gold_change_pct > 0:
+        score += 5
+    if vix_change_pct is not None:
+        if 3 <= vix_change_pct <= 10 and (dxy_change_pct or 0) <= 0.3:
+            score += 3
+        elif vix_change_pct > 12 and (dxy_change_pct or 0) > 0.3:
+            score -= 6
+    if gold_change_pct is not None:
+        if gold_change_pct > 0:
+            score += 3
+        elif gold_change_pct < -1:
+            score -= 4
+
+    missing = [
+        label
+        for key, label in (
+            ("real_yield_10y", "实际利率"),
+            ("dxy", "美元指数"),
+            ("treasury_10y", "10年期美债收益率"),
+        )
+        if _metric_value(macro_metrics, key) is None
+    ]
+    if missing:
+        score -= min(8, len(missing) * 3)
+
+    final_score = _clamp(score)
+    return final_score, _gold_entry_label(final_score), _gold_entry_note(final_score, missing), _gold_risk_note(final_score)
+
+
+def _gold_entry_label(score: int) -> str:
+    if score >= 70:
+        return "黄金配置环境偏友好"
+    if score >= 55:
+        return "黄金配置环境中性偏友好"
+    if score >= 45:
+        return "黄金配置环境中性，等待宏观确认"
+    return "实际利率/美元压力偏高"
+
+
+def _gold_entry_note(score: int, missing: list[str]) -> str:
+    limitation = f" 部分输入缺失：{'、'.join(missing)}，结论需降权。" if missing else ""
+    if score >= 70:
+        return "实际利率、美元或金价趋势组合对黄金相对友好，配置环境优于中性水平。" + limitation
+    if score >= 55:
+        return "黄金趋势尚可，宏观压力未明显扩散，但仍需观察实际利率和美元是否重新走强。" + limitation
+    if score >= 45:
+        return "黄金配置环境接近中性，趋势信号与宏观约束尚未形成清晰共振。" + limitation
+    return "实际利率或美元压力偏高，黄金配置环境承压，需要等待宏观阻力缓和。" + limitation
+
+
+def _gold_risk_note(score: int) -> str:
+    if score >= 70:
+        return "风险管理重点：若实际利率与美元重新同步上行，黄金的配置分数应快速下调。"
+    if score >= 55:
+        return "风险管理重点：确认金价强势是否由实际利率回落驱动，而非单日避险波动。"
+    return "风险管理重点：优先观察实际利率、美元和长端收益率是否停止同步走强。"
+
+
 def _entry_note(asset: ETFAssetMonitor, score: int) -> str:
     if asset.value is not None and asset.sma200 is not None and asset.value < asset.sma200:
         return "价格低于200日线，趋势框架尚未修复，新增仓位更依赖右侧确认。"
@@ -795,6 +912,21 @@ def _risk_management_note(asset: ETFAssetMonitor, score: int) -> str:
     if score >= 70:
         return "风险管理重点：以趋势延续框架观察，若跌破50日线且动量转负，入场质量会明显下降。"
     return "风险管理重点：等待价格、RSI和中期均线重新形成一致性，避免在信号分歧时放大敞口。"
+
+
+def _metric_value(metrics: dict[str, Any] | None, key: str) -> float | None:
+    metric = (metrics or {}).get(key)
+    return _safe_float(getattr(metric, "value", None))
+
+
+def _metric_change(metrics: dict[str, Any] | None, key: str) -> float | None:
+    metric = (metrics or {}).get(key)
+    return _safe_float(getattr(metric, "change", None))
+
+
+def _metric_change_pct(metrics: dict[str, Any] | None, key: str) -> float | None:
+    metric = (metrics or {}).get(key)
+    return _safe_float(getattr(metric, "change_pct", None))
 
 
 def _is_equity_entry_model_asset(asset: ETFAssetMonitor) -> bool:

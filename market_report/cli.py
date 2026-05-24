@@ -24,7 +24,7 @@ def main() -> int:
 
     config = load_config(args.config)
     snapshot = fetch_market_snapshot()
-    etf_monitor = fetch_etf_monitor()
+    etf_monitor = fetch_etf_monitor(macro_metrics=snapshot.metrics)
     previous_regime = load_previous_regime(config.output_dir)
     scored = score_snapshot(
         snapshot,
