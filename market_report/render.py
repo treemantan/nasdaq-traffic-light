@@ -103,6 +103,16 @@ def render_html_report(report: ScoredReport, title: str) -> str:
     .etf-summary {{ color: var(--subtle); margin-bottom: 12px; }}
     .table-scroll {{ max-width: 100%; overflow-x: auto; overflow-y: hidden; }}
     .table-scroll table {{ min-width: 1500px; }}
+    .etf-cards {{ display: none; }}
+    .etf-card-grid {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }}
+    .etf-card {{ border: 1px solid var(--line); border-radius: 8px; background: rgba(255,255,255,.025); padding: 12px; min-width: 0; }}
+    .etf-card-head {{ display: flex; justify-content: space-between; gap: 10px; align-items: start; margin-bottom: 8px; }}
+    .etf-card-title {{ font-weight: 760; }}
+    .etf-card-price {{ font-size: 20px; font-weight: 760; margin-top: 6px; }}
+    .etf-card-meta {{ color: var(--subtle); font-size: 13px; margin-top: 7px; }}
+    .etf-card-lines {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; margin-top: 10px; }}
+    .etf-card-line {{ border-top: 1px solid var(--line); padding-top: 7px; color: var(--subtle); font-size: 12px; }}
+    .etf-card-line strong {{ display: block; color: var(--text); font-size: 13px; }}
     .etf-table td, .etf-table th {{ white-space: nowrap; }}
     .etf-table td:nth-child(2), .etf-table th:nth-child(2) {{ white-space: normal; }}
     .tag {{ display: inline-block; border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; color: var(--subtle); background: rgba(255,255,255,.025); font-size: 12px; }}
@@ -136,9 +146,12 @@ def render_html_report(report: ScoredReport, title: str) -> str:
     @media (max-width: 980px) {{
       .hero, .grid, .columns, .strategy-head, .strategy-lists {{ grid-template-columns: 1fr; }}
       .datebox {{ text-align: left; }}
+      .table-scroll {{ display: none; }}
+      .etf-cards {{ display: block; }}
     }}
     @media (max-width: 620px) {{
       .topbar, .metric-grid {{ grid-template-columns: 1fr; }}
+      .etf-card-grid, .etf-card-lines {{ grid-template-columns: 1fr; }}
       .score {{ font-size: 52px; }}
     }}
   </style>
@@ -278,6 +291,7 @@ def _render_etf_monitor(monitor: ETFMonitor | None) -> str:
     if monitor is None:
         return ""
     rows = "\n".join(_render_etf_row(asset) for asset in monitor.assets)
+    cards = "\n".join(_render_etf_card(asset) for asset in monitor.assets)
     warnings = ""
     if monitor.warnings:
         warnings = "<div class=\"small-note\">数据提示：" + escape(" ".join(monitor.warnings[:4])) + "</div>"
@@ -302,6 +316,9 @@ def _render_etf_monitor(monitor: ETFMonitor | None) -> str:
         </thead>
         <tbody>{rows}</tbody>
       </table>
+      </div>
+      <div class="etf-cards">
+        <div class="etf-card-grid">{cards}</div>
       </div>
       <div class="small-note">PE衡量市场为每单位盈利支付的价格，Forward PE基于未来盈利预期；PB衡量市值相对账面净资产。PE位置优先显示本地历史分位；样本不足时显示“当前PE/近一年缓存最高PE”的近似比例。σ200使用63/126/252日窗口去极值后的稳健趋势波动率，避免少数极端日收益掩盖趋势拉伸。估值源若标记为proxy，表示使用高度相关的同类ETF作近似参考，并非该伦敦ETF自身披露口径。黄金ETC不适用PE/PB。</div>
       {warnings}
@@ -333,6 +350,34 @@ def _render_etf_row(asset: ETFAssetMonitor) -> str:
       <td>{escape(pe_position)}</td>
       <td><span class="tag {status}">{asset.crowding_score}/100</span><br><span class="muted">{escape(asset.crowding_label)}</span></td>
     </tr>"""
+
+
+def _render_etf_card(asset: ETFAssetMonitor) -> str:
+    status = "tag-hot" if asset.crowding_score >= 70 else "tag-cool" if asset.crowding_score <= 35 else ""
+    price = _fmt_price(asset.value, asset.currency)
+    one_day = _fmt_pct(asset.change_pct)
+    one_month = _fmt_pct(asset.momentum_1m)
+    rsi = "N/A" if asset.rsi14 is None else f"{asset.rsi14:.1f}"
+    valuation = f"{_fmt_plain(asset.pe)} / {_fmt_plain(asset.forward_pe)} / {_fmt_plain(asset.pb)}"
+    valuation_source = f"估值源：{asset.valuation_source}" if asset.valuation_source != "unavailable" else "估值源：暂无"
+    trend_line = f"距200日线 {_fmt_pct(asset.distance_sma200)} / {_fmt_sigma_200d(asset.trend_sigma_200d)}"
+    return f"""<article class="etf-card">
+      <div class="etf-card-head">
+        <div>
+          <div class="etf-card-title">{escape(asset.symbol)} · {escape(asset.provider)}</div>
+          <div class="muted">{escape(asset.label)}</div>
+        </div>
+        <span class="tag {status}">{asset.crowding_score}/100</span>
+      </div>
+      <div class="etf-card-price">{escape(price)}</div>
+      <div class="etf-card-meta">{escape(asset.theme)} · {escape(asset.trend_label)}</div>
+      <div class="etf-card-lines">
+        <div class="etf-card-line"><strong>1D / 1M</strong>{escape(one_day)} / {escape(one_month)}<br>{escape(_fmt_sigma(asset.daily_sigma))}</div>
+        <div class="etf-card-line"><strong>RSI14</strong>{escape(rsi)}<br>{escape(asset.momentum_label)}</div>
+        <div class="etf-card-line"><strong>趋势拉伸</strong>{escape(trend_line)}<br>{escape(asset.trend_stretch_label)}</div>
+        <div class="etf-card-line"><strong>PE / Fwd / PB</strong>{escape(valuation)}<br>{escape(_fmt_pe_position(asset))} · {escape(valuation_source)}</div>
+      </div>
+    </article>"""
 
 
 def _fmt_pe_position(asset: ETFAssetMonitor) -> str:
