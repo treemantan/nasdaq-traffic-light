@@ -180,9 +180,9 @@ def _load_payload(report_path: Path) -> dict | None:
 def _render_message(mode: str, report_path: Path, full_html: str, payload: dict | None) -> tuple[str, str, str]:
     report_date = _report_date(report_path)
     if mode == "full":
-        subject = f"Daily Market Report - {report_date}"
+        subject = f"Macro Regime Radar - {report_date}"
         text = (
-            f"Daily Market Report - {report_date}\n\n"
+            f"Macro Regime Radar - {report_date}\n\n"
             "The HTML market report was generated successfully, but your email client may not support HTML rendering. "
             "Please open the GitHub Actions artifact named market-report to view the full report."
         )
@@ -339,7 +339,7 @@ def _html_shell(title: str, body: str) -> str:
       <table role="presentation" width="680" cellspacing="0" cellpadding="0" style="width:680px;max-width:100%;background:#111827;border:1px solid #263244;border-radius:8px;">
         <tr><td style="padding:20px 22px;border-bottom:1px solid #263244;">
           <div style="font-size:24px;line-height:1.25;font-weight:700;color:#f3f4f6;">{escape(title)}</div>
-          <div style="font-size:13px;color:#9ca3af;margin-top:5px;">Nasdaq Traffic Light · UK monitor</div>
+          <div style="font-size:13px;color:#9ca3af;margin-top:5px;">Macro Regime Radar · UK monitor</div>
         </td></tr>
         <tr><td style="padding:18px 22px;color:#d1d5db;font-size:14px;line-height:1.55;">{body}</td></tr>
       </table>

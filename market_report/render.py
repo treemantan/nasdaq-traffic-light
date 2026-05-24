@@ -145,7 +145,7 @@ def render_html_report(report: ScoredReport, title: str) -> str:
   <main class="page">
     <section class="topbar">
       <div>
-        <h1>纳斯达克红绿灯：宏观跨资产风险仪表盘</h1>
+        <h1>{escape(title)}</h1>
         <div class="subtitle">Macro regime-aware cross-asset monitor | 中文机构版</div>
       </div>
       <div class="datebox">

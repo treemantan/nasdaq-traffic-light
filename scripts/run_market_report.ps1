@@ -84,7 +84,7 @@ $fullLogDir = Join-Path $ProjectDir $LogDir
 New-Item -ItemType Directory -Force -Path $fullLogDir | Out-Null
 $script:LogFile = Join-Path $fullLogDir ("market-report-{0}.log" -f (Get-Date -Format "yyyy-MM-dd"))
 
-Write-Log "Starting Nasdaq Traffic Light report."
+Write-Log "Starting Macro Regime Radar report."
 Write-Log "ProjectDir=$ProjectDir"
 Write-Log "ConfigPath=$ConfigPath"
 

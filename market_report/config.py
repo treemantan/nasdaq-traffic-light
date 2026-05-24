@@ -49,7 +49,7 @@ def load_config(path: str) -> AppConfig:
     sender = os.environ.get("SMTP_FROM", email.get("from", username))
 
     return AppConfig(
-        report_title=report.get("title", "纳斯达克红绿灯：宏观跨资产风险仪表盘"),
+        report_title=report.get("title", "Macro Regime Radar：宏观状态雷达"),
         report_timezone=report.get("timezone", "America/New_York"),
         output_dir=Path(report.get("output_dir", "output")),
         weights=weights,
@@ -62,7 +62,7 @@ def load_config(path: str) -> AppConfig:
             password_env=email.get("password_env", "SMTP_PASSWORD"),
             sender=sender,
             recipients=recipients,
-            subject_prefix=email.get("subject_prefix", "纳斯达克红绿灯"),
+            subject_prefix=email.get("subject_prefix", "Macro Regime Radar"),
             attach_html=bool(email.get("attach_html", True)),
         ),
     )

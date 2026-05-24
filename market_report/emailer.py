@@ -56,7 +56,7 @@ def _subject(config: EmailConfig, report: ScoredReport) -> str:
 
 
 def _plain_text_body(report: ScoredReport, attachment_path: Path) -> str:
-    return f"""纳斯达克红绿灯日报已生成。
+    return f"""Macro Regime Radar日报已生成。
 
 日期：{report.report_date}
 宏观框架：{report.regime.label} ({report.regime.name})

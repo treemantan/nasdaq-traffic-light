@@ -1,5 +1,5 @@
 param(
-    [string]$TaskName = "Nasdaq Traffic Light Daily Report",
+    [string]$TaskName = "Macro Regime Radar Daily Report",
     [string]$ProjectDir = "",
     [string]$Time = "23:30",
     [ValidateSet("Daily", "Weekdays")]
@@ -27,7 +27,7 @@ else {
 }
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
 
-Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings -Description "Generate and email Nasdaq Traffic Light macro dashboard." -Force | Out-Null
+Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings -Description "Generate and email Macro Regime Radar macro dashboard." -Force | Out-Null
 
 Write-Host "Scheduled task registered: $TaskName"
 Write-Host "Schedule: $scheduleText"

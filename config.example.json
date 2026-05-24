@@ -1,6 +1,6 @@
 {
   "report": {
-    "title": "纳斯达克红绿灯：宏观跨资产风险仪表盘",
+    "title": "Macro Regime Radar：宏观状态雷达",
     "timezone": "America/New_York",
     "output_dir": "output"
   },
@@ -19,7 +19,7 @@
     "password_env": "SMTP_PASSWORD",
     "from": "your_email@example.com",
     "to": ["recipient@example.com"],
-    "subject_prefix": "纳斯达克红绿灯",
+    "subject_prefix": "Macro Regime Radar",
     "attach_html": true
   }
 }

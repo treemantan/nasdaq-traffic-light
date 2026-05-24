@@ -16,7 +16,7 @@ from .scoring import score_snapshot
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Generate and optionally email the Nasdaq Traffic Light report.")
+    parser = argparse.ArgumentParser(description="Generate and optionally email the Macro Regime Radar report.")
     parser.add_argument("--config", default="config.json", help="Path to JSON config file.")
     parser.add_argument("--dry-run", action="store_true", help="Generate the report without sending email.")
     parser.add_argument("--output", help="Optional explicit output HTML path.")

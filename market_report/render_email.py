@@ -35,7 +35,7 @@ def render_email_report(report: ScoredReport) -> str:
         <table role="presentation" width="760" cellspacing="0" cellpadding="0" style="width:760px;max-width:100%;background:#111827;border:1px solid #263244;border-radius:8px;">
           <tr>
             <td style="padding:22px 24px;border-bottom:1px solid #263244;">
-              <div style="font-size:28px;line-height:1.2;font-weight:700;color:#f3f4f6;">纳斯达克红绿灯：宏观跨资产风险仪表盘</div>
+              <div style="font-size:28px;line-height:1.2;font-weight:700;color:#f3f4f6;">Macro Regime Radar：宏观状态雷达</div>
               <div style="font-size:13px;color:#9ca3af;margin-top:6px;">{escape(report.report_date)} · Macro regime-aware cross-asset monitor</div>
             </td>
           </tr>

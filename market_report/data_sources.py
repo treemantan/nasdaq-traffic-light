@@ -18,7 +18,7 @@ from typing import Any
 
 CACHE_PATH = Path("output") / "cache" / "market_data_cache.json"
 CORE_KEYS = {"nasdaq", "sp500", "vix", "treasury_10y", "dxy", "gold"}
-DEFAULT_HTTP_HEADERS = {"User-Agent": "nasdaq-traffic-light/0.3"}
+DEFAULT_HTTP_HEADERS = {"User-Agent": "macro-regime-radar/0.3"}
 FRED_HTTP_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
     "Accept": "text/csv,*/*",

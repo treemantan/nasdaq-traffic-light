@@ -1,4 +1,4 @@
-# Nasdaq Traffic Light
+# Macro Regime Radar
 
 中文优先的宏观跨资产风险仪表盘。它不是简单的“红灯看空、绿灯看多”，而是尝试识别宏观 regime、利率敏感度、美元流动性、波动率压力、风险偏好与跨资产一致性。
 
@@ -92,7 +92,7 @@ python -m market_report --config config.json
 手动运行：
 
 1. 打开 GitHub repo 的 `Actions`
-2. 选择 `Daily Market Report`
+2. 选择 `Macro Regime Radar`
 3. 点击 `Run workflow`
 4. 在 `email_mode` 中选择 `none`、`pulse`、`volatility`、`full` 或 `auto`
 

@@ -12,12 +12,12 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%PROJECT_DIR%\scripts\r
 
 if errorlevel 1 (
   echo.
-  echo Nasdaq Traffic Light run failed. Check logs\market-report-YYYY-MM-DD.log
+  echo Macro Regime Radar run failed. Check logs\market-report-YYYY-MM-DD.log
   pause
   exit /b 1
 )
 
 echo.
-echo Nasdaq Traffic Light report sent successfully.
+echo Macro Regime Radar report sent successfully.
 echo Log file: logs\market-report-YYYY-MM-DD.log
 pause
