@@ -7,8 +7,8 @@ on:
     # keeps only the candidate that maps to the intended UK wall-clock time.
     # UK DST rule, per GOV.UK: clocks go forward at 01:00 GMT on the last Sunday
     # in March, and back at 02:00 BST on the last Sunday in October.
-    - cron: "30 7 * * 1-5"   # 08:30 UK when BST (UTC+1)
-    - cron: "30 8 * * 1-5"   # 08:30 UK when GMT (UTC+0)
+    - cron: "30 7 * * 1-5"   # 08:30 UK when BST (UTC+1), London ETF open pulse
+    - cron: "30 8 * * 1-5"   # 08:30 UK when GMT (UTC+0), London ETF open pulse
     - cron: "45 13 * * 1-5"  # 14:45 UK when BST
     - cron: "45 14 * * 1-5"  # 14:45 UK when GMT
     - cron: "0 17 * * 1-5"   # 18:00 UK when BST
@@ -68,8 +68,8 @@ jobs:
 
           schedule = os.environ["EVENT_SCHEDULE"]
           mapping = {
-              "30 7 * * 1-5": ("08:30", "none"),
-              "30 8 * * 1-5": ("08:30", "none"),
+              "30 7 * * 1-5": ("08:30", "pulse"),
+              "30 8 * * 1-5": ("08:30", "pulse"),
               "45 13 * * 1-5": ("14:45", "pulse"),
               "45 14 * * 1-5": ("14:45", "pulse"),
               "0 17 * * 1-5": ("18:00", "volatility"),

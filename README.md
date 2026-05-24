@@ -77,15 +77,15 @@ python -m market_report --config config.json
 邮件模式：
 
 - `none`：只生成报告并上传 artifact，不发送邮件
-- `pulse`：发送轻量 Market Pulse，包含综合风险分、宏观 regime、关键风险变化和 Iron Condor 环境
+- `pulse`：发送轻量 Market Pulse，包含综合风险分、宏观 regime、关键风险变化、Iron Condor 环境和 UK ETF 开盘观察
 - `volatility`：发送波动率 / Iron Condor regime 简报，重点回答短波动环境是否恶化
 - `full`：发送完整 HTML 报告
 - `auto`：根据 Europe/London 当前本地时间自动推断邮件模式
 
 `auto` 的 UK 本地时间映射：
 
-- `00:00-11:59`：`none`
-- `12:00-16:29`：`pulse`
+- `00:00-07:59`：`none`
+- `08:00-16:29`：`pulse`
 - `16:30-19:59`：`volatility`
 - `20:00-23:59`：`full`
 
@@ -100,7 +100,7 @@ python -m market_report --config config.json
 
 默认工作日 UK 监控节奏：
 
-- 08:30 UK：生成报告，不发邮件
+- 08:30 UK：生成报告并发送轻量 Market Pulse，包含 UK ETF 开盘观察
 - 14:45 UK：生成报告并发送轻量 Market Pulse
 - 18:00 UK：生成报告并发送 Volatility / Iron Condor regime 简报
 - 21:15 UK：生成报告并发送完整 HTML 报告

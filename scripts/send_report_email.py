@@ -154,7 +154,7 @@ def _send_smtp(
 def _infer_email_mode(now: datetime | None = None) -> str:
     local_now = _london_now(now)
     current = local_now.time()
-    if current < time(12, 0):
+    if current < time(8, 0):
         return "none"
     if current < time(16, 30):
         return "pulse"
@@ -200,6 +200,7 @@ def _render_pulse(payload: dict) -> tuple[str, str, str]:
     iron = payload.get("iron_condor", {})
     risks = (payload.get("risks") or [])[:5]
     blockers = iron.get("blockers") or []
+    etf_items = _etf_pulse_items(payload)
     subject = f"Market Pulse - {stamp}"
     rows = [
         ("综合风险分", f"{payload.get('overall_score', 'N/A')}/100"),
@@ -211,6 +212,7 @@ def _render_pulse(payload: dict) -> tuple[str, str, str]:
     html = _html_shell(
         "Market Pulse",
         _definition_table(rows)
+        + _bullet_section("UK ETF开盘观察", etf_items)
         + _bullet_section("关键风险变化", risks)
         + _bullet_section("触发警报 / 阻断项", blockers)
         + "<p style='color:#9ca3af;'>Full report will be sent after the US market close.</p>",
@@ -224,11 +226,56 @@ def _render_pulse(payload: dict) -> tuple[str, str, str]:
             f"Regime confidence: {regime.get('confidence_score', 'N/A')}/100",
             f"Iron Condor: {iron.get('label', 'N/A')} · {iron.get('score', 'N/A')}/100",
             "Key risks: " + ("; ".join(risks) if risks else "N/A"),
+            "UK ETF pulse: " + ("; ".join(etf_items) if etf_items else "N/A"),
             "Alerts/blockers: " + ("; ".join(blockers) if blockers else "N/A"),
             "Full report will be sent after the US market close.",
         ]
     )
     return subject, html, text
+
+
+def _etf_pulse_items(payload: dict) -> list[str]:
+    assets = ((payload.get("etf_monitor") or {}).get("assets") or [])
+    valid = [asset for asset in assets if isinstance(asset, dict)]
+    if not valid:
+        return []
+
+    items: list[str] = []
+    movers = [asset for asset in valid if isinstance(asset.get("change_pct"), (int, float))]
+    if movers:
+        strongest = max(movers, key=lambda asset: asset["change_pct"])
+        weakest = min(movers, key=lambda asset: asset["change_pct"])
+        items.append(
+            f"最强ETF：{strongest.get('symbol', 'N/A')} {strongest.get('change_pct', 0):+.2f}%"
+            f"，{strongest.get('entry_label', '新增仓位环境待确认')}"
+        )
+        items.append(
+            f"最弱ETF：{weakest.get('symbol', 'N/A')} {weakest.get('change_pct', 0):+.2f}%"
+            f"，{weakest.get('entry_label', '新增仓位环境待确认')}"
+        )
+
+    scored = [asset for asset in valid if isinstance(asset.get("entry_score"), int)]
+    if scored:
+        preferred = max(scored, key=lambda asset: asset["entry_score"])
+        pressured = min(scored, key=lambda asset: asset["entry_score"])
+        items.append(
+            f"新增仓位环境最高：{preferred.get('symbol', 'N/A')} "
+            f"{preferred.get('entry_score', 'N/A')}/100，{preferred.get('entry_label', 'N/A')}"
+        )
+        items.append(
+            f"新增仓位环境最低：{pressured.get('symbol', 'N/A')} "
+            f"{pressured.get('entry_score', 'N/A')}/100，{pressured.get('entry_label', 'N/A')}"
+        )
+
+    crowded = [
+        asset
+        for asset in valid
+        if isinstance(asset.get("crowding_score"), int) and asset.get("crowding_score", 0) >= 85
+    ]
+    if crowded:
+        symbols = "、".join(str(asset.get("symbol", "N/A")) for asset in crowded[:4])
+        items.append(f"拥挤度偏高：{symbols}，需关注RSI和趋势拉伸。")
+    return items[:5]
 
 
 def _render_volatility(payload: dict) -> tuple[str, str, str]:
