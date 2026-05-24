@@ -45,6 +45,7 @@ class ETFAssetMonitor:
     change_pct: float | None = None
     daily_sigma: float | None = None
     daily_volatility: float | None = None
+    trend_volatility: float | None = None
     momentum_5d: float | None = None
     momentum_1m: float | None = None
     momentum_3m: float | None = None
@@ -125,6 +126,7 @@ def _fetch_etf_asset(spec: ETFSpec, fetched_at: datetime, cache: dict[str, Any])
     previous = closes[-2]
     one_day_change = _pct_change(value, previous)
     daily_volatility = _rolling_std(daily_returns, 252)
+    trend_volatility = _robust_trend_volatility(daily_returns)
     daily_sigma = _sigma_move(one_day_change, daily_volatility)
     valuation_fetch_warning: str | None = None
     try:
@@ -181,6 +183,7 @@ def _fetch_etf_asset(spec: ETFSpec, fetched_at: datetime, cache: dict[str, Any])
         change_pct=one_day_change,
         daily_sigma=daily_sigma,
         daily_volatility=daily_volatility,
+        trend_volatility=trend_volatility,
         momentum_5d=_momentum(closes, 5),
         momentum_1m=_momentum(closes, 21),
         momentum_3m=_momentum(closes, 63),
@@ -200,7 +203,7 @@ def _fetch_etf_asset(spec: ETFSpec, fetched_at: datetime, cache: dict[str, Any])
         warnings=tuple(warnings),
     )
     distance = _distance_to_sma(asset.value, asset.sma200)
-    trend_sigma = _trend_sigma(distance, asset.daily_volatility, 200)
+    trend_sigma = _trend_sigma(distance, asset.trend_volatility or asset.daily_volatility, 200)
     enriched = _replace_asset(
         asset,
         distance_sma200=distance,
@@ -410,6 +413,7 @@ def _write_asset_cache(cache: dict[str, Any], asset: ETFAssetMonitor) -> None:
         "change_pct": asset.change_pct,
         "daily_sigma": asset.daily_sigma,
         "daily_volatility": asset.daily_volatility,
+        "trend_volatility": asset.trend_volatility,
         "momentum_5d": asset.momentum_5d,
         "momentum_1m": asset.momentum_1m,
         "momentum_3m": asset.momentum_3m,
@@ -463,6 +467,7 @@ def _asset_from_cache(spec: ETFSpec, entry: dict[str, Any], fetched_at: datetime
         change_pct=_safe_float(entry.get("change_pct")),
         daily_sigma=_safe_float(entry.get("daily_sigma")),
         daily_volatility=_safe_float(entry.get("daily_volatility")),
+        trend_volatility=_safe_float(entry.get("trend_volatility")),
         momentum_5d=_safe_float(entry.get("momentum_5d")),
         momentum_1m=_safe_float(entry.get("momentum_1m")),
         momentum_3m=_safe_float(entry.get("momentum_3m")),
@@ -674,6 +679,51 @@ def _rolling_std(values: list[float], window: int) -> float | None:
     mean = sum(sample) / len(sample)
     variance = sum((item - mean) ** 2 for item in sample) / (len(sample) - 1)
     return math.sqrt(variance)
+
+
+def _robust_trend_volatility(values: list[float]) -> float | None:
+    windows = (63, 126, 252)
+    estimates = [
+        estimate
+        for window in windows
+        if (estimate := _winsorized_std(values[-window:])) is not None
+    ]
+    if not estimates:
+        return None
+    return _median(estimates)
+
+
+def _winsorized_std(sample: list[float]) -> float | None:
+    clean = [item for item in sample if math.isfinite(item)]
+    if len(clean) < 30:
+        return None
+    lower = _quantile(clean, 0.05)
+    upper = _quantile(clean, 0.95)
+    clipped = [min(max(item, lower), upper) for item in clean]
+    mean = sum(clipped) / len(clipped)
+    variance = sum((item - mean) ** 2 for item in clipped) / (len(clipped) - 1)
+    return math.sqrt(variance)
+
+
+def _quantile(values: list[float], q: float) -> float:
+    clean = sorted(values)
+    if not clean:
+        return 0.0
+    position = (len(clean) - 1) * q
+    lower = math.floor(position)
+    upper = math.ceil(position)
+    if lower == upper:
+        return clean[int(position)]
+    weight = position - lower
+    return clean[lower] * (1 - weight) + clean[upper] * weight
+
+
+def _median(values: list[float]) -> float:
+    clean = sorted(values)
+    midpoint = len(clean) // 2
+    if len(clean) % 2:
+        return clean[midpoint]
+    return (clean[midpoint - 1] + clean[midpoint]) / 2
 
 
 def _sigma_move(change_pct: float | None, daily_volatility: float | None) -> float | None:

@@ -299,7 +299,7 @@ def _render_etf_monitor(monitor: ETFMonitor | None) -> str:
         </thead>
         <tbody>{rows}</tbody>
       </table>
-      <div class="small-note">PE衡量市场为每单位盈利支付的价格，Forward PE基于未来盈利预期；PB衡量市值相对账面净资产。PE位置优先显示本地历史分位；样本不足时显示“当前PE/近一年缓存最高PE”的近似比例。估值源若标记为proxy，表示使用高度相关的同类ETF作近似参考，并非该伦敦ETF自身披露口径。黄金ETC不适用PE/PB。</div>
+      <div class="small-note">PE衡量市场为每单位盈利支付的价格，Forward PE基于未来盈利预期；PB衡量市值相对账面净资产。PE位置优先显示本地历史分位；样本不足时显示“当前PE/近一年缓存最高PE”的近似比例。σ200使用63/126/252日窗口去极值后的稳健趋势波动率，避免少数极端日收益掩盖趋势拉伸。估值源若标记为proxy，表示使用高度相关的同类ETF作近似参考，并非该伦敦ETF自身披露口径。黄金ETC不适用PE/PB。</div>
       {warnings}
     </section>"""
 

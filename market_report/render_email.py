@@ -217,7 +217,7 @@ def _render_etf_monitor(monitor: ETFMonitor | None) -> str:
           </tr>
           {rows}
         </table>
-        <div style="font-size:12px;color:#9ca3af;margin-top:8px;">PE位置优先显示本地历史分位；样本不足时显示当前PE/近一年缓存最高PE的近似比例。proxy 表示使用同类ETF作近似估值参考；黄金ETC不适用PE/PB。</div>
+        <div style="font-size:12px;color:#9ca3af;margin-top:8px;">PE位置优先显示本地历史分位；样本不足时显示当前PE/近一年缓存最高PE的近似比例。σ200使用去极值后的稳健趋势波动率，避免少数极端日收益掩盖趋势拉伸。proxy 表示使用同类ETF作近似估值参考；黄金ETC不适用PE/PB。</div>
       </td>
     </tr>"""
 

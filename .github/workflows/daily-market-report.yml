@@ -102,9 +102,25 @@ jobs:
         if: steps.email-mode.outputs.should_run == 'true'
         run: pip install -r requirements.txt
 
+      - name: Restore report cache
+        if: steps.email-mode.outputs.should_run == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: output/cache
+          key: market-report-cache-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            market-report-cache-${{ runner.os }}-
+
       - name: Generate report
         if: steps.email-mode.outputs.should_run == 'true'
         run: python -m market_report --config config.example.json --dry-run
+
+      - name: Save report cache
+        if: steps.email-mode.outputs.should_run == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: output/cache
+          key: market-report-cache-${{ runner.os }}-${{ github.run_id }}
 
       - name: Upload report artifact
         if: steps.email-mode.outputs.should_run == 'true'
@@ -114,6 +130,7 @@ jobs:
           path: |
             output/*.html
             output/*.json
+            output/cache/*.json
           if-no-files-found: error
 
       - name: Send report email
