@@ -213,6 +213,7 @@ def _render_etf_monitor(monitor: ETFMonitor | None) -> str:
             <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">1Dσ / 1M / RSI</th>
             <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">PE / Fwd PE</th>
             <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">PE位置</th>
+            <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">入场质量</th>
             <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">拥挤度</th>
           </tr>
           {rows}
@@ -230,6 +231,7 @@ def _render_etf_row(asset: ETFAssetMonitor) -> str:
       <td style="padding:7px;border-bottom:1px solid #263244;">{escape(_fmt_sigma(asset.daily_sigma))} / {escape(_fmt_pct(asset.momentum_1m))} / {escape(_fmt_plain(asset.rsi14))}<br>{escape(asset.sigma_label)}</td>
       <td style="padding:7px;border-bottom:1px solid #263244;">{escape(_fmt_plain(asset.pe))} / {escape(_fmt_plain(asset.forward_pe))}<br>{escape(asset.valuation_label)}<br><span style="color:#9ca3af;">{escape(valuation_source)}</span></td>
       <td style="padding:7px;border-bottom:1px solid #263244;">{escape(_fmt_pe_position(asset))}</td>
+      <td style="padding:7px;border-bottom:1px solid #263244;">{asset.entry_score}/100<br>{escape(asset.entry_label)}</td>
       <td style="padding:7px;border-bottom:1px solid #263244;">{asset.crowding_score}/100<br>{escape(asset.crowding_label)}</td>
     </tr>"""
 

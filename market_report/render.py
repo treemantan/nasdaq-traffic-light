@@ -102,7 +102,7 @@ def render_html_report(report: ScoredReport, title: str) -> str:
     .disclaimer {{ margin-top: 12px; color: var(--muted); font-size: 12px; }}
     .etf-summary {{ color: var(--subtle); margin-bottom: 12px; }}
     .table-scroll {{ max-width: 100%; overflow-x: auto; overflow-y: hidden; }}
-    .table-scroll table {{ min-width: 1500px; }}
+    .table-scroll table {{ min-width: 1680px; }}
     .etf-cards {{ display: none; }}
     .etf-card-grid {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }}
     .etf-card {{ border: 1px solid var(--line); border-radius: 8px; background: rgba(255,255,255,.025); padding: 12px; min-width: 0; }}
@@ -311,6 +311,7 @@ def _render_etf_monitor(monitor: ETFMonitor | None) -> str:
             <th>SMA13/200</th>
             <th>PE / Forward PE / PB</th>
             <th>PE位置</th>
+            <th>入场质量</th>
             <th>拥挤度</th>
           </tr>
         </thead>
@@ -348,6 +349,7 @@ def _render_etf_row(asset: ETFAssetMonitor) -> str:
       <td>{escape(sma)}<br><span class="muted">距200日线 {escape(_fmt_pct(asset.distance_sma200))} / {escape(trend_sigma)} · {escape(asset.trend_stretch_label)}</span></td>
       <td>{escape(valuation)}<br><span class="muted">{escape(asset.valuation_label)}</span><br><span class="muted">{escape(valuation_source)}</span></td>
       <td>{escape(pe_position)}</td>
+      <td><span class="tag {status}">{asset.entry_score}/100</span><br><span class="muted">{escape(asset.entry_label)}</span><br><span class="muted">{escape(asset.entry_note)}</span></td>
       <td><span class="tag {status}">{asset.crowding_score}/100</span><br><span class="muted">{escape(asset.crowding_label)}</span></td>
     </tr>"""
 
@@ -376,6 +378,7 @@ def _render_etf_card(asset: ETFAssetMonitor) -> str:
         <div class="etf-card-line"><strong>RSI14</strong>{escape(rsi)}<br>{escape(asset.momentum_label)}</div>
         <div class="etf-card-line"><strong>趋势拉伸</strong>{escape(trend_line)}<br>{escape(asset.trend_stretch_label)}</div>
         <div class="etf-card-line"><strong>PE / Fwd / PB</strong>{escape(valuation)}<br>{escape(_fmt_pe_position(asset))} · {escape(valuation_source)}</div>
+        <div class="etf-card-line"><strong>入场质量 {asset.entry_score}/100</strong>{escape(asset.entry_label)}<br>{escape(asset.risk_management_note)}</div>
       </div>
     </article>"""
 

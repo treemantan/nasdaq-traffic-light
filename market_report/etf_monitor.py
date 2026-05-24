@@ -70,6 +70,10 @@ class ETFAssetMonitor:
     sigma_label: str = "日波动待确认"
     trend_stretch_label: str = "趋势拉伸待确认"
     crowding_score: int = 50
+    entry_score: int = 50
+    entry_label: str = "入场质量待确认"
+    entry_note: str = "历史样本不足，暂不评估入场质量。"
+    risk_management_note: str = "仅作环境评估，不构成买卖建议。"
     source: str = "Yahoo"
     status: str = "ok"
     warnings: tuple[str, ...] = field(default_factory=tuple)
@@ -228,6 +232,14 @@ def _fetch_etf_asset(spec: ETFSpec, fetched_at: datetime, cache: dict[str, Any])
         crowding_score=_crowding_score(asset.rsi14, distance, pe_percentile, asset.momentum_1m),
     )
     enriched = _replace_asset(enriched, crowding_label=_crowding_label(enriched.crowding_score, enriched.rsi14, enriched.distance_sma200))
+    entry_score, entry_label, entry_note, risk_note = _entry_quality(enriched)
+    enriched = _replace_asset(
+        enriched,
+        entry_score=entry_score,
+        entry_label=entry_label,
+        entry_note=entry_note,
+        risk_management_note=risk_note,
+    )
     _write_asset_cache(cache, enriched)
     return enriched
 
@@ -450,6 +462,10 @@ def _write_asset_cache(cache: dict[str, Any], asset: ETFAssetMonitor) -> None:
         "valuation_label": asset.valuation_label,
         "crowding_label": asset.crowding_label,
         "crowding_score": asset.crowding_score,
+        "entry_score": asset.entry_score,
+        "entry_label": asset.entry_label,
+        "entry_note": asset.entry_note,
+        "risk_management_note": asset.risk_management_note,
         "source": asset.source,
         "status": asset.status,
         "warnings": list(asset.warnings),
@@ -504,6 +520,10 @@ def _asset_from_cache(spec: ETFSpec, entry: dict[str, Any], fetched_at: datetime
         valuation_label=entry.get("valuation_label") or "估值数据不足",
         crowding_label=entry.get("crowding_label") or "拥挤度待确认",
         crowding_score=int(entry.get("crowding_score") or 50),
+        entry_score=int(entry.get("entry_score") or 50),
+        entry_label=entry.get("entry_label") or "入场质量待确认",
+        entry_note=entry.get("entry_note") or "历史样本不足，暂不评估入场质量。",
+        risk_management_note=entry.get("risk_management_note") or "仅作环境评估，不构成买卖建议。",
         source="Yahoo cache",
         status="cache",
         warnings=(f"{spec.label}使用本地ETF缓存；实时抓取失败：{reason}",),
@@ -644,6 +664,130 @@ def _crowding_label(score: int, rsi14: float | None, distance_sma200: float | No
     if distance_sma200 is not None and distance_sma200 < 0:
         return "趋势偏弱：仍需等待重新站上长期均线"
     return "拥挤度中性：尚未出现极端过热或超卖"
+
+
+def _entry_quality(asset: ETFAssetMonitor) -> tuple[int, str, str, str]:
+    if asset.value is None or asset.sma200 is None:
+        return (
+            50,
+            "样本不足 / 待观察",
+            "200日趋势样本不足，暂不判断入场质量。",
+            "等待更完整的价格历史后再评估趋势框架。",
+        )
+
+    score = 50.0
+    above_200 = asset.value >= asset.sma200
+    above_50 = asset.sma50 is not None and asset.value >= asset.sma50
+    pullback_to_50 = asset.sma50 is not None and asset.sma50 > 0 and 0 <= (asset.value / asset.sma50 - 1) * 100 <= 4
+
+    if above_200:
+        score += 12
+    else:
+        score -= 18
+    if asset.sma50 is not None and asset.sma50 >= asset.sma200:
+        score += 6
+    if above_50:
+        score += 4
+    if pullback_to_50 and above_200:
+        score += 10
+
+    if asset.distance_sma200 is not None:
+        if 0 <= asset.distance_sma200 <= 15:
+            score += 8
+        elif asset.distance_sma200 > 30:
+            score -= 15
+        elif asset.distance_sma200 > 20:
+            score -= 8
+        elif asset.distance_sma200 < 0:
+            score -= 10
+
+    if asset.trend_sigma_200d is not None:
+        if asset.trend_sigma_200d >= 3:
+            score -= 20
+        elif asset.trend_sigma_200d >= 2:
+            score -= 12
+        elif 0 <= asset.trend_sigma_200d <= 1.5:
+            score += 6
+        elif asset.trend_sigma_200d <= -1:
+            score -= 8
+
+    if asset.rsi14 is not None:
+        if 42 <= asset.rsi14 <= 60:
+            score += 12
+        elif 60 < asset.rsi14 <= 68:
+            score += 5
+        elif asset.rsi14 >= 75:
+            score -= 18
+        elif asset.rsi14 >= 70:
+            score -= 8
+        elif asset.rsi14 < 30:
+            score -= 12 if not above_200 else 4
+
+    if asset.momentum_1m is not None:
+        if 0 <= asset.momentum_1m <= 8:
+            score += 8
+        elif asset.momentum_1m > 18:
+            score -= 12
+        elif asset.momentum_1m > 12:
+            score -= 6
+        elif asset.momentum_1m < -8:
+            score -= 8
+    if asset.momentum_3m is not None and asset.momentum_3m > 0:
+        score += 4
+
+    if asset.daily_sigma is not None:
+        if abs(asset.daily_sigma) <= 1:
+            score += 4
+        elif abs(asset.daily_sigma) >= 2.5:
+            score -= 8
+
+    if asset.pe_percentile is not None and asset.pe_percentile >= 80:
+        score -= 5
+    elif asset.pe_high_1y_ratio is not None and asset.pe_high_1y_ratio >= 95:
+        score -= 3
+
+    final_score = _clamp(score)
+    return final_score, _entry_label(final_score), _entry_note(asset, final_score), _risk_management_note(asset, final_score)
+
+
+def _entry_label(score: int) -> str:
+    if score >= 75:
+        return "趋势延续，回调可观察"
+    if score >= 60:
+        return "入场质量中性偏好"
+    if score >= 45:
+        return "等待更清晰回调/确认"
+    return "追高或趋势转弱，谨慎"
+
+
+def _entry_note(asset: ETFAssetMonitor, score: int) -> str:
+    if asset.value is not None and asset.sma200 is not None and asset.value < asset.sma200:
+        return "价格低于200日线，趋势框架尚未修复，新增仓位更依赖右侧确认。"
+    if asset.trend_sigma_200d is not None and asset.trend_sigma_200d >= 2:
+        return "价格相对200日线已明显拉伸，新增仓位性价比下降，更适合等待冷却或均线回归。"
+    if asset.rsi14 is not None and asset.rsi14 >= 70:
+        return "RSI处于偏热区间，动量仍强但短线追高风险上升。"
+    if asset.sma50 is not None and asset.value is not None and asset.sma200 is not None:
+        distance_50 = (asset.value / asset.sma50 - 1) * 100 if asset.sma50 else None
+        if distance_50 is not None and 0 <= distance_50 <= 4 and asset.value >= asset.sma200:
+            return "长期趋势仍在，价格靠近50日线，属于相对有质量的趋势内回调。"
+    if score >= 75:
+        return "趋势结构、动量和拉伸度相对均衡，入场环境优于追高状态。"
+    if score >= 60:
+        return "趋势尚可，但动量或估值位置需要继续观察，适合分批观察而非一次性追涨。"
+    return "趋势、动量或波动条件尚未形成清晰优势，等待更明确的回调质量或突破确认。"
+
+
+def _risk_management_note(asset: ETFAssetMonitor, score: int) -> str:
+    if asset.value is not None and asset.sma200 is not None and asset.value < asset.sma200:
+        return "风险管理重点：观察能否重新站上200日线；未修复前避免把反弹视为趋势延续。"
+    if asset.trend_sigma_200d is not None and asset.trend_sigma_200d >= 2:
+        return "风险管理重点：趋势拥挤，新增仓位应降低节奏，警惕均值回归和高位波动放大。"
+    if asset.rsi14 is not None and asset.rsi14 >= 70:
+        return "风险管理重点：动量偏热，若跌破13日线或50日线，需警惕获利回吐扩散。"
+    if score >= 70:
+        return "风险管理重点：以趋势延续框架观察，若跌破50日线且动量转负，入场质量会明显下降。"
+    return "风险管理重点：等待价格、RSI和中期均线重新形成一致性，避免在信号分歧时放大敞口。"
 
 
 def _sma(values: list[float], window: int) -> float | None:
