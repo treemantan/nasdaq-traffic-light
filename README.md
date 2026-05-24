@@ -126,12 +126,21 @@ Yahoo Finance、Investing、CNN、NAAIM 与 FRED 用于不同类别的数据源�
 
 报告包含一个面向英国可交易产品的 ETF 监控模块，用于观察你实际可能买到的 ETF 的趋势、估值可得性和短线拥挤度。默认资产池包括：
 
+- `VWRL.L`：Vanguard FTSE All-World UCITS ETF
 - `VUAG.L`：Vanguard S&P 500 UCITS ETF
 - `CNX1.L`：iShares Nasdaq 100 UCITS ETF
+- `IITU.L`：iShares S&P 500 Information Technology Sector UCITS ETF
+- `AINF.L`：iShares AI Infrastructure UCITS ETF
+- `WTAI.L`：WisdomTree Artificial Intelligence UCITS ETF
+- `AIAI.L`：L&G Artificial Intelligence UCITS ETF
 - `SEMI.L`：iShares Global Semiconductors UCITS ETF
+- `RBOT.L`：iShares Automation & Robotics UCITS ETF
+- `WCLD.L`：WisdomTree Cloud Computing UCITS ETF
+- `LOCK.L`：iShares Digital Security UCITS ETF
 - `QWTM.L`：WisdomTree Quantum Computing UCITS ETF
 - `QNTM.L`：VanEck Quantum Computing UCITS ETF
 - `QANT.L`：iShares Quantum Computing UCITS ETF
+- `NATO.L`：HANetf Future of Defence UCITS ETF
 - `SGLN.L`：iShares Physical Gold ETC
 
 该模块抓取 ETF 日线价格并计算 `SMA13`、`SMA50`、`SMA200`、`RSI14`、1日/5日/1个月/3个月动量、距200日线百分比、日波动 sigma、距200日线的 `σ200` 拉伸度和拥挤度评分。日波动 sigma 使用最近最多 252 个交易日的日收益率标准差作为 `1σ`，用于判断当天涨跌是否只是常态波动，还是已经达到 `2σ`、`3σ` 这类显著偏离区间。`σ200` 不再直接使用普通 252 日标准差，而是使用 63/126/252 日窗口去极值后的稳健趋势波动率，再乘以 `sqrt(200)` 作为长期趋势波动尺度；这样可以降低 QWTM 这类高波动主题 ETF 中少数极端日收益对趋势拉伸判断的扭曲。高于 `2σ200` 说明趋势偏热，高于 `3σ200` 会提示回撤敏感度较高。拥挤度评分结合 RSI、距200日线、1个月动量和可用估值分位数，用于提示主题交易是否已经偏热或趋势是否仍待确认。
@@ -142,7 +151,7 @@ Yahoo Finance、Investing、CNN、NAAIM 与 FRED 用于不同类别的数据源�
 - `Forward PE`：基于未来盈利预期的市盈率，更贴近市场当前定价逻辑，但依赖分析师盈利预测。
 - `PB`：市净率，衡量市值相对账面净资产；对金融、周期和重资产行业更有解释力，对半导体、AI、量子等轻资产主题 ETF 的解释力弱于 PE。
 
-估值源优先使用 Yahoo，若不可用则尝试 StockAnalysis 的伦敦 ETF 页面。若伦敦 ETF 本身不披露 PE，少数核心产品会使用高度相关的同类 ETF 作为 proxy，例如 `VUAG.L` 使用 `VOO` 近似观察 S&P 500 估值，`QWTM.L` 使用 `QTUM` 近似观察量子计算主题估值；报告会明确标注 `proxy`，不把代理估值伪装成基金自身披露数据。
+估值源优先使用 Yahoo，若不可用则尝试 StockAnalysis 的伦敦 ETF 页面。若伦敦 ETF 本身不披露 PE，少数核心产品会使用高度相关的同类 ETF 作为 proxy，例如 `VWRL.L` 使用 `VT`、`VUAG.L` 使用 `VOO`、`IITU.L` 使用 `XLK`、`QWTM.L` 使用 `QTUM`、`NATO.L` 使用 `ITA` 近似观察相关资产池估值；报告会明确标注 `proxy`，不把代理估值伪装成基金自身披露数据。
 
 黄金 ETC 没有盈利和净资产口径，因此不展示 PE/PB，应结合实际利率、美元和金价趋势解释。PE/PB 历史分位数会通过本地缓存逐步积累；样本不足时，报告会退而显示 `当前PE / 近一年缓存最高PE` 的近似比例，用来粗略判断当前估值是否贴近过去一年已观察到的高位，但该比例依赖本地缓存积累，不等同于严格历史分位。
 

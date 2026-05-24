@@ -83,19 +83,31 @@ class ETFMonitor:
 
 
 DEFAULT_ETF_SPECS = [
+    ETFSpec("vwrl", "Vanguard FTSE All-World UCITS ETF", "VWRL.L", "Global Equity", "Vanguard"),
     ETFSpec("vuag", "Vanguard S&P 500 UCITS ETF", "VUAG.L", "S&P 500", "Vanguard"),
     ETFSpec("cnx1", "iShares Nasdaq 100 UCITS ETF", "CNX1.L", "Nasdaq 100", "iShares"),
+    ETFSpec("iitu", "iShares S&P 500 Information Technology Sector ETF", "IITU.L", "US Technology", "iShares"),
+    ETFSpec("ainf", "iShares AI Infrastructure UCITS ETF", "AINF.L", "AI Infrastructure", "iShares"),
+    ETFSpec("wtai", "WisdomTree Artificial Intelligence ETF", "WTAI.L", "Artificial Intelligence", "WisdomTree"),
+    ETFSpec("aiai", "L&G Artificial Intelligence UCITS ETF", "AIAI.L", "Artificial Intelligence", "L&G"),
     ETFSpec("semi", "iShares Global Semiconductors ETF", "SEMI.L", "Semiconductor", "iShares"),
+    ETFSpec("rbot", "iShares Automation & Robotics UCITS ETF", "RBOT.L", "Robotics & Automation", "iShares"),
+    ETFSpec("wcld", "WisdomTree Cloud Computing UCITS ETF", "WCLD.L", "Cloud Software", "WisdomTree"),
+    ETFSpec("lock", "iShares Digital Security UCITS ETF", "LOCK.L", "Cybersecurity", "iShares"),
     ETFSpec("qwtm", "WisdomTree Quantum Computing ETF", "QWTM.L", "Quantum Computing", "WisdomTree"),
     ETFSpec("qntm", "VanEck Quantum Computing ETF", "QNTM.L", "Quantum Computing", "VanEck"),
     ETFSpec("qant", "iShares Quantum Computing ETF", "QANT.L", "Quantum Computing", "iShares"),
+    ETFSpec("nato", "HANetf Future of Defence UCITS ETF", "NATO.L", "Defence", "HANetf"),
     ETFSpec("sgln", "iShares Physical Gold ETC", "SGLN.L", "Gold", "iShares", equity_like=False),
 ]
 
 
 VALUATION_PROXY_SYMBOLS = {
+    "VWRL.L": ("VT", "StockAnalysis proxy: VT"),
     "VUAG.L": ("VOO", "StockAnalysis proxy: VOO"),
+    "IITU.L": ("XLK", "StockAnalysis proxy: XLK"),
     "QWTM.L": ("QTUM", "StockAnalysis proxy: QTUM"),
+    "NATO.L": ("ITA", "StockAnalysis proxy: ITA"),
 }
 
 
