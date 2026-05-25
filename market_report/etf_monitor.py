@@ -48,6 +48,14 @@ class ETFBacktestStats:
     all_max_drawdown_3m: float | None
     reliability: str
     summary: str
+    similar_count: int = 0
+    similar_avg_score: float | None = None
+    similar_avg_distance: float | None = None
+    similar_forward_1m: float | None = None
+    similar_forward_3m: float | None = None
+    similar_forward_6m: float | None = None
+    similar_hit_rate_3m: float | None = None
+    similar_max_drawdown_3m: float | None = None
 
 
 @dataclass(frozen=True)
@@ -598,13 +606,15 @@ def _backtest_entry_environment(
     if len(history) < 330:
         return _empty_backtest(threshold, "历史价格样本不足，暂不回测新增仓位环境。")
 
-    records: list[dict[str, float | int]] = []
+    records: list[dict[str, Any]] = []
     closes = [close for _, close in history]
+    current_features = _entry_similarity_features(spec, history, None)
     start = 252
     end = len(history) - 126
     for index in range(start, end, 5):
         window = history[: index + 1]
         score = _historical_entry_score(spec, window, None)
+        features = _entry_similarity_features(spec, window, None)
         if score is None:
             continue
         current = closes[index]
@@ -621,6 +631,7 @@ def _backtest_entry_environment(
                 "forward_3m": future_3m,
                 "forward_6m": future_6m,
                 "drawdown_3m": drawdown_3m,
+                "features": features,
             }
         )
 
@@ -628,6 +639,8 @@ def _backtest_entry_environment(
         return _empty_backtest(threshold, "可回测信号不足，暂不评价历史有效性。")
 
     good = [row for row in records if int(row["score"]) >= threshold]
+    similar = _similar_samples(records, current_features)
+    similar_values = _similar_stats(similar)
     if len(good) < 8:
         return ETFBacktestStats(
             threshold=threshold,
@@ -646,6 +659,14 @@ def _backtest_entry_environment(
             all_max_drawdown_3m=_avg([float(row["drawdown_3m"]) for row in records]),
             reliability="样本偏少",
             summary=f"过去可用周度样本中，分数≥{threshold}的信号较少，统计结论需谨慎。",
+            similar_count=int(similar_values["count"]),
+            similar_avg_score=similar_values["avg_score"],
+            similar_avg_distance=similar_values["avg_distance"],
+            similar_forward_1m=similar_values["forward_1m"],
+            similar_forward_3m=similar_values["forward_3m"],
+            similar_forward_6m=similar_values["forward_6m"],
+            similar_hit_rate_3m=similar_values["hit_rate_3m"],
+            similar_max_drawdown_3m=similar_values["max_drawdown_3m"],
         )
 
     good_3m = _avg([float(row["forward_3m"]) for row in good])
@@ -681,6 +702,14 @@ def _backtest_entry_environment(
         all_max_drawdown_3m=all_dd,
         reliability=reliability,
         summary=summary,
+        similar_count=int(similar_values["count"]),
+        similar_avg_score=similar_values["avg_score"],
+        similar_avg_distance=similar_values["avg_distance"],
+        similar_forward_1m=similar_values["forward_1m"],
+        similar_forward_3m=similar_values["forward_3m"],
+        similar_forward_6m=similar_values["forward_6m"],
+        similar_hit_rate_3m=similar_values["hit_rate_3m"],
+        similar_max_drawdown_3m=similar_values["max_drawdown_3m"],
     )
 
 
@@ -728,6 +757,122 @@ def _historical_entry_score(
     )
     score, _, _, _ = _entry_quality(asset, macro_metrics)
     return score
+
+
+def _entry_similarity_features(
+    spec: ETFSpec,
+    history: list[tuple[date, float]],
+    macro_metrics: dict[str, Any] | None = None,
+) -> dict[str, float] | None:
+    score = _historical_entry_score(spec, history, macro_metrics)
+    if score is None or len(history) < 253:
+        return None
+    closes = [close for _, close in history]
+    daily_returns = _daily_returns(closes)
+    value = closes[-1]
+    daily_volatility = _rolling_std(daily_returns, 252)
+    trend_volatility = _robust_trend_volatility(daily_returns)
+    sma50 = _sma(closes, 50)
+    sma200 = _sma(closes, 200)
+    distance_50 = _distance_to_sma(value, sma50)
+    distance_200 = _distance_to_sma(value, sma200)
+    trend_sigma = _trend_sigma(distance_200, trend_volatility or daily_volatility, 200)
+    features = {
+        "score": float(score),
+        "rsi14": _rsi(closes, 14),
+        "momentum_1m": _momentum(closes, 21),
+        "momentum_3m": _momentum(closes, 63),
+        "distance_sma50": distance_50,
+        "distance_sma200": distance_200,
+        "trend_sigma_200d": trend_sigma,
+        "daily_volatility": daily_volatility,
+    }
+    clean = {key: value for key, value in features.items() if isinstance(value, (int, float)) and math.isfinite(value)}
+    return clean or None
+
+
+def _similar_samples(
+    records: list[dict[str, Any]],
+    current_features: dict[str, float] | None,
+    top_n: int = 12,
+) -> list[dict[str, Any]]:
+    if not current_features:
+        return []
+    scored: list[dict[str, Any]] = []
+    for row in records:
+        features = row.get("features")
+        distance = _feature_distance(current_features, features)
+        if distance is None:
+            continue
+        item = dict(row)
+        item["distance"] = distance
+        scored.append(item)
+    scored.sort(key=lambda row: row["distance"])
+    return scored[:top_n]
+
+
+def _feature_distance(current: dict[str, float], past: Any) -> float | None:
+    if not isinstance(past, dict):
+        return None
+    scales = {
+        "score": 15.0,
+        "rsi14": 15.0,
+        "momentum_1m": 8.0,
+        "momentum_3m": 15.0,
+        "distance_sma50": 8.0,
+        "distance_sma200": 18.0,
+        "trend_sigma_200d": 1.5,
+        "daily_volatility": 2.0,
+    }
+    weights = {
+        "score": 1.2,
+        "rsi14": 1.0,
+        "momentum_1m": 1.0,
+        "momentum_3m": 0.8,
+        "distance_sma50": 0.8,
+        "distance_sma200": 1.1,
+        "trend_sigma_200d": 1.1,
+        "daily_volatility": 0.7,
+    }
+    total = 0.0
+    weight_sum = 0.0
+    for key, scale in scales.items():
+        if key not in current or key not in past:
+            continue
+        current_value = _safe_float(current.get(key))
+        past_value = _safe_float(past.get(key))
+        if current_value is None or past_value is None:
+            continue
+        weight = weights.get(key, 1.0)
+        total += weight * ((current_value - past_value) / scale) ** 2
+        weight_sum += weight
+    if weight_sum <= 0:
+        return None
+    return math.sqrt(total / weight_sum)
+
+
+def _similar_stats(samples: list[dict[str, Any]]) -> dict[str, float | int | None]:
+    if not samples:
+        return {
+            "count": 0,
+            "avg_score": None,
+            "avg_distance": None,
+            "forward_1m": None,
+            "forward_3m": None,
+            "forward_6m": None,
+            "hit_rate_3m": None,
+            "max_drawdown_3m": None,
+        }
+    return {
+        "count": len(samples),
+        "avg_score": _avg([float(row["score"]) for row in samples]),
+        "avg_distance": _avg([float(row["distance"]) for row in samples]),
+        "forward_1m": _avg([float(row["forward_1m"]) for row in samples]),
+        "forward_3m": _avg([float(row["forward_3m"]) for row in samples]),
+        "forward_6m": _avg([float(row["forward_6m"]) for row in samples]),
+        "hit_rate_3m": _hit_rate([float(row["forward_3m"]) for row in samples]),
+        "max_drawdown_3m": _avg([float(row["drawdown_3m"]) for row in samples]),
+    }
 
 
 def _forward_return(closes: list[float], index: int, horizon: int) -> float | None:
@@ -792,6 +937,14 @@ def _backtest_to_cache(backtest: ETFBacktestStats | None) -> dict[str, Any] | No
         "all_max_drawdown_3m": backtest.all_max_drawdown_3m,
         "reliability": backtest.reliability,
         "summary": backtest.summary,
+        "similar_count": backtest.similar_count,
+        "similar_avg_score": backtest.similar_avg_score,
+        "similar_avg_distance": backtest.similar_avg_distance,
+        "similar_forward_1m": backtest.similar_forward_1m,
+        "similar_forward_3m": backtest.similar_forward_3m,
+        "similar_forward_6m": backtest.similar_forward_6m,
+        "similar_hit_rate_3m": backtest.similar_hit_rate_3m,
+        "similar_max_drawdown_3m": backtest.similar_max_drawdown_3m,
     }
 
 
@@ -816,6 +969,14 @@ def _backtest_from_cache(entry: Any) -> ETFBacktestStats | None:
             all_max_drawdown_3m=_safe_float(entry.get("all_max_drawdown_3m")),
             reliability=str(entry.get("reliability") or "样本不足"),
             summary=str(entry.get("summary") or "历史回测样本不足。"),
+            similar_count=int(entry.get("similar_count") or 0),
+            similar_avg_score=_safe_float(entry.get("similar_avg_score")),
+            similar_avg_distance=_safe_float(entry.get("similar_avg_distance")),
+            similar_forward_1m=_safe_float(entry.get("similar_forward_1m")),
+            similar_forward_3m=_safe_float(entry.get("similar_forward_3m")),
+            similar_forward_6m=_safe_float(entry.get("similar_forward_6m")),
+            similar_hit_rate_3m=_safe_float(entry.get("similar_hit_rate_3m")),
+            similar_max_drawdown_3m=_safe_float(entry.get("similar_max_drawdown_3m")),
         )
     except (TypeError, ValueError):
         return None

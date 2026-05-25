@@ -252,7 +252,8 @@ def _fmt_backtest(asset: ETFAssetMonitor) -> str:
         return f"历史检验：{backtest.reliability}"
     return (
         f"历史检验：{backtest.reliability}；≥{backtest.threshold}样本 {backtest.good_count}/{backtest.sample_size}；"
-        f"3M {_fmt_pct(backtest.good_forward_3m)} vs 全样本 {_fmt_pct(backtest.all_forward_3m)}"
+        f"3M {_fmt_pct(backtest.good_forward_3m)} vs 全样本 {_fmt_pct(backtest.all_forward_3m)}；"
+        f"相似样本{backtest.similar_count}个 3M {_fmt_pct(backtest.similar_forward_3m)}"
     )
 
 

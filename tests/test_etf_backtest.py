@@ -27,4 +27,6 @@ class ETFBacktestTests(unittest.TestCase):
         self.assertGreater(stats.sample_size, 0)
         self.assertLessEqual(stats.good_count, stats.sample_size)
         self.assertIsNotNone(stats.all_forward_3m)
+        self.assertGreater(stats.similar_count, 0)
+        self.assertIsNotNone(stats.similar_forward_3m)
         self.assertIn(stats.reliability, {"历史支持", "温和支持", "未验证优势", "样本偏少"})
