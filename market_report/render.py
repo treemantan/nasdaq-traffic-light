@@ -118,6 +118,9 @@ def render_html_report(report: ScoredReport, title: str) -> str:
     .tag {{ display: inline-block; border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; color: var(--subtle); background: rgba(255,255,255,.025); font-size: 12px; }}
     .tag-hot {{ color: #fca5a5; border-color: rgba(248,113,113,.45); }}
     .tag-cool {{ color: #86efac; border-color: rgba(134,239,172,.35); }}
+    .tag-entry-good {{ color: #86efac; border-color: rgba(134,239,172,.40); }}
+    .tag-entry-watch {{ color: #fcd34d; border-color: rgba(252,211,77,.42); }}
+    .tag-entry-bad {{ color: #fca5a5; border-color: rgba(248,113,113,.45); }}
     .small-note {{ color: var(--muted); font-size: 12px; margin-top: 8px; }}
     .grid {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }}
     .metric-grid {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }}
@@ -327,7 +330,8 @@ def _render_etf_monitor(monitor: ETFMonitor | None) -> str:
 
 
 def _render_etf_row(asset: ETFAssetMonitor) -> str:
-    status = "tag-hot" if asset.crowding_score >= 70 else "tag-cool" if asset.crowding_score <= 35 else ""
+    crowding_status = _crowding_status_class(asset.crowding_score)
+    entry_status = _entry_status_class(asset.entry_score)
     price = _fmt_price(asset.value, asset.currency)
     one_day = _fmt_pct(asset.change_pct)
     sigma = _fmt_sigma(asset.daily_sigma)
@@ -349,13 +353,14 @@ def _render_etf_row(asset: ETFAssetMonitor) -> str:
       <td>{escape(sma)}<br><span class="muted">距200日线 {escape(_fmt_pct(asset.distance_sma200))} / {escape(trend_sigma)} · {escape(asset.trend_stretch_label)}</span></td>
       <td>{escape(valuation)}<br><span class="muted">{escape(asset.valuation_label)}</span><br><span class="muted">{escape(valuation_source)}</span></td>
       <td>{escape(pe_position)}</td>
-      <td><span class="tag {status}">{asset.entry_score}/100</span><br><span class="muted">{escape(asset.entry_label)}</span><br><span class="muted">{escape(asset.entry_note)}</span><br><span class="muted">{escape(_fmt_backtest(asset))}</span></td>
-      <td><span class="tag {status}">{asset.crowding_score}/100</span><br><span class="muted">{escape(asset.crowding_label)}</span></td>
+      <td><span class="tag {entry_status}">{asset.entry_score}/100</span><br><span class="muted">{escape(asset.entry_label)}</span><br><span class="muted">{escape(asset.entry_note)}</span><br><span class="muted">{escape(_fmt_backtest(asset))}</span></td>
+      <td><span class="tag {crowding_status}">{asset.crowding_score}/100</span><br><span class="muted">{escape(asset.crowding_label)}</span></td>
     </tr>"""
 
 
 def _render_etf_card(asset: ETFAssetMonitor) -> str:
-    status = "tag-hot" if asset.crowding_score >= 70 else "tag-cool" if asset.crowding_score <= 35 else ""
+    crowding_status = _crowding_status_class(asset.crowding_score)
+    entry_status = _entry_status_class(asset.entry_score)
     price = _fmt_price(asset.value, asset.currency)
     one_day = _fmt_pct(asset.change_pct)
     one_month = _fmt_pct(asset.momentum_1m)
@@ -369,7 +374,7 @@ def _render_etf_card(asset: ETFAssetMonitor) -> str:
           <div class="etf-card-title">{escape(asset.symbol)} · {escape(asset.provider)}</div>
           <div class="muted">{escape(asset.label)}</div>
         </div>
-        <span class="tag {status}">{asset.crowding_score}/100</span>
+        <span class="tag {crowding_status}">{asset.crowding_score}/100</span>
       </div>
       <div class="etf-card-price">{escape(price)}</div>
       <div class="etf-card-meta">{escape(asset.theme)} · {escape(asset.trend_label)}</div>
@@ -378,9 +383,25 @@ def _render_etf_card(asset: ETFAssetMonitor) -> str:
         <div class="etf-card-line"><strong>RSI14</strong>{escape(rsi)}<br>{escape(asset.momentum_label)}</div>
         <div class="etf-card-line"><strong>趋势拉伸</strong>{escape(trend_line)}<br>{escape(asset.trend_stretch_label)}</div>
         <div class="etf-card-line"><strong>PE / Fwd / PB</strong>{escape(valuation)}<br>{escape(_fmt_pe_position(asset))} · {escape(valuation_source)}</div>
-        <div class="etf-card-line"><strong>新增仓位环境 {asset.entry_score}/100</strong>{escape(asset.entry_label)}<br>{escape(asset.risk_management_note)}<br>{escape(_fmt_backtest(asset))}</div>
+        <div class="etf-card-line"><strong>新增仓位环境 <span class="tag {entry_status}">{asset.entry_score}/100</span></strong>{escape(asset.entry_label)}<br>{escape(asset.risk_management_note)}<br>{escape(_fmt_backtest(asset))}</div>
       </div>
     </article>"""
+
+
+def _crowding_status_class(score: int) -> str:
+    if score >= 70:
+        return "tag-hot"
+    if score <= 35:
+        return "tag-cool"
+    return ""
+
+
+def _entry_status_class(score: int) -> str:
+    if score >= 70:
+        return "tag-entry-good"
+    if score >= 55:
+        return "tag-entry-watch"
+    return "tag-entry-bad"
 
 
 def _fmt_pe_position(asset: ETFAssetMonitor) -> str:
