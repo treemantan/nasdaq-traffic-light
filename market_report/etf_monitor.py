@@ -156,7 +156,12 @@ DEFAULT_ETF_SPECS = [
     ETFSpec("qwtm", "WisdomTree Quantum Computing ETF", "QWTM.L", "Quantum Computing", "WisdomTree"),
     ETFSpec("qntm", "VanEck Quantum Computing ETF", "QNTM.L", "Quantum Computing", "VanEck"),
     ETFSpec("qant", "iShares Quantum Computing ETF", "QANT.L", "Quantum Computing", "iShares"),
+    ETFSpec("dfnd", "iShares Global Aerospace & Defence UCITS ETF", "DFND.L", "Defence", "iShares"),
+    ETFSpec("wdef", "WisdomTree Europe Defence UCITS ETF", "WDEF.L", "European Defence", "WisdomTree"),
+    ETFSpec("dfng", "VanEck Defense UCITS ETF", "DFNG.L", "Defence", "VanEck"),
     ETFSpec("nato", "HANetf Future of Defence UCITS ETF", "NATO.L", "Defence", "HANetf"),
+    ETFSpec("dfnx", "Invesco Defence Innovation UCITS ETF", "DFNX.L", "Defence Innovation", "Invesco"),
+    ETFSpec("dfeu", "iShares Europe Defence UCITS ETF", "DFEU.L", "European Defence", "iShares"),
     ETFSpec("sgln", "iShares Physical Gold ETC", "SGLN.L", "Gold", "iShares", equity_like=False),
 ]
 
@@ -166,6 +171,8 @@ VALUATION_PROXY_SYMBOLS = {
     "VUAG.L": ("VOO", "StockAnalysis proxy: VOO"),
     "IITU.L": ("XLK", "StockAnalysis proxy: XLK"),
     "QWTM.L": ("QTUM", "StockAnalysis proxy: QTUM"),
+    "DFND.L": ("ITA", "StockAnalysis proxy: ITA"),
+    "DFNG.L": ("ITA", "StockAnalysis proxy: ITA"),
     "NATO.L": ("ITA", "StockAnalysis proxy: ITA"),
 }
 

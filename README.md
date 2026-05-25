@@ -140,7 +140,12 @@ Yahoo Finance、Investing、CNN、NAAIM 与 FRED 用于不同类别的数据源�
 - `QWTM.L`：WisdomTree Quantum Computing UCITS ETF
 - `QNTM.L`：VanEck Quantum Computing UCITS ETF
 - `QANT.L`：iShares Quantum Computing UCITS ETF
+- `DFND.L`：iShares Global Aerospace & Defence UCITS ETF
+- `WDEF.L`：WisdomTree Europe Defence UCITS ETF
+- `DFNG.L`：VanEck Defense UCITS ETF
 - `NATO.L`：HANetf Future of Defence UCITS ETF
+- `DFNX.L`：Invesco Defence Innovation UCITS ETF
+- `DFEU.L`：iShares Europe Defence UCITS ETF
 - `SGLN.L`：iShares Physical Gold ETC
 
 该模块抓取 ETF 日线价格并计算 `SMA13`、`SMA50`、`SMA200`、`RSI14`、1日/5日/1个月/3个月动量、距200日线百分比、日波动 sigma、距200日线的 `σ200` 拉伸度、拥挤度评分和新增仓位环境评分。日波动 sigma 使用最近最多 252 个交易日的日收益率标准差作为 `1σ`，用于判断当天涨跌是否只是常态波动，还是已经达到 `2σ`、`3σ` 这类显著偏离区间。`σ200` 不再直接使用普通 252 日标准差，而是使用 63/126/252 日窗口去极值后的稳健趋势波动率，再乘以 `sqrt(200)` 作为长期趋势波动尺度；这样可以降低 QWTM 这类高波动主题 ETF 中少数极端日收益对趋势拉伸判断的扭曲。高于 `2σ200` 说明趋势偏热，高于 `3σ200` 会提示回撤敏感度较高。拥挤度评分结合 RSI、距200日线、1个月动量和可用估值分位数，用于提示主题交易是否已经偏热或趋势是否仍待确认。新增仓位环境评分对权益 ETF 结合长期趋势、价格相对50/200日线位置、RSI冷却程度、1个月/3个月动量、单日波动和估值位置；黄金 ETC 不套用成长股 ETF 模型，而是结合实际利率、美元、长端利率、避险需求和金价自身趋势生成宏观配置环境评分。所有评分仅用于环境监控和风险管理，不构成买卖建议。
@@ -153,7 +158,7 @@ ETF 模块还会用 Yahoo 5 年日线做轻量历史检验。拥挤度口径统�
 - `Forward PE`：基于未来盈利预期的市盈率，更贴近市场当前定价逻辑，但依赖分析师盈利预测。
 - `PB`：市净率，衡量市值相对账面净资产；对金融、周期和重资产行业更有解释力，对半导体、AI、量子等轻资产主题 ETF 的解释力弱于 PE。
 
-估值源优先使用 Yahoo，若不可用则尝试 StockAnalysis 的伦敦 ETF 页面。若伦敦 ETF 本身不披露 PE，少数核心产品会使用高度相关的同类 ETF 作为 proxy，例如 `VWRL.L` 使用 `VT`、`VUAG.L` 使用 `VOO`、`IITU.L` 使用 `XLK`、`QWTM.L` 使用 `QTUM`、`NATO.L` 使用 `ITA` 近似观察相关资产池估值；报告会明确标注 `proxy`，不把代理估值伪装成基金自身披露数据。
+估值源优先使用 Yahoo，若不可用则尝试 StockAnalysis 的伦敦 ETF 页面。若伦敦 ETF 本身不披露 PE，少数核心产品会使用高度相关的同类 ETF 作为 proxy，例如 `VWRL.L` 使用 `VT`、`VUAG.L` 使用 `VOO`、`IITU.L` 使用 `XLK`、`QWTM.L` 使用 `QTUM`、`DFND.L` / `DFNG.L` / `NATO.L` 使用 `ITA` 近似观察全球航空航天与防务资产池估值；报告会明确标注 `proxy`，不把代理估值伪装成基金自身披露数据。欧洲防务和防务创新 ETF 若缺少可比 proxy，会保留价格、趋势、拥挤度和历史环境检验，不强行填充不匹配估值。
 
 黄金 ETC 没有盈利和净资产口径，因此不展示 PE/PB，应结合实际利率、美元和金价趋势解释。PE/PB 历史分位数会通过本地缓存逐步积累；样本不足时，报告会退而显示 `当前PE / 近一年缓存最高PE` 的近似比例，用来粗略判断当前估值是否贴近过去一年已观察到的高位，但该比例依赖本地缓存积累，不等同于严格历史分位。
 
