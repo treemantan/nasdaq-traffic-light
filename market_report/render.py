@@ -121,6 +121,9 @@ def render_html_report(report: ScoredReport, title: str) -> str:
     .entry-details {{ margin-top: 6px; color: var(--muted); font-size: 12px; }}
     .entry-details summary {{ cursor: pointer; color: #bfdbfe; }}
     .entry-details div {{ margin-top: 5px; line-height: 1.45; }}
+    .threshold-details {{ margin-top: 6px; color: var(--muted); }}
+    .threshold-details summary {{ color: #9ca3af; }}
+    .threshold-row {{ display: block; margin-top: 4px; }}
     .tag {{ display: inline-block; border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; color: var(--subtle); background: rgba(255,255,255,.025); font-size: 12px; }}
     .tag-hot {{ color: #fca5a5; border-color: rgba(248,113,113,.45); }}
     .tag-cool {{ color: #86efac; border-color: rgba(134,239,172,.35); }}
@@ -405,9 +408,52 @@ def _render_entry_cell(asset: ETFAssetMonitor, status_class: str, compact: bool)
         f'<span class="entry-note">{escape(note)}</span>'
         f'</div>'
         f'<details class="entry-details">'
-        f'<summary>历史检验详情</summary>'
-        f'<div>{escape(_fmt_backtest(asset))}</div>'
+        f'<summary>相似环境与模型质检</summary>'
+        f'{_render_backtest_details(asset)}'
         f'</details>'
+    )
+
+
+def _render_backtest_details(asset: ETFAssetMonitor) -> str:
+    backtest = asset.backtest
+    if backtest is None:
+        return "<div>当前相似市场环境：暂无。</div>"
+    if backtest.sample_size <= 0:
+        return f"<div>当前相似市场环境：{escape(backtest.reliability)}。</div>"
+    similar_path = " / ".join(
+        [
+            _fmt_pct(backtest.similar_forward_1m),
+            _fmt_pct(backtest.similar_forward_3m),
+            _fmt_pct(backtest.similar_forward_6m),
+        ]
+    )
+    threshold_path = " / ".join(
+        [
+            _fmt_pct(backtest.good_forward_1m),
+            _fmt_pct(backtest.good_forward_3m),
+            _fmt_pct(backtest.good_forward_6m),
+        ]
+    )
+    threshold_summary = (
+        f"阈值质检：{backtest.reliability}；"
+        f"≥{backtest.threshold}且拥挤<{backtest.crowding_ceiling}样本 {backtest.good_count}/{backtest.sample_size}，"
+        f"1/3/6M {threshold_path}。"
+    )
+    rows = _threshold_calibration_rows(asset)
+    calibration = (
+        f'<details class="threshold-details"><summary>查看60/70/75阈值校准</summary>'
+        f'<div>{escape(backtest.best_threshold_label)}</div>'
+        + "".join(f'<span class="threshold-row">{escape(row)}</span>' for row in rows)
+        + "</details>"
+        if rows
+        else ""
+    )
+    return (
+        f"<div>当前相似市场环境：{backtest.similar_count}个历史样本，"
+        f"之后1/3/6M {escape(similar_path)}，3M胜率 {escape(_fmt_rate(backtest.similar_hit_rate_3m))}，"
+        f"3M回撤 {escape(_fmt_pct(backtest.similar_max_drawdown_3m))}。</div>"
+        f"<div>{escape(threshold_summary)}</div>"
+        f"{calibration}"
     )
 
 
@@ -441,20 +487,6 @@ def _fmt_backtest(asset: ETFAssetMonitor) -> str:
         return "历史检验：暂无"
     if backtest.sample_size <= 0:
         return f"历史检验：{backtest.reliability}"
-    good_path = " / ".join(
-        [
-            _fmt_pct(backtest.good_forward_1m),
-            _fmt_pct(backtest.good_forward_3m),
-            _fmt_pct(backtest.good_forward_6m),
-        ]
-    )
-    all_path = " / ".join(
-        [
-            _fmt_pct(backtest.all_forward_1m),
-            _fmt_pct(backtest.all_forward_3m),
-            _fmt_pct(backtest.all_forward_6m),
-        ]
-    )
     similar_path = " / ".join(
         [
             _fmt_pct(backtest.similar_forward_1m),
@@ -462,14 +494,11 @@ def _fmt_backtest(asset: ETFAssetMonitor) -> str:
             _fmt_pct(backtest.similar_forward_6m),
         ]
     )
-    calibration = _fmt_threshold_calibration(asset)
     return (
         f"当前相似市场环境：{backtest.similar_count}个历史样本，"
         f"之后1/3/6M {similar_path}，3M胜率 {_fmt_rate(backtest.similar_hit_rate_3m)}，"
         f"3M回撤 {_fmt_pct(backtest.similar_max_drawdown_3m)}。"
-        f"阈值质检：{backtest.reliability}；≥{backtest.threshold}且拥挤<{backtest.crowding_ceiling}样本 {backtest.good_count}/{backtest.sample_size}，"
-        f"1/3/6M {good_path} vs 全样本 {all_path}，3M回撤 {_fmt_pct(backtest.good_max_drawdown_3m)}。"
-        f"{calibration}"
+        f"阈值质检：{backtest.reliability}；{backtest.best_threshold_label}。"
     )
 
 
@@ -477,6 +506,13 @@ def _fmt_threshold_calibration(asset: ETFAssetMonitor) -> str:
     backtest = asset.backtest
     if backtest is None or not backtest.threshold_calibrations:
         return "阈值校准：暂无"
+    return f"阈值校准：{backtest.best_threshold_label}；" + " | ".join(_threshold_calibration_rows(asset))
+
+
+def _threshold_calibration_rows(asset: ETFAssetMonitor) -> list[str]:
+    backtest = asset.backtest
+    if backtest is None or not backtest.threshold_calibrations:
+        return []
     rows = []
     for item in backtest.threshold_calibrations:
         path = " / ".join([_fmt_pct(item.forward_1m), _fmt_pct(item.forward_3m), _fmt_pct(item.forward_6m)])
@@ -484,7 +520,7 @@ def _fmt_threshold_calibration(asset: ETFAssetMonitor) -> str:
             f"≥{item.threshold}且拥挤<{item.crowding_ceiling} {item.label}：{item.sample_count}样本，1/3/6M {path}，"
             f"胜率{_fmt_rate(item.hit_rate_3m)}，回撤{_fmt_pct(item.max_drawdown_3m)}"
         )
-    return f"阈值校准：{backtest.best_threshold_label}；" + " | ".join(rows)
+    return rows
 
 
 def _fmt_rate(value: float | None) -> str:

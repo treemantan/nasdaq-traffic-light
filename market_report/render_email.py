@@ -250,20 +250,6 @@ def _fmt_backtest(asset: ETFAssetMonitor) -> str:
         return "历史检验：暂无"
     if backtest.sample_size <= 0:
         return f"历史检验：{backtest.reliability}"
-    good_path = " / ".join(
-        [
-            _fmt_pct(backtest.good_forward_1m),
-            _fmt_pct(backtest.good_forward_3m),
-            _fmt_pct(backtest.good_forward_6m),
-        ]
-    )
-    all_path = " / ".join(
-        [
-            _fmt_pct(backtest.all_forward_1m),
-            _fmt_pct(backtest.all_forward_3m),
-            _fmt_pct(backtest.all_forward_6m),
-        ]
-    )
     similar_path = " / ".join(
         [
             _fmt_pct(backtest.similar_forward_1m),
@@ -271,12 +257,10 @@ def _fmt_backtest(asset: ETFAssetMonitor) -> str:
             _fmt_pct(backtest.similar_forward_6m),
         ]
     )
-    calibration = _fmt_threshold_calibration(asset)
     return (
-        f"历史检验：{backtest.reliability}；≥{backtest.threshold}且拥挤<{backtest.crowding_ceiling}样本 {backtest.good_count}/{backtest.sample_size}；"
-        f"1/3/6M {good_path} vs 全样本 {all_path}；"
-        f"相似样本{backtest.similar_count}个 1/3/6M {similar_path}；"
-        f"{calibration}"
+        f"相似市场环境：{backtest.similar_count}个样本，之后1/3/6M {similar_path}，"
+        f"3M胜率{_fmt_rate(backtest.similar_hit_rate_3m)}，回撤{_fmt_pct(backtest.similar_max_drawdown_3m)}；"
+        f"阈值质检：{backtest.reliability}，{backtest.best_threshold_label}"
     )
 
 
