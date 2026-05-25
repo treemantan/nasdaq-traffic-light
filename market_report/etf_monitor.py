@@ -31,6 +31,23 @@ class ETFSpec:
 
 
 @dataclass(frozen=True)
+class ETFThresholdCalibration:
+    threshold: int
+    label: str
+    sample_count: int
+    coverage_pct: float | None
+    forward_1m: float | None
+    forward_3m: float | None
+    forward_6m: float | None
+    hit_rate_3m: float | None
+    max_drawdown_3m: float | None
+    edge_3m: float | None
+    edge_6m: float | None
+    score: float | None
+    supported: bool
+
+
+@dataclass(frozen=True)
 class ETFBacktestStats:
     threshold: int
     sample_size: int
@@ -56,6 +73,9 @@ class ETFBacktestStats:
     similar_forward_6m: float | None = None
     similar_hit_rate_3m: float | None = None
     similar_max_drawdown_3m: float | None = None
+    threshold_calibrations: tuple[ETFThresholdCalibration, ...] = ()
+    best_threshold: int | None = None
+    best_threshold_label: str = "未发现稳定阈值优势"
 
 
 @dataclass(frozen=True)
@@ -641,6 +661,8 @@ def _backtest_entry_environment(
     good = [row for row in records if int(row["score"]) >= threshold]
     similar = _similar_samples(records, current_features)
     similar_values = _similar_stats(similar)
+    threshold_calibrations = _threshold_calibrations(records)
+    best_threshold, best_threshold_label = _best_threshold(threshold_calibrations)
     if len(good) < 8:
         return ETFBacktestStats(
             threshold=threshold,
@@ -667,6 +689,9 @@ def _backtest_entry_environment(
             similar_forward_6m=similar_values["forward_6m"],
             similar_hit_rate_3m=similar_values["hit_rate_3m"],
             similar_max_drawdown_3m=similar_values["max_drawdown_3m"],
+            threshold_calibrations=threshold_calibrations,
+            best_threshold=best_threshold,
+            best_threshold_label=best_threshold_label,
         )
 
     good_3m = _avg([float(row["forward_3m"]) for row in good])
@@ -710,6 +735,9 @@ def _backtest_entry_environment(
         similar_forward_6m=similar_values["forward_6m"],
         similar_hit_rate_3m=similar_values["hit_rate_3m"],
         similar_max_drawdown_3m=similar_values["max_drawdown_3m"],
+        threshold_calibrations=threshold_calibrations,
+        best_threshold=best_threshold,
+        best_threshold_label=best_threshold_label,
     )
 
 
@@ -875,6 +903,91 @@ def _similar_stats(samples: list[dict[str, Any]]) -> dict[str, float | int | Non
     }
 
 
+def _threshold_calibrations(records: list[dict[str, Any]]) -> tuple[ETFThresholdCalibration, ...]:
+    all_1m = _avg([float(row["forward_1m"]) for row in records])
+    all_3m = _avg([float(row["forward_3m"]) for row in records])
+    all_6m = _avg([float(row["forward_6m"]) for row in records])
+    all_dd = _avg([float(row["drawdown_3m"]) for row in records])
+    return tuple(
+        _threshold_calibration(records, threshold, all_1m, all_3m, all_6m, all_dd)
+        for threshold in (60, 70, 75)
+    )
+
+
+def _threshold_calibration(
+    records: list[dict[str, Any]],
+    threshold: int,
+    all_1m: float | None,
+    all_3m: float | None,
+    all_6m: float | None,
+    all_dd: float | None,
+) -> ETFThresholdCalibration:
+    selected = [row for row in records if int(row["score"]) >= threshold]
+    forward_1m = _avg([float(row["forward_1m"]) for row in selected])
+    forward_3m = _avg([float(row["forward_3m"]) for row in selected])
+    forward_6m = _avg([float(row["forward_6m"]) for row in selected])
+    drawdown = _avg([float(row["drawdown_3m"]) for row in selected])
+    edge_3m = _diff(forward_3m, all_3m)
+    edge_6m = _diff(forward_6m, all_6m)
+    dd_edge = _diff(drawdown, all_dd)
+    hit_rate = _hit_rate([float(row["forward_3m"]) for row in selected])
+    sample_count = len(selected)
+    coverage = sample_count / len(records) * 100 if records else None
+    min_samples = 20 if threshold < 75 else 12
+    supported = (
+        sample_count >= min_samples
+        and edge_3m is not None
+        and edge_6m is not None
+        and edge_3m > 0.5
+        and edge_6m > 0
+        and (dd_edge is None or dd_edge >= -2)
+    )
+    score = None
+    if edge_3m is not None and edge_6m is not None:
+        score = edge_3m * 0.45 + edge_6m * 0.35 + (hit_rate or 0) * 0.03 + (dd_edge or 0) * 0.25
+        if sample_count < min_samples:
+            score -= 100
+        if coverage is not None and coverage > 80:
+            score -= 4
+    return ETFThresholdCalibration(
+        threshold=threshold,
+        label=_threshold_label(threshold),
+        sample_count=sample_count,
+        coverage_pct=coverage,
+        forward_1m=forward_1m,
+        forward_3m=forward_3m,
+        forward_6m=forward_6m,
+        hit_rate_3m=hit_rate,
+        max_drawdown_3m=drawdown,
+        edge_3m=edge_3m,
+        edge_6m=edge_6m,
+        score=score,
+        supported=supported,
+    )
+
+
+def _best_threshold(calibrations: tuple[ETFThresholdCalibration, ...]) -> tuple[int | None, str]:
+    supported = [item for item in calibrations if item.supported and item.score is not None]
+    if not supported:
+        return None, "未发现稳定阈值优势"
+    best = max(supported, key=lambda item: item.score or -999)
+    return best.threshold, f"历史最优阈值：{best.threshold}（{best.label}）"
+
+
+def _threshold_label(threshold: int) -> str:
+    if threshold >= 75:
+        return "趋势结构较强，但需检查拥挤度"
+    if threshold >= 70:
+        return "环境较好"
+    return "环境尚可"
+
+
+def _diff(left: float | None, right: float | None) -> float | None:
+    if left is None or right is None:
+        return None
+    return left - right
+
+
 def _forward_return(closes: list[float], index: int, horizon: int) -> float | None:
     if index + horizon >= len(closes) or closes[index] == 0:
         return None
@@ -914,6 +1027,7 @@ def _empty_backtest(threshold: int, summary: str) -> ETFBacktestStats:
         all_max_drawdown_3m=None,
         reliability="样本不足",
         summary=summary,
+        best_threshold_label="未发现稳定阈值优势",
     )
 
 
@@ -945,6 +1059,9 @@ def _backtest_to_cache(backtest: ETFBacktestStats | None) -> dict[str, Any] | No
         "similar_forward_6m": backtest.similar_forward_6m,
         "similar_hit_rate_3m": backtest.similar_hit_rate_3m,
         "similar_max_drawdown_3m": backtest.similar_max_drawdown_3m,
+        "threshold_calibrations": [_threshold_calibration_to_cache(item) for item in backtest.threshold_calibrations],
+        "best_threshold": backtest.best_threshold,
+        "best_threshold_label": backtest.best_threshold_label,
     }
 
 
@@ -977,6 +1094,54 @@ def _backtest_from_cache(entry: Any) -> ETFBacktestStats | None:
             similar_forward_6m=_safe_float(entry.get("similar_forward_6m")),
             similar_hit_rate_3m=_safe_float(entry.get("similar_hit_rate_3m")),
             similar_max_drawdown_3m=_safe_float(entry.get("similar_max_drawdown_3m")),
+            threshold_calibrations=tuple(
+                item
+                for item in (_threshold_calibration_from_cache(raw) for raw in entry.get("threshold_calibrations") or [])
+                if item is not None
+            ),
+            best_threshold=int(entry["best_threshold"]) if entry.get("best_threshold") is not None else None,
+            best_threshold_label=str(entry.get("best_threshold_label") or "未发现稳定阈值优势"),
+        )
+    except (TypeError, ValueError):
+        return None
+
+
+def _threshold_calibration_to_cache(item: ETFThresholdCalibration) -> dict[str, Any]:
+    return {
+        "threshold": item.threshold,
+        "label": item.label,
+        "sample_count": item.sample_count,
+        "coverage_pct": item.coverage_pct,
+        "forward_1m": item.forward_1m,
+        "forward_3m": item.forward_3m,
+        "forward_6m": item.forward_6m,
+        "hit_rate_3m": item.hit_rate_3m,
+        "max_drawdown_3m": item.max_drawdown_3m,
+        "edge_3m": item.edge_3m,
+        "edge_6m": item.edge_6m,
+        "score": item.score,
+        "supported": item.supported,
+    }
+
+
+def _threshold_calibration_from_cache(entry: Any) -> ETFThresholdCalibration | None:
+    if not isinstance(entry, dict):
+        return None
+    try:
+        return ETFThresholdCalibration(
+            threshold=int(entry.get("threshold") or 0),
+            label=str(entry.get("label") or ""),
+            sample_count=int(entry.get("sample_count") or 0),
+            coverage_pct=_safe_float(entry.get("coverage_pct")),
+            forward_1m=_safe_float(entry.get("forward_1m")),
+            forward_3m=_safe_float(entry.get("forward_3m")),
+            forward_6m=_safe_float(entry.get("forward_6m")),
+            hit_rate_3m=_safe_float(entry.get("hit_rate_3m")),
+            max_drawdown_3m=_safe_float(entry.get("max_drawdown_3m")),
+            edge_3m=_safe_float(entry.get("edge_3m")),
+            edge_6m=_safe_float(entry.get("edge_6m")),
+            score=_safe_float(entry.get("score")),
+            supported=bool(entry.get("supported")),
         )
     except (TypeError, ValueError):
         return None

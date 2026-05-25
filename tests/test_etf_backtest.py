@@ -29,4 +29,6 @@ class ETFBacktestTests(unittest.TestCase):
         self.assertIsNotNone(stats.all_forward_3m)
         self.assertGreater(stats.similar_count, 0)
         self.assertIsNotNone(stats.similar_forward_3m)
+        self.assertEqual([item.threshold for item in stats.threshold_calibrations], [60, 70, 75])
+        self.assertTrue(stats.best_threshold_label)
         self.assertIn(stats.reliability, {"历史支持", "温和支持", "未验证优势", "样本偏少"})
