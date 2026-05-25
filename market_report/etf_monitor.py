@@ -17,6 +17,10 @@ ETF_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
     "Accept": "application/json,text/plain,*/*",
 }
+CROWDING_LOW_THRESHOLD = 35
+CROWDING_ELEVATED_THRESHOLD = 70
+CROWDING_HIGH_THRESHOLD = 80
+CROWDING_BACKTEST_CEILING = CROWDING_ELEVATED_THRESHOLD
 
 
 @dataclass(frozen=True)
@@ -623,7 +627,7 @@ def _backtest_entry_environment(
     history: list[tuple[date, float]],
     macro_metrics: dict[str, Any] | None = None,
     threshold: int = 60,
-    crowding_ceiling: int = 80,
+    crowding_ceiling: int = CROWDING_BACKTEST_CEILING,
 ) -> ETFBacktestStats:
     # Weekly sampling reduces overlapping forward windows and avoids overstating precision.
     if len(history) < 330:
@@ -1044,7 +1048,7 @@ def _forward_max_drawdown(closes: list[float], index: int, horizon: int) -> floa
 def _empty_backtest(threshold: int, summary: str) -> ETFBacktestStats:
     return ETFBacktestStats(
         threshold=threshold,
-        crowding_ceiling=80,
+        crowding_ceiling=CROWDING_BACKTEST_CEILING,
         sample_size=0,
         good_count=0,
         coverage_pct=None,
@@ -1105,7 +1109,7 @@ def _backtest_from_cache(entry: Any) -> ETFBacktestStats | None:
     try:
         return ETFBacktestStats(
             threshold=int(entry.get("threshold") or 60),
-            crowding_ceiling=int(entry.get("crowding_ceiling") or 80),
+            crowding_ceiling=int(entry.get("crowding_ceiling") or CROWDING_BACKTEST_CEILING),
             sample_size=int(entry.get("sample_size") or 0),
             good_count=int(entry.get("good_count") or 0),
             coverage_pct=_safe_float(entry.get("coverage_pct")),
@@ -1166,7 +1170,7 @@ def _threshold_calibration_from_cache(entry: Any) -> ETFThresholdCalibration | N
     try:
         return ETFThresholdCalibration(
             threshold=int(entry.get("threshold") or 0),
-            crowding_ceiling=int(entry.get("crowding_ceiling") or 80),
+            crowding_ceiling=int(entry.get("crowding_ceiling") or CROWDING_BACKTEST_CEILING),
             label=str(entry.get("label") or ""),
             sample_count=int(entry.get("sample_count") or 0),
             coverage_pct=_safe_float(entry.get("coverage_pct")),
@@ -1200,7 +1204,7 @@ def _build_summary(assets: list[ETFAssetMonitor]) -> str:
     live_assets = [asset for asset in assets if asset.value is not None]
     if not live_assets:
         return "ETF资产池暂缺实时数据，当前无法形成趋势与估值判断。"
-    hot = [asset for asset in live_assets if asset.crowding_score >= 75]
+    hot = [asset for asset in live_assets if asset.crowding_score >= CROWDING_ELEVATED_THRESHOLD]
     weak = [asset for asset in live_assets if asset.distance_sma200 is not None and asset.distance_sma200 < 0]
     strong = [asset for asset in live_assets if asset.distance_sma200 is not None and asset.distance_sma200 > 5]
     parts = [
@@ -1305,11 +1309,13 @@ def _crowding_score(
 
 
 def _crowding_label(score: int, rsi14: float | None, distance_sma200: float | None) -> str:
-    if score >= 80:
+    if score >= CROWDING_HIGH_THRESHOLD:
         return "拥挤度高：趋势强但短线回撤敏感度上升"
-    if score >= 65:
+    if score >= CROWDING_ELEVATED_THRESHOLD:
         return "拥挤度偏高：需关注RSI和均线乖离"
-    if score <= 35:
+    if score >= 65:
+        return "拥挤度升温：接近偏高区，需观察动量延续性"
+    if score <= CROWDING_LOW_THRESHOLD:
         return "拥挤度偏低：价格尚未形成明显过热结构"
     if rsi14 is not None and rsi14 <= 30:
         return "短线超卖：风险释放后可能进入修复观察区"
