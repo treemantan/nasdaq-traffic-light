@@ -6,6 +6,7 @@ import re
 import time
 import urllib.parse
 import urllib.request
+from bisect import bisect_right
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -21,6 +22,16 @@ CROWDING_LOW_THRESHOLD = 35
 CROWDING_ELEVATED_THRESHOLD = 70
 CROWDING_HIGH_THRESHOLD = 80
 CROWDING_BACKTEST_CEILING = CROWDING_ELEVATED_THRESHOLD
+MARKET_ENV_SYMBOLS = {
+    "spy": "SPY",
+    "qqq": "QQQ",
+    "vix": "^VIX",
+    "dxy": "DX-Y.NYB",
+    "tnx": "^TNX",
+    "gold": "GC=F",
+    "oil": "CL=F",
+}
+_MARKET_ENV_HISTORY_CACHE: dict[str, list[tuple[date, float]]] | None = None
 
 
 @dataclass(frozen=True)
@@ -307,7 +318,10 @@ def _fetch_etf_asset(
         entry_note=entry_note,
         risk_management_note=risk_note,
     )
-    enriched = _replace_asset(enriched, backtest=_backtest_entry_environment(spec, history, macro_metrics))
+    enriched = _replace_asset(
+        enriched,
+        backtest=_backtest_entry_environment(spec, history, macro_metrics, _fetch_market_env_histories()),
+    )
     _write_asset_cache(cache, enriched)
     return enriched
 
@@ -375,6 +389,22 @@ def _fetch_yahoo_history(symbol: str) -> list[tuple[date, float]]:
             continue
         pairs.append((datetime.fromtimestamp(timestamp, timezone.utc).date(), value * scale))
     return pairs
+
+
+def _fetch_market_env_histories() -> dict[str, list[tuple[date, float]]]:
+    global _MARKET_ENV_HISTORY_CACHE
+    if _MARKET_ENV_HISTORY_CACHE is not None:
+        return _MARKET_ENV_HISTORY_CACHE
+    histories: dict[str, list[tuple[date, float]]] = {}
+    for key, symbol in MARKET_ENV_SYMBOLS.items():
+        try:
+            history = sorted(_fetch_yahoo_history(symbol), key=lambda item: item[0])
+            if len(history) >= 260:
+                histories[key] = history
+        except Exception:
+            continue
+    _MARKET_ENV_HISTORY_CACHE = histories
+    return histories
 
 
 def _fetch_yahoo_valuation(symbol: str) -> dict[str, float | None]:
@@ -633,6 +663,7 @@ def _backtest_entry_environment(
     spec: ETFSpec,
     history: list[tuple[date, float]],
     macro_metrics: dict[str, Any] | None = None,
+    market_histories: dict[str, list[tuple[date, float]]] | None = None,
     threshold: int = 60,
     crowding_ceiling: int = CROWDING_BACKTEST_CEILING,
 ) -> ETFBacktestStats:
@@ -642,13 +673,13 @@ def _backtest_entry_environment(
 
     records: list[dict[str, Any]] = []
     closes = [close for _, close in history]
-    current_features = _entry_similarity_features(spec, history, None)
+    current_features = _entry_similarity_features(spec, history, None, market_histories)
     start = 252
     end = len(history) - 126
     for index in range(start, end, 5):
         window = history[: index + 1]
         snapshot = _historical_entry_snapshot(spec, window, None)
-        features = _entry_similarity_features(spec, window, None)
+        features = _entry_similarity_features(spec, window, None, market_histories)
         if snapshot is None:
             continue
         score = int(snapshot["score"])
@@ -821,6 +852,7 @@ def _entry_similarity_features(
     spec: ETFSpec,
     history: list[tuple[date, float]],
     macro_metrics: dict[str, Any] | None = None,
+    market_histories: dict[str, list[tuple[date, float]]] | None = None,
 ) -> dict[str, float] | None:
     score = _historical_entry_score(spec, history, macro_metrics)
     if score is None or len(history) < 253:
@@ -846,8 +878,43 @@ def _entry_similarity_features(
         "daily_volatility": daily_volatility,
         "crowding_score": _crowding_score(_rsi(closes, 14), distance_200, None, _momentum(closes, 21)),
     }
+    features.update(_market_env_features(market_histories, history[-1][0]))
     clean = {key: value for key, value in features.items() if isinstance(value, (int, float)) and math.isfinite(value)}
     return clean or None
+
+
+def _market_env_features(
+    market_histories: dict[str, list[tuple[date, float]]] | None,
+    as_of: date,
+) -> dict[str, float]:
+    if not market_histories:
+        return {}
+    features: dict[str, float] = {}
+    for key, history in market_histories.items():
+        index = _history_index_at_or_before(history, as_of)
+        if index is None or index < 22:
+            continue
+        closes = [close for _, close in history[: index + 1]]
+        value = closes[-1]
+        if key == "vix":
+            features["mkt_vix_level"] = value
+            features["mkt_vix_5d"] = _momentum(closes, 5)
+            features["mkt_vix_1m"] = _momentum(closes, 21)
+        elif key == "tnx":
+            features["mkt_10y_level"] = value
+            features["mkt_10y_1m"] = _momentum(closes, 21)
+        else:
+            features[f"mkt_{key}_1m"] = _momentum(closes, 21)
+            features[f"mkt_{key}_3m"] = _momentum(closes, 63)
+        if key in {"spy", "qqq"} and len(closes) >= 200:
+            features[f"mkt_{key}_distance_sma200"] = _distance_to_sma(value, _sma(closes, 200))
+    return {key: value for key, value in features.items() if value is not None}
+
+
+def _history_index_at_or_before(history: list[tuple[date, float]], as_of: date) -> int | None:
+    dates = [item[0] for item in history]
+    index = bisect_right(dates, as_of) - 1
+    return index if index >= 0 else None
 
 
 def _similar_samples(
@@ -883,6 +950,23 @@ def _feature_distance(current: dict[str, float], past: Any) -> float | None:
         "trend_sigma_200d": 1.5,
         "daily_volatility": 2.0,
         "crowding_score": 18.0,
+        "mkt_spy_1m": 6.0,
+        "mkt_spy_3m": 12.0,
+        "mkt_spy_distance_sma200": 12.0,
+        "mkt_qqq_1m": 8.0,
+        "mkt_qqq_3m": 15.0,
+        "mkt_qqq_distance_sma200": 15.0,
+        "mkt_vix_level": 12.0,
+        "mkt_vix_5d": 18.0,
+        "mkt_vix_1m": 30.0,
+        "mkt_dxy_1m": 3.0,
+        "mkt_dxy_3m": 5.0,
+        "mkt_10y_level": 8.0,
+        "mkt_10y_1m": 8.0,
+        "mkt_gold_1m": 6.0,
+        "mkt_gold_3m": 10.0,
+        "mkt_oil_1m": 8.0,
+        "mkt_oil_3m": 14.0,
     }
     weights = {
         "score": 1.2,
@@ -894,6 +978,23 @@ def _feature_distance(current: dict[str, float], past: Any) -> float | None:
         "trend_sigma_200d": 1.1,
         "daily_volatility": 0.7,
         "crowding_score": 1.0,
+        "mkt_spy_1m": 1.1,
+        "mkt_spy_3m": 0.8,
+        "mkt_spy_distance_sma200": 0.8,
+        "mkt_qqq_1m": 1.2,
+        "mkt_qqq_3m": 0.9,
+        "mkt_qqq_distance_sma200": 0.9,
+        "mkt_vix_level": 1.2,
+        "mkt_vix_5d": 1.3,
+        "mkt_vix_1m": 1.0,
+        "mkt_dxy_1m": 1.0,
+        "mkt_dxy_3m": 0.8,
+        "mkt_10y_level": 1.0,
+        "mkt_10y_1m": 1.0,
+        "mkt_gold_1m": 0.6,
+        "mkt_gold_3m": 0.5,
+        "mkt_oil_1m": 0.5,
+        "mkt_oil_3m": 0.4,
     }
     total = 0.0
     weight_sum = 0.0

@@ -464,10 +464,11 @@ def _fmt_backtest(asset: ETFAssetMonitor) -> str:
     )
     calibration = _fmt_threshold_calibration(asset)
     return (
-        f"历史检验：{backtest.reliability}；≥{backtest.threshold}且拥挤<{backtest.crowding_ceiling}样本 {backtest.good_count}/{backtest.sample_size}；"
-        f"1/3/6M {good_path} vs 全样本 {all_path}；"
-        f"3M回撤 {_fmt_pct(backtest.good_max_drawdown_3m)}；"
-        f"相似样本{backtest.similar_count}个 1/3/6M {similar_path} / 回撤 {_fmt_pct(backtest.similar_max_drawdown_3m)}；"
+        f"当前相似市场环境：{backtest.similar_count}个历史样本，"
+        f"之后1/3/6M {similar_path}，3M胜率 {_fmt_rate(backtest.similar_hit_rate_3m)}，"
+        f"3M回撤 {_fmt_pct(backtest.similar_max_drawdown_3m)}。"
+        f"阈值质检：{backtest.reliability}；≥{backtest.threshold}且拥挤<{backtest.crowding_ceiling}样本 {backtest.good_count}/{backtest.sample_size}，"
+        f"1/3/6M {good_path} vs 全样本 {all_path}，3M回撤 {_fmt_pct(backtest.good_max_drawdown_3m)}。"
         f"{calibration}"
     )
 

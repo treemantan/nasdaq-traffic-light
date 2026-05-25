@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from datetime import date, timedelta
 
-from market_report.etf_monitor import ETFSpec, _backtest_entry_environment
+from market_report.etf_monitor import ETFSpec, _backtest_entry_environment, _entry_similarity_features
 
 
 class ETFBacktestTests(unittest.TestCase):
@@ -34,3 +34,29 @@ class ETFBacktestTests(unittest.TestCase):
         self.assertEqual([item.crowding_ceiling for item in stats.threshold_calibrations], [70, 70, 70])
         self.assertTrue(stats.best_threshold_label)
         self.assertIn(stats.reliability, {"历史支持", "温和支持", "未验证优势", "样本偏少"})
+
+    def test_similarity_features_include_market_environment_when_available(self) -> None:
+        start = date(2020, 1, 1)
+        history = []
+        value = 100.0
+        for index in range(330):
+            value *= 1.0005
+            history.append((start + timedelta(days=index), value))
+
+        market_histories = {
+            "spy": [(day, close * 1.1) for day, close in history],
+            "vix": [(day, 18.0 + (index % 15) * 0.2) for index, (day, _) in enumerate(history)],
+            "dxy": [(day, 100.0 + index * 0.01) for index, (day, _) in enumerate(history)],
+        }
+
+        features = _entry_similarity_features(
+            ETFSpec("demo", "Demo ETF", "DEMO.L", "Demo", "Demo"),
+            history,
+            market_histories=market_histories,
+        )
+
+        self.assertIsNotNone(features)
+        assert features is not None
+        self.assertIn("mkt_spy_1m", features)
+        self.assertIn("mkt_vix_level", features)
+        self.assertIn("mkt_dxy_1m", features)
