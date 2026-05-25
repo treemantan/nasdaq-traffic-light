@@ -33,6 +33,7 @@ class ETFSpec:
 @dataclass(frozen=True)
 class ETFThresholdCalibration:
     threshold: int
+    crowding_ceiling: int
     label: str
     sample_count: int
     coverage_pct: float | None
@@ -50,6 +51,7 @@ class ETFThresholdCalibration:
 @dataclass(frozen=True)
 class ETFBacktestStats:
     threshold: int
+    crowding_ceiling: int
     sample_size: int
     good_count: int
     coverage_pct: float | None
@@ -621,6 +623,7 @@ def _backtest_entry_environment(
     history: list[tuple[date, float]],
     macro_metrics: dict[str, Any] | None = None,
     threshold: int = 60,
+    crowding_ceiling: int = 80,
 ) -> ETFBacktestStats:
     # Weekly sampling reduces overlapping forward windows and avoids overstating precision.
     if len(history) < 330:
@@ -633,10 +636,12 @@ def _backtest_entry_environment(
     end = len(history) - 126
     for index in range(start, end, 5):
         window = history[: index + 1]
-        score = _historical_entry_score(spec, window, None)
+        snapshot = _historical_entry_snapshot(spec, window, None)
         features = _entry_similarity_features(spec, window, None)
-        if score is None:
+        if snapshot is None:
             continue
+        score = int(snapshot["score"])
+        crowding_score = int(snapshot["crowding_score"])
         current = closes[index]
         future_1m = _forward_return(closes, index, 21)
         future_3m = _forward_return(closes, index, 63)
@@ -647,6 +652,7 @@ def _backtest_entry_environment(
         records.append(
             {
                 "score": score,
+                "crowding_score": crowding_score,
                 "forward_1m": future_1m,
                 "forward_3m": future_3m,
                 "forward_6m": future_6m,
@@ -658,14 +664,15 @@ def _backtest_entry_environment(
     if len(records) < 25:
         return _empty_backtest(threshold, "可回测信号不足，暂不评价历史有效性。")
 
-    good = [row for row in records if int(row["score"]) >= threshold]
+    good = _qualified_records(records, threshold, crowding_ceiling)
     similar = _similar_samples(records, current_features)
     similar_values = _similar_stats(similar)
-    threshold_calibrations = _threshold_calibrations(records)
+    threshold_calibrations = _threshold_calibrations(records, crowding_ceiling)
     best_threshold, best_threshold_label = _best_threshold(threshold_calibrations)
     if len(good) < 8:
         return ETFBacktestStats(
             threshold=threshold,
+            crowding_ceiling=crowding_ceiling,
             sample_size=len(records),
             good_count=len(good),
             coverage_pct=len(good) / len(records) * 100 if records else None,
@@ -712,6 +719,7 @@ def _backtest_entry_environment(
 
     return ETFBacktestStats(
         threshold=threshold,
+        crowding_ceiling=crowding_ceiling,
         sample_size=len(records),
         good_count=len(good),
         coverage_pct=len(good) / len(records) * 100,
@@ -746,6 +754,15 @@ def _historical_entry_score(
     history: list[tuple[date, float]],
     macro_metrics: dict[str, Any] | None = None,
 ) -> int | None:
+    snapshot = _historical_entry_snapshot(spec, history, macro_metrics)
+    return int(snapshot["score"]) if snapshot is not None else None
+
+
+def _historical_entry_snapshot(
+    spec: ETFSpec,
+    history: list[tuple[date, float]],
+    macro_metrics: dict[str, Any] | None = None,
+) -> dict[str, int] | None:
     if len(history) < 253:
         return None
     closes = [close for _, close in history]
@@ -778,13 +795,15 @@ def _historical_entry_score(
         rsi14=_rsi(closes, 14),
     )
     distance = _distance_to_sma(asset.value, asset.sma200)
+    crowding_score = _crowding_score(asset.rsi14, distance, None, asset.momentum_1m)
     asset = _replace_asset(
         asset,
         distance_sma200=distance,
         trend_sigma_200d=_trend_sigma(distance, trend_volatility or daily_volatility, 200),
+        crowding_score=crowding_score,
     )
     score, _, _, _ = _entry_quality(asset, macro_metrics)
-    return score
+    return {"score": score, "crowding_score": crowding_score}
 
 
 def _entry_similarity_features(
@@ -814,6 +833,7 @@ def _entry_similarity_features(
         "distance_sma200": distance_200,
         "trend_sigma_200d": trend_sigma,
         "daily_volatility": daily_volatility,
+        "crowding_score": _crowding_score(_rsi(closes, 14), distance_200, None, _momentum(closes, 21)),
     }
     clean = {key: value for key, value in features.items() if isinstance(value, (int, float)) and math.isfinite(value)}
     return clean or None
@@ -851,6 +871,7 @@ def _feature_distance(current: dict[str, float], past: Any) -> float | None:
         "distance_sma200": 18.0,
         "trend_sigma_200d": 1.5,
         "daily_volatility": 2.0,
+        "crowding_score": 18.0,
     }
     weights = {
         "score": 1.2,
@@ -861,6 +882,7 @@ def _feature_distance(current: dict[str, float], past: Any) -> float | None:
         "distance_sma200": 1.1,
         "trend_sigma_200d": 1.1,
         "daily_volatility": 0.7,
+        "crowding_score": 1.0,
     }
     total = 0.0
     weight_sum = 0.0
@@ -903,13 +925,13 @@ def _similar_stats(samples: list[dict[str, Any]]) -> dict[str, float | int | Non
     }
 
 
-def _threshold_calibrations(records: list[dict[str, Any]]) -> tuple[ETFThresholdCalibration, ...]:
+def _threshold_calibrations(records: list[dict[str, Any]], crowding_ceiling: int) -> tuple[ETFThresholdCalibration, ...]:
     all_1m = _avg([float(row["forward_1m"]) for row in records])
     all_3m = _avg([float(row["forward_3m"]) for row in records])
     all_6m = _avg([float(row["forward_6m"]) for row in records])
     all_dd = _avg([float(row["drawdown_3m"]) for row in records])
     return tuple(
-        _threshold_calibration(records, threshold, all_1m, all_3m, all_6m, all_dd)
+        _threshold_calibration(records, threshold, crowding_ceiling, all_1m, all_3m, all_6m, all_dd)
         for threshold in (60, 70, 75)
     )
 
@@ -917,12 +939,13 @@ def _threshold_calibrations(records: list[dict[str, Any]]) -> tuple[ETFThreshold
 def _threshold_calibration(
     records: list[dict[str, Any]],
     threshold: int,
+    crowding_ceiling: int,
     all_1m: float | None,
     all_3m: float | None,
     all_6m: float | None,
     all_dd: float | None,
 ) -> ETFThresholdCalibration:
-    selected = [row for row in records if int(row["score"]) >= threshold]
+    selected = _qualified_records(records, threshold, crowding_ceiling)
     forward_1m = _avg([float(row["forward_1m"]) for row in selected])
     forward_3m = _avg([float(row["forward_3m"]) for row in selected])
     forward_6m = _avg([float(row["forward_6m"]) for row in selected])
@@ -951,6 +974,7 @@ def _threshold_calibration(
             score -= 4
     return ETFThresholdCalibration(
         threshold=threshold,
+        crowding_ceiling=crowding_ceiling,
         label=_threshold_label(threshold),
         sample_count=sample_count,
         coverage_pct=coverage,
@@ -971,7 +995,15 @@ def _best_threshold(calibrations: tuple[ETFThresholdCalibration, ...]) -> tuple[
     if not supported:
         return None, "未发现稳定阈值优势"
     best = max(supported, key=lambda item: item.score or -999)
-    return best.threshold, f"历史最优阈值：{best.threshold}（{best.label}）"
+    return best.threshold, f"历史最优阈值：{best.threshold}且拥挤度<{best.crowding_ceiling}（{best.label}）"
+
+
+def _qualified_records(records: list[dict[str, Any]], threshold: int, crowding_ceiling: int) -> list[dict[str, Any]]:
+    return [
+        row
+        for row in records
+        if int(row["score"]) >= threshold and int(row.get("crowding_score", 100)) < crowding_ceiling
+    ]
 
 
 def _threshold_label(threshold: int) -> str:
@@ -1012,6 +1044,7 @@ def _forward_max_drawdown(closes: list[float], index: int, horizon: int) -> floa
 def _empty_backtest(threshold: int, summary: str) -> ETFBacktestStats:
     return ETFBacktestStats(
         threshold=threshold,
+        crowding_ceiling=80,
         sample_size=0,
         good_count=0,
         coverage_pct=None,
@@ -1036,6 +1069,7 @@ def _backtest_to_cache(backtest: ETFBacktestStats | None) -> dict[str, Any] | No
         return None
     return {
         "threshold": backtest.threshold,
+        "crowding_ceiling": backtest.crowding_ceiling,
         "sample_size": backtest.sample_size,
         "good_count": backtest.good_count,
         "coverage_pct": backtest.coverage_pct,
@@ -1071,6 +1105,7 @@ def _backtest_from_cache(entry: Any) -> ETFBacktestStats | None:
     try:
         return ETFBacktestStats(
             threshold=int(entry.get("threshold") or 60),
+            crowding_ceiling=int(entry.get("crowding_ceiling") or 80),
             sample_size=int(entry.get("sample_size") or 0),
             good_count=int(entry.get("good_count") or 0),
             coverage_pct=_safe_float(entry.get("coverage_pct")),
@@ -1109,6 +1144,7 @@ def _backtest_from_cache(entry: Any) -> ETFBacktestStats | None:
 def _threshold_calibration_to_cache(item: ETFThresholdCalibration) -> dict[str, Any]:
     return {
         "threshold": item.threshold,
+        "crowding_ceiling": item.crowding_ceiling,
         "label": item.label,
         "sample_count": item.sample_count,
         "coverage_pct": item.coverage_pct,
@@ -1130,6 +1166,7 @@ def _threshold_calibration_from_cache(entry: Any) -> ETFThresholdCalibration | N
     try:
         return ETFThresholdCalibration(
             threshold=int(entry.get("threshold") or 0),
+            crowding_ceiling=int(entry.get("crowding_ceiling") or 80),
             label=str(entry.get("label") or ""),
             sample_count=int(entry.get("sample_count") or 0),
             coverage_pct=_safe_float(entry.get("coverage_pct")),

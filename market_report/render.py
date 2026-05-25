@@ -420,7 +420,7 @@ def _fmt_backtest(asset: ETFAssetMonitor) -> str:
     )
     calibration = _fmt_threshold_calibration(asset)
     return (
-        f"历史检验：{backtest.reliability}；≥{backtest.threshold}样本 {backtest.good_count}/{backtest.sample_size}；"
+        f"历史检验：{backtest.reliability}；≥{backtest.threshold}且拥挤<{backtest.crowding_ceiling}样本 {backtest.good_count}/{backtest.sample_size}；"
         f"1/3/6M {good_path} vs 全样本 {all_path}；"
         f"3M回撤 {_fmt_pct(backtest.good_max_drawdown_3m)}；"
         f"相似样本{backtest.similar_count}个 1/3/6M {similar_path} / 回撤 {_fmt_pct(backtest.similar_max_drawdown_3m)}；"
@@ -436,7 +436,7 @@ def _fmt_threshold_calibration(asset: ETFAssetMonitor) -> str:
     for item in backtest.threshold_calibrations:
         path = " / ".join([_fmt_pct(item.forward_1m), _fmt_pct(item.forward_3m), _fmt_pct(item.forward_6m)])
         rows.append(
-            f"≥{item.threshold} {item.label}：{item.sample_count}样本，1/3/6M {path}，"
+            f"≥{item.threshold}且拥挤<{item.crowding_ceiling} {item.label}：{item.sample_count}样本，1/3/6M {path}，"
             f"胜率{_fmt_rate(item.hit_rate_3m)}，回撤{_fmt_pct(item.max_drawdown_3m)}"
         )
     return f"阈值校准：{backtest.best_threshold_label}；" + " | ".join(rows)
