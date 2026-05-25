@@ -231,7 +231,7 @@ def _render_etf_row(asset: ETFAssetMonitor) -> str:
       <td style="padding:7px;border-bottom:1px solid #263244;">{escape(_fmt_sigma(asset.daily_sigma))} / {escape(_fmt_pct(asset.momentum_1m))} / {escape(_fmt_plain(asset.rsi14))}<br>{escape(asset.sigma_label)}</td>
       <td style="padding:7px;border-bottom:1px solid #263244;">{escape(_fmt_plain(asset.pe))} / {escape(_fmt_plain(asset.forward_pe))}<br>{escape(asset.valuation_label)}<br><span style="color:#9ca3af;">{escape(valuation_source)}</span></td>
       <td style="padding:7px;border-bottom:1px solid #263244;">{escape(_fmt_pe_position(asset))}</td>
-      <td style="padding:7px;border-bottom:1px solid #263244;">{asset.entry_score}/100<br>{escape(asset.entry_label)}</td>
+      <td style="padding:7px;border-bottom:1px solid #263244;">{asset.entry_score}/100<br>{escape(asset.entry_label)}<br><span style="color:#9ca3af;">{escape(_fmt_backtest(asset))}</span></td>
       <td style="padding:7px;border-bottom:1px solid #263244;">{asset.crowding_score}/100<br>{escape(asset.crowding_label)}</td>
     </tr>"""
 
@@ -242,6 +242,18 @@ def _fmt_pe_position(asset: ETFAssetMonitor) -> str:
     if asset.pe_high_1y_ratio is not None:
         return f"约{asset.pe_high_1y_ratio:.0f}% / 1Y高点"
     return "样本不足"
+
+
+def _fmt_backtest(asset: ETFAssetMonitor) -> str:
+    backtest = asset.backtest
+    if backtest is None:
+        return "历史检验：暂无"
+    if backtest.sample_size <= 0:
+        return f"历史检验：{backtest.reliability}"
+    return (
+        f"历史检验：{backtest.reliability}；≥{backtest.threshold}样本 {backtest.good_count}/{backtest.sample_size}；"
+        f"3M {_fmt_pct(backtest.good_forward_3m)} vs 全样本 {_fmt_pct(backtest.all_forward_3m)}"
+    )
 
 
 def _render_metric_card(item: ScoredMetric) -> str:

@@ -31,6 +31,26 @@ class ETFSpec:
 
 
 @dataclass(frozen=True)
+class ETFBacktestStats:
+    threshold: int
+    sample_size: int
+    good_count: int
+    coverage_pct: float | None
+    good_forward_1m: float | None
+    all_forward_1m: float | None
+    good_forward_3m: float | None
+    all_forward_3m: float | None
+    good_forward_6m: float | None
+    all_forward_6m: float | None
+    good_hit_rate_3m: float | None
+    all_hit_rate_3m: float | None
+    good_max_drawdown_3m: float | None
+    all_max_drawdown_3m: float | None
+    reliability: str
+    summary: str
+
+
+@dataclass(frozen=True)
 class ETFAssetMonitor:
     key: str
     label: str
@@ -74,6 +94,7 @@ class ETFAssetMonitor:
     entry_label: str = "新增仓位环境待确认"
     entry_note: str = "历史样本不足，暂不评估新增仓位环境。"
     risk_management_note: str = "仅作环境评估，不构成买卖建议。"
+    backtest: ETFBacktestStats | None = None
     source: str = "Yahoo"
     status: str = "ok"
     warnings: tuple[str, ...] = field(default_factory=tuple)
@@ -245,6 +266,7 @@ def _fetch_etf_asset(
         entry_note=entry_note,
         risk_management_note=risk_note,
     )
+    enriched = _replace_asset(enriched, backtest=_backtest_entry_environment(spec, history, macro_metrics))
     _write_asset_cache(cache, enriched)
     return enriched
 
@@ -289,8 +311,8 @@ def _cached_or_failed(
 def _fetch_yahoo_history(symbol: str) -> list[tuple[date, float]]:
     encoded = urllib.parse.quote(symbol, safe="")
     urls = [
-        f"https://query2.finance.yahoo.com/v8/finance/chart/{encoded}?range=2y&interval=1d",
-        f"https://query1.finance.yahoo.com/v8/finance/chart/{encoded}?range=2y&interval=1d",
+        f"https://query2.finance.yahoo.com/v8/finance/chart/{encoded}?range=5y&interval=1d",
+        f"https://query1.finance.yahoo.com/v8/finance/chart/{encoded}?range=5y&interval=1d",
     ]
     errors: list[str] = []
     for url in urls:
@@ -486,6 +508,7 @@ def _write_asset_cache(cache: dict[str, Any], asset: ETFAssetMonitor) -> None:
         "entry_label": asset.entry_label,
         "entry_note": asset.entry_note,
         "risk_management_note": asset.risk_management_note,
+        "backtest": _backtest_to_cache(asset.backtest),
         "source": asset.source,
         "status": asset.status,
         "warnings": list(asset.warnings),
@@ -544,6 +567,7 @@ def _asset_from_cache(spec: ETFSpec, entry: dict[str, Any], fetched_at: datetime
         entry_label=entry.get("entry_label") or "新增仓位环境待确认",
         entry_note=entry.get("entry_note") or "历史样本不足，暂不评估新增仓位环境。",
         risk_management_note=entry.get("risk_management_note") or "仅作环境评估，不构成买卖建议。",
+        backtest=_backtest_from_cache(entry.get("backtest")),
         source="Yahoo cache",
         status="cache",
         warnings=(f"{spec.label}使用本地ETF缓存；实时抓取失败：{reason}",),
@@ -562,6 +586,251 @@ def _load_cache() -> dict[str, Any]:
 def _save_cache(cache: dict[str, Any]) -> None:
     ETF_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
     ETF_CACHE_PATH.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _backtest_entry_environment(
+    spec: ETFSpec,
+    history: list[tuple[date, float]],
+    macro_metrics: dict[str, Any] | None = None,
+    threshold: int = 60,
+) -> ETFBacktestStats:
+    # Weekly sampling reduces overlapping forward windows and avoids overstating precision.
+    if len(history) < 330:
+        return _empty_backtest(threshold, "历史价格样本不足，暂不回测新增仓位环境。")
+
+    records: list[dict[str, float | int]] = []
+    closes = [close for _, close in history]
+    start = 252
+    end = len(history) - 126
+    for index in range(start, end, 5):
+        window = history[: index + 1]
+        score = _historical_entry_score(spec, window, None)
+        if score is None:
+            continue
+        current = closes[index]
+        future_1m = _forward_return(closes, index, 21)
+        future_3m = _forward_return(closes, index, 63)
+        future_6m = _forward_return(closes, index, 126)
+        drawdown_3m = _forward_max_drawdown(closes, index, 63)
+        if future_1m is None or future_3m is None or future_6m is None or drawdown_3m is None or current in (None, 0):
+            continue
+        records.append(
+            {
+                "score": score,
+                "forward_1m": future_1m,
+                "forward_3m": future_3m,
+                "forward_6m": future_6m,
+                "drawdown_3m": drawdown_3m,
+            }
+        )
+
+    if len(records) < 25:
+        return _empty_backtest(threshold, "可回测信号不足，暂不评价历史有效性。")
+
+    good = [row for row in records if int(row["score"]) >= threshold]
+    if len(good) < 8:
+        return ETFBacktestStats(
+            threshold=threshold,
+            sample_size=len(records),
+            good_count=len(good),
+            coverage_pct=len(good) / len(records) * 100 if records else None,
+            good_forward_1m=_avg([float(row["forward_1m"]) for row in good]),
+            all_forward_1m=_avg([float(row["forward_1m"]) for row in records]),
+            good_forward_3m=_avg([float(row["forward_3m"]) for row in good]),
+            all_forward_3m=_avg([float(row["forward_3m"]) for row in records]),
+            good_forward_6m=_avg([float(row["forward_6m"]) for row in good]),
+            all_forward_6m=_avg([float(row["forward_6m"]) for row in records]),
+            good_hit_rate_3m=_hit_rate([float(row["forward_3m"]) for row in good]),
+            all_hit_rate_3m=_hit_rate([float(row["forward_3m"]) for row in records]),
+            good_max_drawdown_3m=_avg([float(row["drawdown_3m"]) for row in good]),
+            all_max_drawdown_3m=_avg([float(row["drawdown_3m"]) for row in records]),
+            reliability="样本偏少",
+            summary=f"过去可用周度样本中，分数≥{threshold}的信号较少，统计结论需谨慎。",
+        )
+
+    good_3m = _avg([float(row["forward_3m"]) for row in good])
+    all_3m = _avg([float(row["forward_3m"]) for row in records])
+    good_dd = _avg([float(row["drawdown_3m"]) for row in good])
+    all_dd = _avg([float(row["drawdown_3m"]) for row in records])
+    edge = (good_3m or 0) - (all_3m or 0)
+    dd_edge = (good_dd or 0) - (all_dd or 0)
+    if len(records) >= 80 and edge > 1 and dd_edge >= -1:
+        reliability = "历史支持"
+        summary = f"过去周度样本显示，分数≥{threshold}后的3个月平均表现优于全样本，且回撤没有明显恶化。"
+    elif edge > 0:
+        reliability = "温和支持"
+        summary = f"过去周度样本显示，分数≥{threshold}后表现略优于全样本，但优势不应过度外推。"
+    else:
+        reliability = "未验证优势"
+        summary = f"过去周度样本未显示分数≥{threshold}相对全样本有稳定优势，当前分数应更多视为风险过滤。"
+
+    return ETFBacktestStats(
+        threshold=threshold,
+        sample_size=len(records),
+        good_count=len(good),
+        coverage_pct=len(good) / len(records) * 100,
+        good_forward_1m=_avg([float(row["forward_1m"]) for row in good]),
+        all_forward_1m=_avg([float(row["forward_1m"]) for row in records]),
+        good_forward_3m=good_3m,
+        all_forward_3m=all_3m,
+        good_forward_6m=_avg([float(row["forward_6m"]) for row in good]),
+        all_forward_6m=_avg([float(row["forward_6m"]) for row in records]),
+        good_hit_rate_3m=_hit_rate([float(row["forward_3m"]) for row in good]),
+        all_hit_rate_3m=_hit_rate([float(row["forward_3m"]) for row in records]),
+        good_max_drawdown_3m=good_dd,
+        all_max_drawdown_3m=all_dd,
+        reliability=reliability,
+        summary=summary,
+    )
+
+
+def _historical_entry_score(
+    spec: ETFSpec,
+    history: list[tuple[date, float]],
+    macro_metrics: dict[str, Any] | None = None,
+) -> int | None:
+    if len(history) < 253:
+        return None
+    closes = [close for _, close in history]
+    daily_returns = _daily_returns(closes)
+    value = closes[-1]
+    previous = closes[-2]
+    daily_volatility = _rolling_std(daily_returns, 252)
+    trend_volatility = _robust_trend_volatility(daily_returns)
+    asset = ETFAssetMonitor(
+        key=spec.key,
+        label=spec.label,
+        symbol=spec.symbol,
+        theme=spec.theme,
+        provider=spec.provider,
+        currency=spec.currency,
+        value=value,
+        previous_value=previous,
+        as_of=history[-1][0],
+        fetched_at=datetime.combine(history[-1][0], datetime.min.time(), timezone.utc),
+        change_pct=_pct_change(value, previous),
+        daily_sigma=_sigma_move(_pct_change(value, previous), daily_volatility),
+        daily_volatility=daily_volatility,
+        trend_volatility=trend_volatility,
+        momentum_5d=_momentum(closes, 5),
+        momentum_1m=_momentum(closes, 21),
+        momentum_3m=_momentum(closes, 63),
+        sma13=_sma(closes, 13),
+        sma50=_sma(closes, 50),
+        sma200=_sma(closes, 200),
+        rsi14=_rsi(closes, 14),
+    )
+    distance = _distance_to_sma(asset.value, asset.sma200)
+    asset = _replace_asset(
+        asset,
+        distance_sma200=distance,
+        trend_sigma_200d=_trend_sigma(distance, trend_volatility or daily_volatility, 200),
+    )
+    score, _, _, _ = _entry_quality(asset, macro_metrics)
+    return score
+
+
+def _forward_return(closes: list[float], index: int, horizon: int) -> float | None:
+    if index + horizon >= len(closes) or closes[index] == 0:
+        return None
+    return (closes[index + horizon] / closes[index] - 1) * 100
+
+
+def _forward_max_drawdown(closes: list[float], index: int, horizon: int) -> float | None:
+    if index + 1 >= len(closes):
+        return None
+    path = closes[index : min(len(closes), index + horizon + 1)]
+    if not path:
+        return None
+    peak = path[0]
+    max_drawdown = 0.0
+    for value in path:
+        peak = max(peak, value)
+        if peak:
+            max_drawdown = min(max_drawdown, (value / peak - 1) * 100)
+    return max_drawdown
+
+
+def _empty_backtest(threshold: int, summary: str) -> ETFBacktestStats:
+    return ETFBacktestStats(
+        threshold=threshold,
+        sample_size=0,
+        good_count=0,
+        coverage_pct=None,
+        good_forward_1m=None,
+        all_forward_1m=None,
+        good_forward_3m=None,
+        all_forward_3m=None,
+        good_forward_6m=None,
+        all_forward_6m=None,
+        good_hit_rate_3m=None,
+        all_hit_rate_3m=None,
+        good_max_drawdown_3m=None,
+        all_max_drawdown_3m=None,
+        reliability="样本不足",
+        summary=summary,
+    )
+
+
+def _backtest_to_cache(backtest: ETFBacktestStats | None) -> dict[str, Any] | None:
+    if backtest is None:
+        return None
+    return {
+        "threshold": backtest.threshold,
+        "sample_size": backtest.sample_size,
+        "good_count": backtest.good_count,
+        "coverage_pct": backtest.coverage_pct,
+        "good_forward_1m": backtest.good_forward_1m,
+        "all_forward_1m": backtest.all_forward_1m,
+        "good_forward_3m": backtest.good_forward_3m,
+        "all_forward_3m": backtest.all_forward_3m,
+        "good_forward_6m": backtest.good_forward_6m,
+        "all_forward_6m": backtest.all_forward_6m,
+        "good_hit_rate_3m": backtest.good_hit_rate_3m,
+        "all_hit_rate_3m": backtest.all_hit_rate_3m,
+        "good_max_drawdown_3m": backtest.good_max_drawdown_3m,
+        "all_max_drawdown_3m": backtest.all_max_drawdown_3m,
+        "reliability": backtest.reliability,
+        "summary": backtest.summary,
+    }
+
+
+def _backtest_from_cache(entry: Any) -> ETFBacktestStats | None:
+    if not isinstance(entry, dict):
+        return None
+    try:
+        return ETFBacktestStats(
+            threshold=int(entry.get("threshold") or 60),
+            sample_size=int(entry.get("sample_size") or 0),
+            good_count=int(entry.get("good_count") or 0),
+            coverage_pct=_safe_float(entry.get("coverage_pct")),
+            good_forward_1m=_safe_float(entry.get("good_forward_1m")),
+            all_forward_1m=_safe_float(entry.get("all_forward_1m")),
+            good_forward_3m=_safe_float(entry.get("good_forward_3m")),
+            all_forward_3m=_safe_float(entry.get("all_forward_3m")),
+            good_forward_6m=_safe_float(entry.get("good_forward_6m")),
+            all_forward_6m=_safe_float(entry.get("all_forward_6m")),
+            good_hit_rate_3m=_safe_float(entry.get("good_hit_rate_3m")),
+            all_hit_rate_3m=_safe_float(entry.get("all_hit_rate_3m")),
+            good_max_drawdown_3m=_safe_float(entry.get("good_max_drawdown_3m")),
+            all_max_drawdown_3m=_safe_float(entry.get("all_max_drawdown_3m")),
+            reliability=str(entry.get("reliability") or "样本不足"),
+            summary=str(entry.get("summary") or "历史回测样本不足。"),
+        )
+    except (TypeError, ValueError):
+        return None
+
+
+def _avg(values: list[float]) -> float | None:
+    clean = [value for value in values if math.isfinite(value)]
+    return sum(clean) / len(clean) if clean else None
+
+
+def _hit_rate(values: list[float]) -> float | None:
+    clean = [value for value in values if math.isfinite(value)]
+    if not clean:
+        return None
+    return sum(1 for value in clean if value > 0) / len(clean) * 100
 
 
 def _build_summary(assets: list[ETFAssetMonitor]) -> str:

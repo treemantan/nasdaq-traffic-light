@@ -349,7 +349,7 @@ def _render_etf_row(asset: ETFAssetMonitor) -> str:
       <td>{escape(sma)}<br><span class="muted">距200日线 {escape(_fmt_pct(asset.distance_sma200))} / {escape(trend_sigma)} · {escape(asset.trend_stretch_label)}</span></td>
       <td>{escape(valuation)}<br><span class="muted">{escape(asset.valuation_label)}</span><br><span class="muted">{escape(valuation_source)}</span></td>
       <td>{escape(pe_position)}</td>
-      <td><span class="tag {status}">{asset.entry_score}/100</span><br><span class="muted">{escape(asset.entry_label)}</span><br><span class="muted">{escape(asset.entry_note)}</span></td>
+      <td><span class="tag {status}">{asset.entry_score}/100</span><br><span class="muted">{escape(asset.entry_label)}</span><br><span class="muted">{escape(asset.entry_note)}</span><br><span class="muted">{escape(_fmt_backtest(asset))}</span></td>
       <td><span class="tag {status}">{asset.crowding_score}/100</span><br><span class="muted">{escape(asset.crowding_label)}</span></td>
     </tr>"""
 
@@ -378,7 +378,7 @@ def _render_etf_card(asset: ETFAssetMonitor) -> str:
         <div class="etf-card-line"><strong>RSI14</strong>{escape(rsi)}<br>{escape(asset.momentum_label)}</div>
         <div class="etf-card-line"><strong>趋势拉伸</strong>{escape(trend_line)}<br>{escape(asset.trend_stretch_label)}</div>
         <div class="etf-card-line"><strong>PE / Fwd / PB</strong>{escape(valuation)}<br>{escape(_fmt_pe_position(asset))} · {escape(valuation_source)}</div>
-        <div class="etf-card-line"><strong>新增仓位环境 {asset.entry_score}/100</strong>{escape(asset.entry_label)}<br>{escape(asset.risk_management_note)}</div>
+        <div class="etf-card-line"><strong>新增仓位环境 {asset.entry_score}/100</strong>{escape(asset.entry_label)}<br>{escape(asset.risk_management_note)}<br>{escape(_fmt_backtest(asset))}</div>
       </div>
     </article>"""
 
@@ -389,6 +389,19 @@ def _fmt_pe_position(asset: ETFAssetMonitor) -> str:
     if asset.pe_high_1y_ratio is not None:
         return f"约{asset.pe_high_1y_ratio:.0f}% / 1Y高点"
     return "样本不足"
+
+
+def _fmt_backtest(asset: ETFAssetMonitor) -> str:
+    backtest = asset.backtest
+    if backtest is None:
+        return "历史检验：暂无"
+    if backtest.sample_size <= 0:
+        return f"历史检验：{backtest.reliability}"
+    return (
+        f"历史检验：{backtest.reliability}；≥{backtest.threshold}样本 {backtest.good_count}/{backtest.sample_size}；"
+        f"3M {_fmt_pct(backtest.good_forward_3m)} vs 全样本 {_fmt_pct(backtest.all_forward_3m)}；"
+        f"3M回撤 {_fmt_pct(backtest.good_max_drawdown_3m)}"
+    )
 
 
 def _render_group(title: str, keys: list[str], metrics: dict[str, ScoredMetric]) -> str:
