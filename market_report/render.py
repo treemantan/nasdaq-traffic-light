@@ -397,11 +397,32 @@ def _fmt_backtest(asset: ETFAssetMonitor) -> str:
         return "历史检验：暂无"
     if backtest.sample_size <= 0:
         return f"历史检验：{backtest.reliability}"
+    good_path = " / ".join(
+        [
+            _fmt_pct(backtest.good_forward_1m),
+            _fmt_pct(backtest.good_forward_3m),
+            _fmt_pct(backtest.good_forward_6m),
+        ]
+    )
+    all_path = " / ".join(
+        [
+            _fmt_pct(backtest.all_forward_1m),
+            _fmt_pct(backtest.all_forward_3m),
+            _fmt_pct(backtest.all_forward_6m),
+        ]
+    )
+    similar_path = " / ".join(
+        [
+            _fmt_pct(backtest.similar_forward_1m),
+            _fmt_pct(backtest.similar_forward_3m),
+            _fmt_pct(backtest.similar_forward_6m),
+        ]
+    )
     return (
         f"历史检验：{backtest.reliability}；≥{backtest.threshold}样本 {backtest.good_count}/{backtest.sample_size}；"
-        f"3M {_fmt_pct(backtest.good_forward_3m)} vs 全样本 {_fmt_pct(backtest.all_forward_3m)}；"
+        f"1/3/6M {good_path} vs 全样本 {all_path}；"
         f"3M回撤 {_fmt_pct(backtest.good_max_drawdown_3m)}；"
-        f"相似样本{backtest.similar_count}个 3M {_fmt_pct(backtest.similar_forward_3m)} / 回撤 {_fmt_pct(backtest.similar_max_drawdown_3m)}"
+        f"相似样本{backtest.similar_count}个 1/3/6M {similar_path} / 回撤 {_fmt_pct(backtest.similar_max_drawdown_3m)}"
     )
 
 
