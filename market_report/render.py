@@ -115,6 +115,12 @@ def render_html_report(report: ScoredReport, title: str) -> str:
     .etf-card-line strong {{ display: block; color: var(--text); font-size: 13px; }}
     .etf-table td, .etf-table th {{ white-space: nowrap; }}
     .etf-table td:nth-child(2), .etf-table th:nth-child(2) {{ white-space: normal; }}
+    .etf-table td:nth-child(10), .etf-table th:nth-child(10) {{ min-width: 220px; max-width: 280px; white-space: normal; }}
+    .entry-main {{ display: grid; gap: 4px; }}
+    .entry-note {{ color: var(--subtle); font-size: 12px; }}
+    .entry-details {{ margin-top: 6px; color: var(--muted); font-size: 12px; }}
+    .entry-details summary {{ cursor: pointer; color: #bfdbfe; }}
+    .entry-details div {{ margin-top: 5px; line-height: 1.45; }}
     .tag {{ display: inline-block; border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; color: var(--subtle); background: rgba(255,255,255,.025); font-size: 12px; }}
     .tag-hot {{ color: #fca5a5; border-color: rgba(248,113,113,.45); }}
     .tag-cool {{ color: #86efac; border-color: rgba(134,239,172,.35); }}
@@ -343,6 +349,7 @@ def _render_etf_row(asset: ETFAssetMonitor) -> str:
     valuation_source = f"估值源：{asset.valuation_source}" if asset.valuation_source != "unavailable" else "估值源：暂无"
     pe_position = _fmt_pe_position(asset)
     symbol = f"{escape(asset.symbol)} · {escape(asset.provider)}"
+    entry_cell = _render_entry_cell(asset, entry_status, compact=False)
     return f"""<tr>
       <td><strong>{symbol}</strong><br><span class="muted">{escape(asset.label)}</span></td>
       <td>{escape(asset.theme)}<br><span class="muted">{escape(asset.trend_label)}</span></td>
@@ -353,7 +360,7 @@ def _render_etf_row(asset: ETFAssetMonitor) -> str:
       <td>{escape(sma)}<br><span class="muted">距200日线 {escape(_fmt_pct(asset.distance_sma200))} / {escape(trend_sigma)} · {escape(asset.trend_stretch_label)}</span></td>
       <td>{escape(valuation)}<br><span class="muted">{escape(asset.valuation_label)}</span><br><span class="muted">{escape(valuation_source)}</span></td>
       <td>{escape(pe_position)}</td>
-      <td><span class="tag {entry_status}">{asset.entry_score}/100</span><br><span class="muted">{escape(asset.entry_label)}</span><br><span class="muted">{escape(asset.entry_note)}</span><br><span class="muted">{escape(_fmt_backtest(asset))}</span></td>
+      <td>{entry_cell}</td>
       <td><span class="tag {crowding_status}">{asset.crowding_score}/100</span><br><span class="muted">{escape(asset.crowding_label)}</span></td>
     </tr>"""
 
@@ -368,6 +375,7 @@ def _render_etf_card(asset: ETFAssetMonitor) -> str:
     valuation = f"{_fmt_plain(asset.pe)} / {_fmt_plain(asset.forward_pe)} / {_fmt_plain(asset.pb)}"
     valuation_source = f"估值源：{asset.valuation_source}" if asset.valuation_source != "unavailable" else "估值源：暂无"
     trend_line = f"距200日线 {_fmt_pct(asset.distance_sma200)} / {_fmt_sigma_200d(asset.trend_sigma_200d)}"
+    entry_cell = _render_entry_cell(asset, entry_status, compact=True)
     return f"""<article class="etf-card">
       <div class="etf-card-head">
         <div>
@@ -383,9 +391,24 @@ def _render_etf_card(asset: ETFAssetMonitor) -> str:
         <div class="etf-card-line"><strong>RSI14</strong>{escape(rsi)}<br>{escape(asset.momentum_label)}</div>
         <div class="etf-card-line"><strong>趋势拉伸</strong>{escape(trend_line)}<br>{escape(asset.trend_stretch_label)}</div>
         <div class="etf-card-line"><strong>PE / Fwd / PB</strong>{escape(valuation)}<br>{escape(_fmt_pe_position(asset))} · {escape(valuation_source)}</div>
-        <div class="etf-card-line"><strong>新增仓位环境 <span class="tag {entry_status}">{asset.entry_score}/100</span></strong>{escape(asset.entry_label)}<br>{escape(asset.risk_management_note)}<br>{escape(_fmt_backtest(asset))}</div>
+        <div class="etf-card-line">{entry_cell}</div>
       </div>
     </article>"""
+
+
+def _render_entry_cell(asset: ETFAssetMonitor, status_class: str, compact: bool) -> str:
+    note = asset.risk_management_note if compact else asset.entry_note
+    return (
+        f'<div class="entry-main">'
+        f'<span class="tag {status_class}">{asset.entry_score}/100</span>'
+        f'<strong>{escape(asset.entry_label)}</strong>'
+        f'<span class="entry-note">{escape(note)}</span>'
+        f'</div>'
+        f'<details class="entry-details">'
+        f'<summary>历史检验详情</summary>'
+        f'<div>{escape(_fmt_backtest(asset))}</div>'
+        f'</details>'
+    )
 
 
 def _crowding_status_class(score: int) -> str:
