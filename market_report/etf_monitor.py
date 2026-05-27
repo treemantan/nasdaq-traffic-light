@@ -43,6 +43,7 @@ class ETFSpec:
     provider: str
     currency: str = "GBP"
     equity_like: bool = True
+    ter: float | None = None
 
 
 @dataclass(frozen=True)
@@ -107,6 +108,7 @@ class ETFAssetMonitor:
     previous_value: float | None
     as_of: date | None
     fetched_at: datetime
+    ter: float | None = None
     change_pct: float | None = None
     daily_sigma: float | None = None
     daily_volatility: float | None = None
@@ -153,34 +155,34 @@ class ETFMonitor:
 
 
 DEFAULT_ETF_SPECS = [
-    ETFSpec("vwrl", "Vanguard FTSE All-World UCITS ETF", "VWRL.L", "Global Equity", "Vanguard"),
-    ETFSpec("vuag", "Vanguard S&P 500 UCITS ETF", "VUAG.L", "S&P 500", "Vanguard"),
-    ETFSpec("cnx1", "iShares Nasdaq 100 UCITS ETF", "CNX1.L", "Nasdaq 100", "iShares"),
-    ETFSpec("iitu", "iShares S&P 500 Information Technology Sector ETF", "IITU.L", "US Technology", "iShares"),
-    ETFSpec("ainf", "iShares AI Infrastructure UCITS ETF", "AINF.L", "AI Infrastructure", "iShares"),
-    ETFSpec("wtai", "WisdomTree Artificial Intelligence ETF", "WTAI.L", "Artificial Intelligence", "WisdomTree"),
-    ETFSpec("aiai", "L&G Artificial Intelligence UCITS ETF", "AIAI.L", "Artificial Intelligence", "L&G"),
-    ETFSpec("semi", "iShares Global Semiconductors ETF", "SEMI.L", "Semiconductor", "iShares"),
-    ETFSpec("smgb", "VanEck Semiconductor UCITS ETF", "SMGB.L", "Semiconductor", "VanEck"),
-    ETFSpec("semg", "Amundi MSCI Semiconductors UCITS ETF", "SEMG.L", "Semiconductor", "Amundi"),
-    ETFSpec("rbot", "iShares Automation & Robotics UCITS ETF", "RBOT.L", "Robotics & Automation", "iShares"),
-    ETFSpec("wcld", "WisdomTree Cloud Computing UCITS ETF", "WCLD.L", "Cloud Software", "WisdomTree"),
-    ETFSpec("lock", "iShares Digital Security UCITS ETF", "LOCK.L", "Cybersecurity", "iShares"),
-    ETFSpec("qwtm", "WisdomTree Quantum Computing ETF", "QWTM.L", "Quantum Computing", "WisdomTree"),
-    ETFSpec("qntm", "VanEck Quantum Computing ETF", "QNTM.L", "Quantum Computing", "VanEck"),
-    ETFSpec("qant", "iShares Quantum Computing ETF", "QANT.L", "Quantum Computing", "iShares"),
-    ETFSpec("cskr", "iShares MSCI Korea UCITS ETF", "CSKR.L", "South Korea Equity", "iShares"),
-    ETFSpec("hkor", "HSBC MSCI Korea Capped UCITS ETF", "HKOR.L", "South Korea Equity", "HSBC"),
-    ETFSpec("flrk", "Franklin FTSE Korea UCITS ETF", "FLRK.L", "South Korea Equity", "Franklin"),
-    ETFSpec("dfnd", "iShares Global Aerospace & Defence UCITS ETF", "DFND.L", "Defence", "iShares"),
-    ETFSpec("wdef", "WisdomTree Europe Defence UCITS ETF", "WDEF.L", "European Defence", "WisdomTree"),
-    ETFSpec("dfng", "VanEck Defense UCITS ETF", "DFNG.L", "Defence", "VanEck"),
-    ETFSpec("nato", "HANetf Future of Defence UCITS ETF", "NATO.L", "Defence", "HANetf"),
-    ETFSpec("dfnx", "Invesco Defence Innovation UCITS ETF", "DFNX.L", "Defence Innovation", "Invesco"),
-    ETFSpec("dfeu", "iShares Europe Defence UCITS ETF", "DFEU.L", "European Defence", "iShares"),
-    ETFSpec("sgln", "iShares Physical Gold ETC", "SGLN.L", "Gold", "iShares", equity_like=False),
-    ETFSpec("phau", "WisdomTree Physical Gold", "PHAU.L", "Gold", "WisdomTree", equity_like=False),
-    ETFSpec("sgbx", "WisdomTree Physical Swiss Gold", "SGBX.L", "Gold", "WisdomTree", equity_like=False),
+    ETFSpec("vwrl", "Vanguard FTSE All-World UCITS ETF", "VWRL.L", "Global Equity", "Vanguard", ter=0.22),
+    ETFSpec("vuag", "Vanguard S&P 500 UCITS ETF", "VUAG.L", "S&P 500", "Vanguard", ter=0.07),
+    ETFSpec("cnx1", "iShares Nasdaq 100 UCITS ETF", "CNX1.L", "Nasdaq 100", "iShares", ter=0.33),
+    ETFSpec("iitu", "iShares S&P 500 Information Technology Sector ETF", "IITU.L", "US Technology", "iShares", ter=0.15),
+    ETFSpec("ainf", "iShares AI Infrastructure UCITS ETF", "AINF.L", "AI Infrastructure", "iShares", ter=0.35),
+    ETFSpec("wtai", "WisdomTree Artificial Intelligence ETF", "WTAI.L", "Artificial Intelligence", "WisdomTree", ter=0.40),
+    ETFSpec("aiai", "L&G Artificial Intelligence UCITS ETF", "AIAI.L", "Artificial Intelligence", "L&G", ter=0.49),
+    ETFSpec("semi", "iShares Global Semiconductors ETF", "SEMI.L", "Semiconductor", "iShares", ter=0.35),
+    ETFSpec("smgb", "VanEck Semiconductor UCITS ETF", "SMGB.L", "Semiconductor", "VanEck", ter=0.35),
+    ETFSpec("semg", "Amundi MSCI Semiconductors UCITS ETF", "SEMG.L", "Semiconductor", "Amundi", ter=0.35),
+    ETFSpec("rbot", "iShares Automation & Robotics UCITS ETF", "RBOT.L", "Robotics & Automation", "iShares", ter=0.40),
+    ETFSpec("wcld", "WisdomTree Cloud Computing UCITS ETF", "WCLD.L", "Cloud Software", "WisdomTree", ter=0.40),
+    ETFSpec("lock", "iShares Digital Security UCITS ETF", "LOCK.L", "Cybersecurity", "iShares", ter=0.40),
+    ETFSpec("qwtm", "WisdomTree Quantum Computing ETF", "QWTM.L", "Quantum Computing", "WisdomTree", ter=0.45),
+    ETFSpec("qntm", "VanEck Quantum Computing ETF", "QNTM.L", "Quantum Computing", "VanEck", ter=0.55),
+    ETFSpec("qant", "iShares Quantum Computing ETF", "QANT.L", "Quantum Computing", "iShares", ter=0.50),
+    ETFSpec("cskr", "iShares MSCI Korea UCITS ETF", "CSKR.L", "South Korea Equity", "iShares", ter=0.65),
+    ETFSpec("hkor", "HSBC MSCI Korea Capped UCITS ETF", "HKOR.L", "South Korea Equity", "HSBC", ter=0.50),
+    ETFSpec("flrk", "Franklin FTSE Korea UCITS ETF", "FLRK.L", "South Korea Equity", "Franklin", ter=0.09),
+    ETFSpec("dfnd", "iShares Global Aerospace & Defence UCITS ETF", "DFND.L", "Defence", "iShares", ter=0.35),
+    ETFSpec("wdef", "WisdomTree Europe Defence UCITS ETF", "WDEF.L", "European Defence", "WisdomTree", ter=0.40),
+    ETFSpec("dfng", "VanEck Defense UCITS ETF", "DFNG.L", "Defence", "VanEck", ter=0.55),
+    ETFSpec("nato", "HANetf Future of Defence UCITS ETF", "NATO.L", "Defence", "HANetf", ter=0.49),
+    ETFSpec("dfnx", "Invesco Defence Innovation UCITS ETF", "DFNX.L", "Defence Innovation", "Invesco", ter=0.35),
+    ETFSpec("dfeu", "iShares Europe Defence UCITS ETF", "DFEU.L", "European Defence", "iShares", ter=0.35),
+    ETFSpec("sgln", "iShares Physical Gold ETC", "SGLN.L", "Gold", "iShares", equity_like=False, ter=0.12),
+    ETFSpec("phau", "WisdomTree Physical Gold", "PHAU.L", "Gold", "WisdomTree", equity_like=False, ter=0.39),
+    ETFSpec("sgbx", "WisdomTree Physical Swiss Gold", "SGBX.L", "Gold", "WisdomTree", equity_like=False, ter=0.15),
 ]
 
 
@@ -287,6 +289,7 @@ def _fetch_etf_asset(
         previous_value=previous,
         as_of=history[-1][0],
         fetched_at=fetched_at,
+        ter=spec.ter,
         change_pct=one_day_change,
         daily_sigma=daily_sigma,
         daily_volatility=daily_volatility,
@@ -371,6 +374,7 @@ def _cached_or_failed(
         previous_value=None,
         as_of=None,
         fetched_at=fetched_at,
+        ter=spec.ter,
         status="missing",
         warnings=(f"{spec.label}（{spec.symbol}）ETF数据暂不可用：{reason}",),
     )
@@ -556,6 +560,7 @@ def _write_asset_cache(cache: dict[str, Any], asset: ETFAssetMonitor) -> None:
         "theme": asset.theme,
         "provider": asset.provider,
         "currency": asset.currency,
+        "ter": asset.ter,
         "value": asset.value,
         "previous_value": asset.previous_value,
         "as_of": asset.as_of.isoformat() if asset.as_of else None,
@@ -615,6 +620,7 @@ def _asset_from_cache(spec: ETFSpec, entry: dict[str, Any], fetched_at: datetime
         theme=entry.get("theme") or spec.theme,
         provider=entry.get("provider") or spec.provider,
         currency=entry.get("currency") or spec.currency,
+        ter=_safe_float(entry.get("ter")) if entry.get("ter") is not None else spec.ter,
         value=_safe_float(entry.get("value")),
         previous_value=_safe_float(entry.get("previous_value")),
         as_of=as_of,
@@ -837,6 +843,7 @@ def _historical_entry_snapshot(
         previous_value=previous,
         as_of=history[-1][0],
         fetched_at=datetime.combine(history[-1][0], datetime.min.time(), timezone.utc),
+        ter=spec.ter,
         change_pct=_pct_change(value, previous),
         daily_sigma=_sigma_move(_pct_change(value, previous), daily_volatility),
         daily_volatility=daily_volatility,

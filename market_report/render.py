@@ -398,9 +398,12 @@ def _etf_group_stats(assets: list[ETFAssetMonitor]) -> str:
     count = len(assets)
     avg_entry = _avg_number(asset.entry_score for asset in assets)
     avg_crowding = _avg_number(asset.crowding_score for asset in assets)
+    avg_ter = _avg_number(asset.ter for asset in assets if asset.ter is not None)
     hot = [asset.symbol for asset in assets if asset.crowding_score >= 70]
     strong = [asset.symbol for asset in assets if asset.entry_score >= 70]
     parts = [f"{count}只", f"新增环境均值 {avg_entry:.0f}/100", f"拥挤度均值 {avg_crowding:.0f}/100"]
+    if avg_ter:
+        parts.append(f"平均TER {avg_ter:.2f}%")
     if strong:
         parts.append("环境较好：" + "、".join(strong[:3]))
     if hot:
@@ -427,9 +430,10 @@ def _render_etf_row(asset: ETFAssetMonitor) -> str:
     valuation_source = f"估值源：{asset.valuation_source}" if asset.valuation_source != "unavailable" else "估值源：暂无"
     pe_position = _fmt_pe_position(asset)
     symbol = f"{escape(asset.symbol)} · {escape(asset.provider)}"
+    cost = f"TER {escape(_fmt_ter(asset.ter))} · {escape(_ter_label(asset.ter))}"
     entry_cell = _render_entry_cell(asset, entry_status, compact=False)
     return f"""<tr>
-      <td><strong>{symbol}</strong><br><span class="muted">{escape(asset.label)}</span></td>
+      <td><strong>{symbol}</strong><br><span class="muted">{escape(asset.label)}</span><br><span class="muted">{cost}</span></td>
       <td>{escape(asset.theme)}<br><span class="muted">{escape(asset.trend_label)}</span></td>
       <td>{escape(price)}</td>
       <td>{escape(one_day)}<br><span class="muted">{escape(sigma)} · {escape(asset.sigma_label)}</span></td>
@@ -453,6 +457,7 @@ def _render_etf_card(asset: ETFAssetMonitor) -> str:
     valuation = f"{_fmt_plain(asset.pe)} / {_fmt_plain(asset.forward_pe)} / {_fmt_plain(asset.pb)}"
     valuation_source = f"估值源：{asset.valuation_source}" if asset.valuation_source != "unavailable" else "估值源：暂无"
     trend_line = f"距200日线 {_fmt_pct(asset.distance_sma200)} / {_fmt_sigma_200d(asset.trend_sigma_200d)}"
+    cost_line = f"TER {_fmt_ter(asset.ter)} · {_ter_label(asset.ter)}"
     entry_cell = _render_entry_cell(asset, entry_status, compact=True)
     return f"""<article class="etf-card">
       <div class="etf-card-head">
@@ -463,7 +468,7 @@ def _render_etf_card(asset: ETFAssetMonitor) -> str:
         <span class="tag {crowding_status}">{asset.crowding_score}/100</span>
       </div>
       <div class="etf-card-price">{escape(price)}</div>
-      <div class="etf-card-meta">{escape(asset.theme)} · {escape(asset.trend_label)}</div>
+      <div class="etf-card-meta">{escape(asset.theme)} · {escape(asset.trend_label)} · {escape(cost_line)}</div>
       <div class="etf-card-lines">
         <div class="etf-card-line"><strong>1D / 1M</strong>{escape(one_day)} / {escape(one_month)}<br>{escape(_fmt_sigma(asset.daily_sigma))}</div>
         <div class="etf-card-line"><strong>RSI14</strong>{escape(rsi)}<br>{escape(asset.momentum_label)}</div>
@@ -546,6 +551,24 @@ def _entry_status_class(score: int) -> str:
     if score >= 55:
         return "tag-entry-watch"
     return "tag-entry-bad"
+
+
+def _fmt_ter(value: float | None) -> str:
+    if value is None:
+        return "N/A"
+    return f"{value:.2f}%"
+
+
+def _ter_label(value: float | None) -> str:
+    if value is None:
+        return "费率待确认"
+    if value <= 0.15:
+        return "低成本"
+    if value <= 0.35:
+        return "成本适中"
+    if value <= 0.50:
+        return "主题费率偏高"
+    return "高费率"
 
 
 def _fmt_pe_position(asset: ETFAssetMonitor) -> str:

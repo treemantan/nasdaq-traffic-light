@@ -235,7 +235,7 @@ def _render_etf_email_group(group: tuple[str, str, list[ETFAssetMonitor]]) -> st
 def _render_etf_row(asset: ETFAssetMonitor) -> str:
     valuation_source = f"估值源：{asset.valuation_source}" if asset.valuation_source != "unavailable" else "估值源：暂无"
     return f"""<tr>
-      <td style="padding:7px;border-bottom:1px solid #263244;"><strong>{escape(asset.symbol)}</strong><br>{escape(asset.provider)}</td>
+      <td style="padding:7px;border-bottom:1px solid #263244;"><strong>{escape(asset.symbol)}</strong><br>{escape(asset.provider)}<br><span style="color:#9ca3af;">TER {escape(_fmt_ter(asset.ter))} · {escape(_ter_label(asset.ter))}</span></td>
       <td style="padding:7px;border-bottom:1px solid #263244;">{escape(asset.theme)}<br>{escape(_fmt_sigma_200d(asset.trend_sigma_200d))} · {escape(asset.trend_stretch_label)}</td>
       <td style="padding:7px;border-bottom:1px solid #263244;">{escape(_fmt_sigma(asset.daily_sigma))} / {escape(_fmt_pct(asset.momentum_1m))} / {escape(_fmt_plain(asset.rsi14))}<br>{escape(asset.sigma_label)}</td>
       <td style="padding:7px;border-bottom:1px solid #263244;">{escape(_fmt_plain(asset.pe))} / {escape(_fmt_plain(asset.forward_pe))}<br>{escape(asset.valuation_label)}<br><span style="color:#9ca3af;">{escape(valuation_source)}</span></td>
@@ -272,9 +272,12 @@ def _etf_group_stats(assets: list[ETFAssetMonitor]) -> str:
     count = len(assets)
     avg_entry = _avg_number(asset.entry_score for asset in assets)
     avg_crowding = _avg_number(asset.crowding_score for asset in assets)
+    avg_ter = _avg_number(asset.ter for asset in assets if asset.ter is not None)
     hot = [asset.symbol for asset in assets if asset.crowding_score >= 70]
     strong = [asset.symbol for asset in assets if asset.entry_score >= 70]
     parts = [f"{count}只", f"新增环境均值 {avg_entry:.0f}/100", f"拥挤度均值 {avg_crowding:.0f}/100"]
+    if avg_ter:
+        parts.append(f"平均TER {avg_ter:.2f}%")
     if strong:
         parts.append("环境较好：" + "、".join(strong[:3]))
     if hot:
@@ -333,6 +336,24 @@ def _fmt_rate(value: float | None) -> str:
     if value is None:
         return "N/A"
     return f"{value:.2f}%"
+
+
+def _fmt_ter(value: float | None) -> str:
+    if value is None:
+        return "N/A"
+    return f"{value:.2f}%"
+
+
+def _ter_label(value: float | None) -> str:
+    if value is None:
+        return "费率待确认"
+    if value <= 0.15:
+        return "低成本"
+    if value <= 0.35:
+        return "成本适中"
+    if value <= 0.50:
+        return "主题费率偏高"
+    return "高费率"
 
 
 def _render_metric_card(item: ScoredMetric) -> str:
