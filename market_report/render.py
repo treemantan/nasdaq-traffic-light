@@ -111,7 +111,7 @@ def render_html_report(report: ScoredReport, title: str) -> str:
     .etf-group-stats {{ text-align: right; color: var(--subtle); font-size: 12px; min-width: 180px; }}
     .etf-group-body {{ padding: 12px; }}
     .table-scroll {{ max-width: 100%; overflow-x: auto; overflow-y: hidden; }}
-    .table-scroll table {{ min-width: 1420px; }}
+    .table-scroll table {{ min-width: 1580px; }}
     .etf-cards {{ display: none; }}
     .etf-card-grid {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }}
     .etf-card {{ border: 1px solid var(--line); border-radius: 8px; background: rgba(255,255,255,.025); padding: 12px; min-width: 0; }}
@@ -124,7 +124,8 @@ def render_html_report(report: ScoredReport, title: str) -> str:
     .etf-card-line strong {{ display: block; color: var(--text); font-size: 13px; }}
     .etf-table td, .etf-table th {{ white-space: nowrap; }}
     .etf-table td:nth-child(2), .etf-table th:nth-child(2) {{ white-space: normal; }}
-    .etf-table td:nth-child(10), .etf-table th:nth-child(10) {{ min-width: 220px; max-width: 280px; white-space: normal; }}
+    .etf-table td:nth-child(9), .etf-table th:nth-child(9) {{ min-width: 170px; max-width: 220px; white-space: normal; }}
+    .etf-table td:nth-child(11), .etf-table th:nth-child(11) {{ min-width: 220px; max-width: 280px; white-space: normal; }}
     .entry-main {{ display: grid; gap: 4px; }}
     .entry-note {{ color: var(--subtle); font-size: 12px; }}
     .entry-details {{ margin-top: 6px; color: var(--muted); font-size: 12px; }}
@@ -356,6 +357,7 @@ def _render_etf_group(group: tuple[str, str, list[ETFAssetMonitor]], index: int 
             <th>RSI14</th>
             <th>SMA13/200</th>
             <th>PE / Forward PE / PB</th>
+            <th>规模/流动性</th>
             <th>PE位置</th>
             <th>新增仓位环境</th>
             <th>拥挤度</th>
@@ -428,6 +430,7 @@ def _render_etf_row(asset: ETFAssetMonitor) -> str:
     trend_sigma = _fmt_sigma_200d(asset.trend_sigma_200d)
     valuation = f"{_fmt_plain(asset.pe)} / {_fmt_plain(asset.forward_pe)} / {_fmt_plain(asset.pb)}"
     valuation_source = f"估值源：{asset.valuation_source}" if asset.valuation_source != "unavailable" else "估值源：暂无"
+    liquidity = _fmt_liquidity(asset)
     pe_position = _fmt_pe_position(asset)
     symbol = f"{escape(asset.symbol)} · {escape(asset.provider)}"
     cost = f"TER {escape(_fmt_ter(asset.ter))} · {escape(_ter_label(asset.ter))}"
@@ -441,6 +444,7 @@ def _render_etf_row(asset: ETFAssetMonitor) -> str:
       <td>{escape(rsi)}<br><span class="muted">{escape(asset.momentum_label)}</span></td>
       <td>{escape(sma)}<br><span class="muted">距200日线 {escape(_fmt_pct(asset.distance_sma200))} / {escape(trend_sigma)} · {escape(asset.trend_stretch_label)}</span></td>
       <td>{escape(valuation)}<br><span class="muted">{escape(asset.valuation_label)}</span><br><span class="muted">{escape(valuation_source)}</span></td>
+      <td>{escape(asset.liquidity_label)}<br><span class="muted">{escape(liquidity)}</span></td>
       <td>{escape(pe_position)}</td>
       <td>{entry_cell}</td>
       <td><span class="tag {crowding_status}">{asset.crowding_score}/100</span><br><span class="muted">{escape(asset.crowding_label)}</span></td>
@@ -456,6 +460,7 @@ def _render_etf_card(asset: ETFAssetMonitor) -> str:
     rsi = "N/A" if asset.rsi14 is None else f"{asset.rsi14:.1f}"
     valuation = f"{_fmt_plain(asset.pe)} / {_fmt_plain(asset.forward_pe)} / {_fmt_plain(asset.pb)}"
     valuation_source = f"估值源：{asset.valuation_source}" if asset.valuation_source != "unavailable" else "估值源：暂无"
+    liquidity = _fmt_liquidity(asset)
     trend_line = f"距200日线 {_fmt_pct(asset.distance_sma200)} / {_fmt_sigma_200d(asset.trend_sigma_200d)}"
     cost_line = f"TER {_fmt_ter(asset.ter)} · {_ter_label(asset.ter)}"
     entry_cell = _render_entry_cell(asset, entry_status, compact=True)
@@ -474,6 +479,7 @@ def _render_etf_card(asset: ETFAssetMonitor) -> str:
         <div class="etf-card-line"><strong>RSI14</strong>{escape(rsi)}<br>{escape(asset.momentum_label)}</div>
         <div class="etf-card-line"><strong>趋势拉伸</strong>{escape(trend_line)}<br>{escape(asset.trend_stretch_label)}</div>
         <div class="etf-card-line"><strong>PE / Fwd / PB</strong>{escape(valuation)}<br>{escape(_fmt_pe_position(asset))} · {escape(valuation_source)}</div>
+        <div class="etf-card-line"><strong>规模/流动性</strong>{escape(asset.liquidity_label)}<br>{escape(liquidity)}</div>
         <div class="etf-card-line">{entry_cell}</div>
       </div>
     </article>"""
@@ -569,6 +575,33 @@ def _ter_label(value: float | None) -> str:
     if value <= 0.50:
         return "主题费率偏高"
     return "高费率"
+
+
+def _fmt_liquidity(asset: ETFAssetMonitor) -> str:
+    parts = []
+    if asset.aum is not None:
+        parts.append(f"AUM {_fmt_money_short(asset.aum)}")
+    if asset.avg_traded_value_20d is not None:
+        parts.append(f"20日均成交额 {_fmt_money_short(asset.avg_traded_value_20d)}")
+    if asset.bid_ask_spread_pct is not None:
+        parts.append(f"价差 {asset.bid_ask_spread_pct:.2f}%")
+    else:
+        parts.append("价差待确认")
+    if not parts:
+        parts.append(asset.liquidity_note)
+    return "；".join(parts)
+
+
+def _fmt_money_short(value: float | None) -> str:
+    if value is None:
+        return "N/A"
+    if abs(value) >= 1_000_000_000:
+        return f"{value / 1_000_000_000:.2f}B"
+    if abs(value) >= 1_000_000:
+        return f"{value / 1_000_000:.2f}M"
+    if abs(value) >= 1_000:
+        return f"{value / 1_000:.0f}K"
+    return f"{value:.0f}"
 
 
 def _fmt_pe_position(asset: ETFAssetMonitor) -> str:

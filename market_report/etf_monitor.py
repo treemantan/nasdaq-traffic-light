@@ -35,6 +35,12 @@ _MARKET_ENV_HISTORY_CACHE: dict[str, list[tuple[date, float]]] | None = None
 
 
 @dataclass(frozen=True)
+class ETFPriceData:
+    history: list[tuple[date, float]]
+    volumes: list[tuple[date, float]]
+
+
+@dataclass(frozen=True)
 class ETFSpec:
     key: str
     label: str
@@ -130,6 +136,13 @@ class ETFAssetMonitor:
     pb_percentile: float | None = None
     pe_high_1y: float | None = None
     pe_high_1y_ratio: float | None = None
+    aum: float | None = None
+    avg_volume_20d: float | None = None
+    avg_traded_value_20d: float | None = None
+    bid_ask_spread_pct: float | None = None
+    liquidity_label: str = "流动性待确认"
+    liquidity_note: str = "成交量、规模或价差数据不足。"
+    liquidity_source: str = "unavailable"
     trend_label: str = "趋势待确认"
     momentum_label: str = "动量待确认"
     valuation_label: str = "估值数据不足"
@@ -225,7 +238,8 @@ def _fetch_etf_asset(
     cache: dict[str, Any],
     macro_metrics: dict[str, Any] | None = None,
 ) -> ETFAssetMonitor:
-    history = _fetch_yahoo_history(spec.symbol)
+    price_data = _fetch_yahoo_price_data(spec.symbol)
+    history = price_data.history
     if len(history) < 2:
         raise ValueError(f"{spec.symbol} returned insufficient price history")
     history = sorted(history, key=lambda item: item[0])
@@ -278,6 +292,8 @@ def _fetch_etf_asset(
     warnings = _valuation_warnings(spec, pe, forward_pe, pb, pe_percentile, pe_high_1y_ratio)
     if valuation_fetch_warning:
         warnings.append(valuation_fetch_warning)
+    liquidity = _fetch_liquidity_profile(spec, history, price_data.volumes)
+    warnings.extend(liquidity["warnings"])
     asset = ETFAssetMonitor(
         key=spec.key,
         label=spec.label,
@@ -309,6 +325,13 @@ def _fetch_etf_asset(
         pb_percentile=pb_percentile,
         pe_high_1y=pe_high_1y,
         pe_high_1y_ratio=pe_high_1y_ratio,
+        aum=liquidity["aum"],
+        avg_volume_20d=liquidity["avg_volume_20d"],
+        avg_traded_value_20d=liquidity["avg_traded_value_20d"],
+        bid_ask_spread_pct=liquidity["bid_ask_spread_pct"],
+        liquidity_label=liquidity["label"],
+        liquidity_note=liquidity["note"],
+        liquidity_source=liquidity["source"],
         source="Yahoo",
         warnings=tuple(warnings),
     )
@@ -381,6 +404,10 @@ def _cached_or_failed(
 
 
 def _fetch_yahoo_history(symbol: str) -> list[tuple[date, float]]:
+    return _fetch_yahoo_price_data(symbol).history
+
+
+def _fetch_yahoo_price_data(symbol: str) -> ETFPriceData:
     encoded = urllib.parse.quote(symbol, safe="")
     urls = [
         f"https://query2.finance.yahoo.com/v8/finance/chart/{encoded}?range=5y&interval=1d",
@@ -398,14 +425,22 @@ def _fetch_yahoo_history(symbol: str) -> list[tuple[date, float]]:
     result = payload["chart"]["result"][0]
     scale = 0.01 if result.get("meta", {}).get("currency") == "GBp" else 1.0
     timestamps = result.get("timestamp", [])
-    closes = result.get("indicators", {}).get("quote", [{}])[0].get("close", [])
+    quote = result.get("indicators", {}).get("quote", [{}])[0]
+    closes = quote.get("close", [])
+    raw_volumes = quote.get("volume", [])
     pairs: list[tuple[date, float]] = []
-    for timestamp, close in zip(timestamps, closes):
+    volumes: list[tuple[date, float]] = []
+    for index, timestamp in enumerate(timestamps):
+        day = datetime.fromtimestamp(timestamp, timezone.utc).date()
+        close = closes[index] if index < len(closes) else None
+        volume = raw_volumes[index] if index < len(raw_volumes) else None
         value = _safe_float(close)
-        if value is None:
-            continue
-        pairs.append((datetime.fromtimestamp(timestamp, timezone.utc).date(), value * scale))
-    return pairs
+        vol = _safe_float(volume)
+        if value is not None:
+            pairs.append((day, value * scale))
+        if vol is not None:
+            volumes.append((day, vol))
+    return ETFPriceData(history=pairs, volumes=volumes)
 
 
 def _fetch_market_env_histories() -> dict[str, list[tuple[date, float]]]:
@@ -466,6 +501,117 @@ def _fetch_stockanalysis_valuation_url(url: str) -> dict[str, float | None]:
         "forwardPE": _extract_script_number(text, "forwardPE"),
         "priceToBook": _extract_script_number(text, "priceToBook"),
     }
+
+
+def _fetch_liquidity_profile(
+    spec: ETFSpec,
+    history: list[tuple[date, float]],
+    volumes: list[tuple[date, float]],
+) -> dict[str, Any]:
+    warnings: list[str] = []
+    recent_prices = {day: close for day, close in history[-40:]}
+    traded_values = [
+        recent_prices[day] * volume
+        for day, volume in volumes[-40:]
+        if day in recent_prices and volume is not None and volume >= 0
+    ]
+    recent_volumes = [volume for _, volume in volumes[-20:] if volume is not None and volume >= 0]
+    avg_volume_20d = sum(recent_volumes) / len(recent_volumes) if recent_volumes else None
+    avg_traded_value_20d = sum(traded_values[-20:]) / len(traded_values[-20:]) if traded_values else None
+    aum = None
+    aum_source = ""
+    try:
+        aum = _fetch_stockanalysis_assets(spec.symbol)
+        aum_source = "StockAnalysis assets" if aum is not None else ""
+    except Exception as exc:
+        warnings.append(f"{spec.symbol} AUM暂不可用：{type(exc).__name__}")
+    source_parts = ["Yahoo volume"]
+    if aum_source:
+        source_parts.append(aum_source)
+    label, note = _liquidity_assessment(aum, avg_volume_20d, avg_traded_value_20d, None)
+    return {
+        "aum": aum,
+        "avg_volume_20d": avg_volume_20d,
+        "avg_traded_value_20d": avg_traded_value_20d,
+        "bid_ask_spread_pct": None,
+        "label": label,
+        "note": note,
+        "source": "; ".join(source_parts),
+        "warnings": warnings,
+    }
+
+
+def _fetch_stockanalysis_assets(symbol: str) -> float | None:
+    ticker = symbol.upper()
+    if ticker.endswith(".L"):
+        ticker = ticker[:-2]
+    if not ticker or not re.fullmatch(r"[A-Z0-9]+", ticker):
+        return None
+    text = _read_text(f"https://stockanalysis.com/quote/lon/{ticker}/", timeout=15)
+    match = re.search(r">\s*Assets\s*</td>\s*<td[^>]*>\s*([^<]+)\s*</td>", text, re.IGNORECASE)
+    if not match:
+        return None
+    return _parse_compact_number(match.group(1))
+
+
+def _parse_compact_number(raw: str) -> float | None:
+    text = raw.replace(",", "").strip()
+    match = re.search(r"(-?\d+(?:\.\d+)?)\s*([KMBT]?)", text, re.IGNORECASE)
+    if not match:
+        return None
+    value = _safe_float(match.group(1))
+    if value is None:
+        return None
+    multiplier = {"": 1, "K": 1_000, "M": 1_000_000, "B": 1_000_000_000, "T": 1_000_000_000_000}
+    return value * multiplier.get(match.group(2).upper(), 1)
+
+
+def _format_money_short(value: float) -> str:
+    if abs(value) >= 1_000_000_000:
+        return f"{value / 1_000_000_000:.2f}B"
+    if abs(value) >= 1_000_000:
+        return f"{value / 1_000_000:.2f}M"
+    if abs(value) >= 1_000:
+        return f"{value / 1_000:.0f}K"
+    return f"{value:.0f}"
+
+
+def _format_shares(value: float) -> str:
+    if abs(value) >= 1_000_000:
+        return f"{value / 1_000_000:.2f}M"
+    if abs(value) >= 1_000:
+        return f"{value / 1_000:.0f}K"
+    return f"{value:.0f}"
+
+
+def _liquidity_assessment(
+    aum: float | None,
+    avg_volume_20d: float | None,
+    avg_traded_value_20d: float | None,
+    bid_ask_spread_pct: float | None,
+) -> tuple[str, str]:
+    if avg_traded_value_20d is None and aum is None:
+        return "流动性待确认", "成交额和AUM暂缺；买卖价差免费数据源未稳定提供。"
+    if avg_traded_value_20d is not None and avg_traded_value_20d >= 5_000_000 and (aum is None or aum >= 1_000_000_000):
+        label = "规模与成交较好"
+    elif avg_traded_value_20d is not None and avg_traded_value_20d >= 1_000_000:
+        label = "流动性可用"
+    elif avg_traded_value_20d is not None and avg_traded_value_20d < 250_000:
+        label = "流动性偏弱"
+    elif aum is not None and aum < 100_000_000:
+        label = "规模偏小"
+    else:
+        label = "流动性中性"
+    parts = []
+    if avg_traded_value_20d is not None:
+        parts.append(f"20日均成交额约{_format_money_short(avg_traded_value_20d)}")
+    if avg_volume_20d is not None:
+        parts.append(f"20日均成交量约{_format_shares(avg_volume_20d)}份")
+    if aum is not None:
+        parts.append(f"AUM约{_format_money_short(aum)}")
+    spread = f"{bid_ask_spread_pct:.2f}%" if bid_ask_spread_pct is not None else "待确认"
+    parts.append(f"买卖价差{spread}")
+    return label, "；".join(parts)
 
 
 def _has_any_valuation(valuations: dict[str, Any]) -> bool:
@@ -586,6 +732,13 @@ def _write_asset_cache(cache: dict[str, Any], asset: ETFAssetMonitor) -> None:
         "pb_percentile": asset.pb_percentile,
         "pe_high_1y": asset.pe_high_1y,
         "pe_high_1y_ratio": asset.pe_high_1y_ratio,
+        "aum": asset.aum,
+        "avg_volume_20d": asset.avg_volume_20d,
+        "avg_traded_value_20d": asset.avg_traded_value_20d,
+        "bid_ask_spread_pct": asset.bid_ask_spread_pct,
+        "liquidity_label": asset.liquidity_label,
+        "liquidity_note": asset.liquidity_note,
+        "liquidity_source": asset.liquidity_source,
         "trend_label": asset.trend_label,
         "momentum_label": asset.momentum_label,
         "sigma_label": asset.sigma_label,
@@ -646,6 +799,13 @@ def _asset_from_cache(spec: ETFSpec, entry: dict[str, Any], fetched_at: datetime
         pb_percentile=_safe_float(entry.get("pb_percentile")),
         pe_high_1y=_safe_float(entry.get("pe_high_1y")),
         pe_high_1y_ratio=_safe_float(entry.get("pe_high_1y_ratio")),
+        aum=_safe_float(entry.get("aum")),
+        avg_volume_20d=_safe_float(entry.get("avg_volume_20d")),
+        avg_traded_value_20d=_safe_float(entry.get("avg_traded_value_20d")),
+        bid_ask_spread_pct=_safe_float(entry.get("bid_ask_spread_pct")),
+        liquidity_label=entry.get("liquidity_label") or "流动性待确认",
+        liquidity_note=entry.get("liquidity_note") or "成交量、规模或价差数据不足。",
+        liquidity_source=entry.get("liquidity_source") or "unavailable",
         sigma_label=entry.get("sigma_label") or "日波动待确认",
         trend_stretch_label=entry.get("trend_stretch_label") or "趋势拉伸待确认",
         trend_label=entry.get("trend_label") or "趋势待确认",

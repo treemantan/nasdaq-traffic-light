@@ -224,6 +224,7 @@ def _render_etf_email_group(group: tuple[str, str, list[ETFAssetMonitor]]) -> st
             <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">主题</th>
             <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">1Dσ / 1M / RSI</th>
             <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">PE / Fwd PE</th>
+            <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">规模/流动性</th>
             <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">PE位置</th>
             <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">新增仓位环境</th>
             <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">拥挤度</th>
@@ -234,11 +235,13 @@ def _render_etf_email_group(group: tuple[str, str, list[ETFAssetMonitor]]) -> st
 
 def _render_etf_row(asset: ETFAssetMonitor) -> str:
     valuation_source = f"估值源：{asset.valuation_source}" if asset.valuation_source != "unavailable" else "估值源：暂无"
+    liquidity = _fmt_liquidity(asset)
     return f"""<tr>
       <td style="padding:7px;border-bottom:1px solid #263244;"><strong>{escape(asset.symbol)}</strong><br>{escape(asset.provider)}<br><span style="color:#9ca3af;">TER {escape(_fmt_ter(asset.ter))} · {escape(_ter_label(asset.ter))}</span></td>
       <td style="padding:7px;border-bottom:1px solid #263244;">{escape(asset.theme)}<br>{escape(_fmt_sigma_200d(asset.trend_sigma_200d))} · {escape(asset.trend_stretch_label)}</td>
       <td style="padding:7px;border-bottom:1px solid #263244;">{escape(_fmt_sigma(asset.daily_sigma))} / {escape(_fmt_pct(asset.momentum_1m))} / {escape(_fmt_plain(asset.rsi14))}<br>{escape(asset.sigma_label)}</td>
       <td style="padding:7px;border-bottom:1px solid #263244;">{escape(_fmt_plain(asset.pe))} / {escape(_fmt_plain(asset.forward_pe))}<br>{escape(asset.valuation_label)}<br><span style="color:#9ca3af;">{escape(valuation_source)}</span></td>
+      <td style="padding:7px;border-bottom:1px solid #263244;">{escape(asset.liquidity_label)}<br><span style="color:#9ca3af;">{escape(liquidity)}</span></td>
       <td style="padding:7px;border-bottom:1px solid #263244;">{escape(_fmt_pe_position(asset))}</td>
       <td style="padding:7px;border-bottom:1px solid #263244;">{asset.entry_score}/100<br>{escape(asset.entry_label)}<br><span style="color:#9ca3af;">{escape(_fmt_backtest(asset))}</span></td>
       <td style="padding:7px;border-bottom:1px solid #263244;">{asset.crowding_score}/100<br>{escape(asset.crowding_label)}</td>
@@ -354,6 +357,33 @@ def _ter_label(value: float | None) -> str:
     if value <= 0.50:
         return "主题费率偏高"
     return "高费率"
+
+
+def _fmt_liquidity(asset: ETFAssetMonitor) -> str:
+    parts = []
+    if asset.aum is not None:
+        parts.append(f"AUM {_fmt_money_short(asset.aum)}")
+    if asset.avg_traded_value_20d is not None:
+        parts.append(f"20日均成交额 {_fmt_money_short(asset.avg_traded_value_20d)}")
+    if asset.bid_ask_spread_pct is not None:
+        parts.append(f"价差 {asset.bid_ask_spread_pct:.2f}%")
+    else:
+        parts.append("价差待确认")
+    if not parts:
+        parts.append(asset.liquidity_note)
+    return "；".join(parts)
+
+
+def _fmt_money_short(value: float | None) -> str:
+    if value is None:
+        return "N/A"
+    if abs(value) >= 1_000_000_000:
+        return f"{value / 1_000_000_000:.2f}B"
+    if abs(value) >= 1_000_000:
+        return f"{value / 1_000_000:.2f}M"
+    if abs(value) >= 1_000:
+        return f"{value / 1_000:.0f}K"
+    return f"{value:.0f}"
 
 
 def _render_metric_card(item: ScoredMetric) -> str:
