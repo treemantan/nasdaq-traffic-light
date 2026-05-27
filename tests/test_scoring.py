@@ -147,6 +147,23 @@ class ScoringTests(unittest.TestCase):
         self.assertGreater(report.weights["move"], report.weights["vix"])
         self.assertGreater(report.weights["vvix"], 0.04)
 
+    def test_move_note_reflects_direction_when_falling(self):
+        snapshot = MarketSnapshot(
+            as_of=date(2026, 5, 14),
+            fetched_at=datetime(2026, 5, 15, tzinfo=timezone.utc),
+            metrics={
+                "move": metric("move", "MOVE", 75, 78.5),
+            },
+            warnings=(),
+        )
+
+        report = score_snapshot(snapshot)
+        scored = report.metrics["move"]
+
+        self.assertIn("缓和", scored.signal)
+        self.assertIn("回落", scored.note)
+        self.assertNotIn("MOVE上行", scored.note)
+
     def test_iron_condor_filter_is_suitable_when_volatility_and_index_moves_are_contained(self):
         snapshot = MarketSnapshot(
             as_of=date(2026, 5, 14),

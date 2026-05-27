@@ -277,7 +277,17 @@ def _score_commodity(metric: MarketMetric, metrics: dict[str, MarketMetric]) -> 
 def _score_stress(metric: MarketMetric) -> ScoredMetric:
     pct = metric.change_pct or 0
     if metric.key == "move":
-        return ScoredMetric(metric, _clamp(_logistic(metric.value or 0, 120, 0.05) * 100 + max(0, pct) * 2), "美债波动压力", "MOVE上行意味着债券市场波动扩散，通常比单一VIX更能提示流动性压力。")
+        value = metric.value or 0
+        score = _clamp(_logistic(value, 120, 0.05) * 100 + max(0, pct) * 2)
+        if pct <= -1:
+            if value >= 110:
+                return ScoredMetric(metric, score, "美债波动高位回落", "MOVE虽处偏高区间但边际回落，债券波动压力有所缓和，仍需观察是否继续向常态区间收敛。")
+            return ScoredMetric(metric, score, "美债波动压力缓和", "MOVE回落显示债券市场波动边际降温，跨资产流动性压力较前一交易日有所缓和。")
+        if pct >= 1:
+            return ScoredMetric(metric, score, "美债波动压力升温", "MOVE上行意味着债券市场波动扩散，通常比单一VIX更能提示流动性压力。")
+        if value >= 110:
+            return ScoredMetric(metric, score, "美债波动仍处高位", "MOVE绝对水平仍偏高，债券市场波动尚未完全回到常态区间。")
+        return ScoredMetric(metric, score, "美债波动压力", "MOVE未出现明显扩散，债券波动对跨资产风险的边际扰动有限。")
     return ScoredMetric(metric, _clamp(_logistic(metric.value or 0, 5, 0.9) * 100), "信用风险补偿", "信用利差用于区分普通risk-off与融资条件收紧。")
 
 
