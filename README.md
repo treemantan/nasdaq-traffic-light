@@ -135,7 +135,7 @@ Yahoo Finance、Investing、CNN、NAAIM 与 FRED 用于不同类别的数据源�
 - `AIAI.L`：L&G Artificial Intelligence UCITS ETF
 - `SEMI.L`：iShares Global Semiconductors UCITS ETF
 - `SMGB.L`：VanEck Semiconductor UCITS ETF
-- `CHIP.L`：Amundi MSCI Semiconductors UCITS ETF
+- `SEMG.L`：Amundi MSCI Semiconductors UCITS ETF
 - `RBOT.L`：iShares Automation & Robotics UCITS ETF
 - `WCLD.L`：WisdomTree Cloud Computing UCITS ETF
 - `LOCK.L`：iShares Digital Security UCITS ETF
