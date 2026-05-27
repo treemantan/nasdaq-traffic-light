@@ -144,7 +144,7 @@ Yahoo Finance、Investing、CNN、NAAIM 与 FRED 用于不同类别的数据源�
 - `QANT.L`：iShares Quantum Computing UCITS ETF
 - `CSKR.L`：iShares MSCI Korea UCITS ETF
 - `HKOR.L`：HSBC MSCI Korea Capped UCITS ETF
-- `FLXK.L`：Franklin FTSE Korea UCITS ETF
+- `FLRK.L`：Franklin FTSE Korea UCITS ETF
 - `DFND.L`：iShares Global Aerospace & Defence UCITS ETF
 - `WDEF.L`：WisdomTree Europe Defence UCITS ETF
 - `DFNG.L`：VanEck Defense UCITS ETF
@@ -165,7 +165,7 @@ ETF 模块还会用 Yahoo 5 年日线做轻量历史检验。拥挤度口径统�
 - `Forward PE`：基于未来盈利预期的市盈率，更贴近市场当前定价逻辑，但依赖分析师盈利预测。
 - `PB`：市净率，衡量市值相对账面净资产；对金融、周期和重资产行业更有解释力，对半导体、AI、量子等轻资产主题 ETF 的解释力弱于 PE。
 
-估值源优先使用 Yahoo，若不可用则尝试 StockAnalysis 的伦敦 ETF 页面。若伦敦 ETF 本身不披露 PE，少数核心产品会使用高度相关的同类 ETF 作为 proxy，例如 `VWRL.L` 使用 `VT`、`VUAG.L` 使用 `VOO`、`IITU.L` 使用 `XLK`、半导体 ETF 使用 `SMH`、`QWTM.L` 使用 `QTUM`、韩国 ETF 使用 `EWY`、`DFND.L` / `DFNG.L` / `NATO.L` 使用 `ITA` 近似观察相关资产池估值；报告会明确标注 `proxy`，不把代理估值伪装成基金自身披露数据。欧洲防务和防务创新 ETF 若缺少可比 proxy，会保留价格、趋势、拥挤度和历史环境检验，不强行填充不匹配估值。
+估值源优先使用 Yahoo，若不可用则尝试 StockAnalysis 的伦敦 ETF 页面。若伦敦 ETF 本身不披露 PE，少数核心产品会使用高度相关的同类 ETF 作为 proxy，例如 `VWRL.L` 使用 `VT`、`VUAG.L` 使用 `VOO`、`IITU.L` 使用 `XLK`、半导体 ETF 使用 `SMH`、`QWTM.L` 使用 `QTUM`、韩国 ETF 使用 `EWY`、`DFND.L` / `DFNG.L` / `NATO.L` 使用 `ITA` 近似观察相关资产池估值；报告会明确标注 `proxy`，不把代理估值伪装成基金自身披露数据。韩国组优先纳入 Yahoo 可稳定抓取且 UK/LSE 可跟踪的 `CSKR.L`、`HKOR.L`、`FLRK.L`；若某些 Korea ticker 在 Yahoo 返回空历史，例如 `KWL.L`，默认池会暂不纳入，避免报告产生不可用资产。欧洲防务和防务创新 ETF 若缺少可比 proxy，会保留价格、趋势、拥挤度和历史环境检验，不强行填充不匹配估值。
 
 黄金 ETC 没有盈利和净资产口径，因此不展示 PE/PB，应结合实际利率、美元和金价趋势解释。PE/PB 历史分位数会通过本地缓存逐步积累；样本不足时，报告会退而显示 `当前PE / 近一年缓存最高PE` 的近似比例，用来粗略判断当前估值是否贴近过去一年已观察到的高位，但该比例依赖本地缓存积累，不等同于严格历史分位。
 
