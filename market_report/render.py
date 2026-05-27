@@ -377,6 +377,7 @@ def _group_etf_assets(assets: list[ETFAssetMonitor]) -> list[tuple[str, str, lis
         ("AI、科技与软件链", "AI基础设施、信息技术、云软件、网络安全与自动化", {"US Technology", "AI Infrastructure", "Artificial Intelligence", "Cloud Software", "Cybersecurity", "Robotics & Automation"}),
         ("半导体", "全球半导体周期与AI算力核心上游", {"Semiconductor"}),
         ("量子计算", "高beta前沿主题，适合单独观察热度与波动", {"Quantum Computing"}),
+        ("韩国权益与存储链", "Samsung Electronics、SK hynix及韩国科技/工业周期暴露", {"South Korea Equity"}),
         ("军工与防务", "全球/欧洲防务、网络防务与防务创新", {"Defence", "European Defence", "Defence Innovation"}),
         ("黄金与实物资产", "实际利率、美元与避险需求的交叉验证", {"Gold"}),
     ]
