@@ -201,12 +201,24 @@ def _render_assessment_items(items: list[str]) -> str:
 def _render_etf_monitor(monitor: ETFMonitor | None) -> str:
     if monitor is None:
         return ""
-    rows = "".join(_render_etf_row(asset) for asset in monitor.assets)
+    grouped_rows = "".join(_render_etf_email_group(group) for group in _group_etf_assets(monitor.assets))
     return f"""<tr>
       <td style="padding:0 24px 18px;">
         <div style="font-size:19px;font-weight:700;color:#f3f4f6;margin:8px 0 8px;">UK ETF估值、趋势与拥挤度监控器</div>
         <div style="font-size:13px;color:#d1d5db;margin-bottom:8px;">{escape(monitor.summary)}</div>
-        <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;font-size:12px;color:#d1d5db;">
+        {grouped_rows}
+        <div style="font-size:12px;color:#9ca3af;margin-top:8px;">PE位置优先显示本地历史分位；样本不足时显示当前PE/近一年缓存最高PE的近似比例。σ200使用去极值后的稳健趋势波动率，避免少数极端日收益掩盖趋势拉伸。proxy 表示使用同类ETF作近似估值参考；黄金ETC不适用PE/PB。</div>
+      </td>
+    </tr>"""
+
+
+def _render_etf_email_group(group: tuple[str, str, list[ETFAssetMonitor]]) -> str:
+    title, description, assets = group
+    rows = "".join(_render_etf_row(asset) for asset in assets)
+    return f"""
+        <div style="font-size:15px;font-weight:700;color:#f3f4f6;margin:14px 0 4px;">{escape(title)}</div>
+        <div style="font-size:12px;color:#9ca3af;margin-bottom:6px;">{escape(description)} · {escape(_etf_group_stats(assets))}</div>
+        <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;font-size:12px;color:#d1d5db;margin-bottom:8px;">
           <tr>
             <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">ETF</th>
             <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">主题</th>
@@ -217,10 +229,7 @@ def _render_etf_monitor(monitor: ETFMonitor | None) -> str:
             <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">拥挤度</th>
           </tr>
           {rows}
-        </table>
-        <div style="font-size:12px;color:#9ca3af;margin-top:8px;">PE位置优先显示本地历史分位；样本不足时显示当前PE/近一年缓存最高PE的近似比例。σ200使用去极值后的稳健趋势波动率，避免少数极端日收益掩盖趋势拉伸。proxy 表示使用同类ETF作近似估值参考；黄金ETC不适用PE/PB。</div>
-      </td>
-    </tr>"""
+        </table>"""
 
 
 def _render_etf_row(asset: ETFAssetMonitor) -> str:
@@ -234,6 +243,47 @@ def _render_etf_row(asset: ETFAssetMonitor) -> str:
       <td style="padding:7px;border-bottom:1px solid #263244;">{asset.entry_score}/100<br>{escape(asset.entry_label)}<br><span style="color:#9ca3af;">{escape(_fmt_backtest(asset))}</span></td>
       <td style="padding:7px;border-bottom:1px solid #263244;">{asset.crowding_score}/100<br>{escape(asset.crowding_label)}</td>
     </tr>"""
+
+
+def _group_etf_assets(assets: list[ETFAssetMonitor]) -> list[tuple[str, str, list[ETFAssetMonitor]]]:
+    definitions = [
+        ("宽基与核心资产", "组合底仓与主要指数风险暴露", {"Global Equity", "S&P 500", "Nasdaq 100"}),
+        ("AI、科技与软件链", "AI基础设施、信息技术、云软件、网络安全与自动化", {"US Technology", "AI Infrastructure", "Artificial Intelligence", "Cloud Software", "Cybersecurity", "Robotics & Automation"}),
+        ("半导体", "全球半导体周期与AI算力核心上游", {"Semiconductor"}),
+        ("量子计算", "高beta前沿主题，适合单独观察热度与波动", {"Quantum Computing"}),
+        ("军工与防务", "全球/欧洲防务、网络防务与防务创新", {"Defence", "European Defence", "Defence Innovation"}),
+        ("黄金与实物资产", "实际利率、美元与避险需求的交叉验证", {"Gold"}),
+    ]
+    remaining = list(assets)
+    groups: list[tuple[str, str, list[ETFAssetMonitor]]] = []
+    for title, description, themes in definitions:
+        members = [asset for asset in remaining if asset.theme in themes]
+        if not members:
+            continue
+        groups.append((title, description, members))
+        remaining = [asset for asset in remaining if asset not in members]
+    if remaining:
+        groups.append(("其他观察池", "暂未归入主线主题的补充观察标的", remaining))
+    return groups
+
+
+def _etf_group_stats(assets: list[ETFAssetMonitor]) -> str:
+    count = len(assets)
+    avg_entry = _avg_number(asset.entry_score for asset in assets)
+    avg_crowding = _avg_number(asset.crowding_score for asset in assets)
+    hot = [asset.symbol for asset in assets if asset.crowding_score >= 70]
+    strong = [asset.symbol for asset in assets if asset.entry_score >= 70]
+    parts = [f"{count}只", f"新增环境均值 {avg_entry:.0f}/100", f"拥挤度均值 {avg_crowding:.0f}/100"]
+    if strong:
+        parts.append("环境较好：" + "、".join(strong[:3]))
+    if hot:
+        parts.append("拥挤偏高：" + "、".join(hot[:3]))
+    return "；".join(parts)
+
+
+def _avg_number(values) -> float:
+    clean = [float(value) for value in values if isinstance(value, (int, float))]
+    return sum(clean) / len(clean) if clean else 0.0
 
 
 def _fmt_pe_position(asset: ETFAssetMonitor) -> str:
