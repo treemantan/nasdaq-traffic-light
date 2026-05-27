@@ -6,6 +6,7 @@ import re
 import smtplib
 import sys
 from datetime import date, datetime, time, timezone
+from dataclasses import fields
 from email.message import EmailMessage
 from html import escape
 from pathlib import Path
@@ -63,8 +64,8 @@ def main() -> int:
         return 6
 
     payload = _load_payload(report_path)
-    if mode in {"pulse", "volatility"} and payload is None:
-        print(f"Structured report payload not found for lightweight EMAIL_MODE={mode}: {report_path.with_suffix('.json')}", file=sys.stderr)
+    if mode in {"pulse", "volatility", "full"} and payload is None:
+        print(f"Structured report payload not found for EMAIL_MODE={mode}: {report_path.with_suffix('.json')}", file=sys.stderr)
         return 7
 
     recipients = _parse_recipients(os.environ["REPORT_EMAIL_TO"])
@@ -181,17 +182,157 @@ def _render_message(mode: str, report_path: Path, full_html: str, payload: dict 
     report_date = _report_date(report_path)
     if mode == "full":
         subject = f"Macro Regime Radar - {report_date}"
+        try:
+            from market_report.render_email import render_email_report
+
+            message_html = render_email_report(_report_from_payload(payload or {}))
+        except Exception as exc:
+            print(f"Failed to render email-optimized full report from payload: {exc}", file=sys.stderr)
+            raise
         text = (
             f"Macro Regime Radar - {report_date}\n\n"
-            "The HTML market report was generated successfully, but your email client may not support HTML rendering. "
-            "Please open the GitHub Actions artifact named market-report to view the full report."
+            "The email-optimized HTML market report was generated successfully. "
+            "If your email client does not render HTML, please open the GitHub Actions artifact named market-report."
         )
-        return subject, full_html, text
+        return subject, message_html, text
     if mode == "pulse":
         return _render_pulse(payload or {})
     if mode == "volatility":
         return _render_volatility(payload or {})
     raise ValueError(f"Unsupported email mode: {mode}")
+
+
+def _report_from_payload(payload: dict):
+    from market_report.data_sources import MarketMetric
+    from market_report.etf_monitor import (
+        ETFAssetMonitor,
+        ETFBacktestStats,
+        ETFMonitor,
+        ETFThresholdCalibration,
+    )
+    from market_report.scoring import (
+        IronCondorAssessment,
+        RegimeAssessment,
+        ScoredMetric,
+        ScoredReport,
+    )
+
+    metrics = {
+        key: _dataclass_from_dict(
+            ScoredMetric,
+            value,
+            converters={"metric": lambda raw: _market_metric_from_payload(raw or {})},
+        )
+        for key, value in (payload.get("metrics") or {}).items()
+        if isinstance(value, dict)
+    }
+    etf_monitor = None
+    if isinstance(payload.get("etf_monitor"), dict):
+        etf_monitor = _dataclass_from_dict(
+            ETFMonitor,
+            payload["etf_monitor"],
+            converters={
+                "assets": lambda raw: [
+                    _etf_asset_from_payload(item)
+                    for item in (raw or [])
+                    if isinstance(item, dict)
+                ],
+                "warnings": lambda raw: list(raw or []),
+            },
+        )
+
+    return _dataclass_from_dict(
+        ScoredReport,
+        payload,
+        converters={
+            "metrics": lambda _raw: metrics,
+            "regime": lambda raw: _dataclass_from_dict(RegimeAssessment, raw or {}),
+            "iron_condor": lambda raw: _dataclass_from_dict(IronCondorAssessment, raw or {}),
+            "etf_monitor": lambda _raw: etf_monitor,
+        },
+    )
+
+
+def _market_metric_from_payload(raw: dict):
+    from market_report.data_sources import MarketMetric
+
+    return _dataclass_from_dict(
+        MarketMetric,
+        raw,
+        converters={
+            "as_of": _parse_date_or_none,
+            "fetched_at": _parse_datetime_or_now,
+            "warnings": lambda value: tuple(value or ()),
+        },
+    )
+
+
+def _etf_asset_from_payload(raw: dict):
+    from market_report.etf_monitor import ETFAssetMonitor
+
+    return _dataclass_from_dict(
+        ETFAssetMonitor,
+        raw,
+        converters={
+            "as_of": _parse_date_or_none,
+            "fetched_at": _parse_datetime_or_now,
+            "warnings": lambda value: tuple(value or ()),
+            "backtest": _etf_backtest_from_payload,
+        },
+    )
+
+
+def _etf_backtest_from_payload(raw: object):
+    from market_report.etf_monitor import ETFBacktestStats, ETFThresholdCalibration
+
+    if not isinstance(raw, dict):
+        return None
+    return _dataclass_from_dict(
+        ETFBacktestStats,
+        raw,
+        converters={
+            "threshold_calibrations": lambda items: tuple(
+                _dataclass_from_dict(ETFThresholdCalibration, item)
+                for item in (items or [])
+                if isinstance(item, dict)
+            ),
+        },
+    )
+
+
+def _dataclass_from_dict(cls, raw: dict, converters: dict | None = None):
+    converters = converters or {}
+    values = {}
+    for item in fields(cls):
+        if item.name not in raw:
+            continue
+        value = raw[item.name]
+        if item.name in converters:
+            value = converters[item.name](value)
+        values[item.name] = value
+    return cls(**values)
+
+
+def _parse_date_or_none(value: object) -> date | None:
+    if not value:
+        return None
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value
+    return date.fromisoformat(str(value)[:10])
+
+
+def _parse_datetime_or_now(value: object) -> datetime:
+    if isinstance(value, datetime):
+        return value
+    if value:
+        text = str(value)
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        try:
+            return datetime.fromisoformat(text)
+        except ValueError:
+            pass
+    return datetime.now(timezone.utc)
 
 
 def _render_pulse(payload: dict) -> tuple[str, str, str]:
