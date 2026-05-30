@@ -9,6 +9,7 @@ secrets/
 
 config.json
 config.email.json
+portfolio.csv
 
 .env
 .venv/

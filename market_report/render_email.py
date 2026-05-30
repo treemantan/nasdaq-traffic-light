@@ -202,10 +202,14 @@ def _render_etf_monitor(monitor: ETFMonitor | None) -> str:
     if monitor is None:
         return ""
     grouped_rows = "".join(_render_etf_email_group(group) for group in _group_etf_assets(monitor.assets))
+    changes = _render_email_notes("今日ETF变动摘要", monitor.change_summary)
+    portfolio = _render_email_notes("实际组合视角", monitor.portfolio_summary + monitor.portfolio_warnings)
     return f"""<tr>
       <td style="padding:0 24px 18px;">
         <div style="font-size:19px;font-weight:700;color:#f3f4f6;margin:8px 0 8px;">UK ETF估值、趋势与拥挤度监控器</div>
         <div style="font-size:13px;color:#d1d5db;margin-bottom:8px;">{escape(monitor.summary)}</div>
+        {changes}
+        {portfolio}
         {grouped_rows}
         <div style="font-size:12px;color:#9ca3af;margin-top:8px;">PE位置优先显示本地历史分位；样本不足时显示当前PE/近一年缓存最高PE的近似比例。σ200使用去极值后的稳健趋势波动率，避免少数极端日收益掩盖趋势拉伸。proxy 表示使用同类ETF作近似估值参考；黄金ETC不适用PE/PB。</div>
       </td>
@@ -218,6 +222,7 @@ def _render_etf_email_group(group: tuple[str, str, list[ETFAssetMonitor]]) -> st
     return f"""
         <div style="font-size:15px;font-weight:700;color:#f3f4f6;margin:14px 0 4px;">{escape(title)}</div>
         <div style="font-size:12px;color:#9ca3af;margin-bottom:6px;">{escape(description)} · {escape(_etf_group_stats(assets))}</div>
+        <div style="font-size:12px;color:#9ca3af;margin-bottom:6px;">{escape(_etf_group_comparison(assets))}</div>
         <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;font-size:12px;color:#d1d5db;margin-bottom:8px;">
           <tr>
             <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">ETF</th>
@@ -237,7 +242,7 @@ def _render_etf_row(asset: ETFAssetMonitor) -> str:
     valuation_source = f"估值源：{asset.valuation_source}" if asset.valuation_source != "unavailable" else "估值源：暂无"
     liquidity = _fmt_liquidity(asset)
     return f"""<tr>
-      <td style="padding:7px;border-bottom:1px solid #263244;"><strong>{escape(asset.symbol)}</strong><br>{escape(asset.provider)}<br><span style="color:#9ca3af;">TER {escape(_fmt_ter(asset.ter))} · {escape(_ter_label(asset.ter))}</span></td>
+      <td style="padding:7px;border-bottom:1px solid #263244;"><strong>{escape(asset.symbol)}</strong><br>{escape(asset.provider)}<br><span style="color:#9ca3af;">TER {escape(_fmt_ter(asset.ter))} · {escape(_ter_label(asset.ter))}<br>审计：{escape(asset.metadata_status)}</span></td>
       <td style="padding:7px;border-bottom:1px solid #263244;">{escape(asset.theme)}<br>{escape(_fmt_sigma_200d(asset.trend_sigma_200d))} · {escape(asset.trend_stretch_label)}</td>
       <td style="padding:7px;border-bottom:1px solid #263244;">{escape(_fmt_sigma(asset.daily_sigma))} / {escape(_fmt_pct(asset.momentum_1m))} / {escape(_fmt_plain(asset.rsi14))}<br>{escape(asset.sigma_label)}</td>
       <td style="padding:7px;border-bottom:1px solid #263244;">{escape(_fmt_plain(asset.pe))} / {escape(_fmt_plain(asset.forward_pe))}<br>{escape(asset.valuation_label)}<br><span style="color:#9ca3af;">{escape(valuation_source)}</span></td>
@@ -291,6 +296,52 @@ def _etf_group_stats(assets: list[ETFAssetMonitor]) -> str:
 def _avg_number(values) -> float:
     clean = [float(value) for value in values if isinstance(value, (int, float))]
     return sum(clean) / len(clean) if clean else 0.0
+
+
+def _render_email_notes(title: str, items: list[str]) -> str:
+    if not items:
+        return ""
+    rows = "".join(f"<li>{escape(item)}</li>" for item in items)
+    return f'<div style="font-size:13px;color:#d1d5db;margin:8px 0;"><strong>{escape(title)}</strong><ul>{rows}</ul></div>'
+
+
+def _etf_group_comparison(assets: list[ETFAssetMonitor]) -> str:
+    parts = []
+    ter_assets = [asset for asset in assets if asset.ter is not None]
+    if ter_assets:
+        cheapest = min(ter_assets, key=lambda asset: asset.ter or 0)
+        parts.append(f"成本最低：{cheapest.symbol} TER {cheapest.ter:.2f}%")
+    aum_assets = [asset for asset in assets if asset.aum is not None]
+    if aum_assets:
+        largest = max(aum_assets, key=lambda asset: asset.aum or 0)
+        parts.append(f"规模最大：{largest.symbol} AUM {_fmt_money_short(largest.aum)}")
+    liquid_assets = [asset for asset in assets if asset.avg_traded_value_20d is not None]
+    if liquid_assets:
+        most_liquid = max(liquid_assets, key=lambda asset: asset.avg_traded_value_20d or 0)
+        parts.append(f"成交最活跃：{most_liquid.symbol} 20日均成交额 {_fmt_money_short(most_liquid.avg_traded_value_20d)}")
+    overlap = _max_holdings_overlap(assets)
+    if overlap:
+        left, right, score = overlap
+        parts.append(f"前十大持仓近似重叠最高：{left} / {right} {score:.0f}%")
+    return "；".join(parts) + "。"
+
+
+def _max_holdings_overlap(assets: list[ETFAssetMonitor]) -> tuple[str, str, float] | None:
+    best = None
+    for index, left in enumerate(assets):
+        for right in assets[index + 1 :]:
+            left_weights = {_holding_key(item): item.weight for item in left.holdings}
+            right_weights = {_holding_key(item): item.weight for item in right.holdings}
+            if not left_weights or not right_weights:
+                continue
+            overlap = sum(min(weight, right_weights.get(key, 0)) for key, weight in left_weights.items())
+            if best is None or overlap > best[2]:
+                best = (left.symbol, right.symbol, overlap)
+    return best
+
+
+def _holding_key(holding) -> str:
+    return (holding.symbol or holding.name).lower().replace(" ", "")
 
 
 def _fmt_pe_position(asset: ETFAssetMonitor) -> str:

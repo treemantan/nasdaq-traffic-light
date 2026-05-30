@@ -268,7 +268,7 @@ def _market_metric_from_payload(raw: dict):
 
 
 def _etf_asset_from_payload(raw: dict):
-    from market_report.etf_monitor import ETFAssetMonitor
+    from market_report.etf_monitor import ETFAssetMonitor, ETFHolding
 
     return _dataclass_from_dict(
         ETFAssetMonitor,
@@ -278,6 +278,11 @@ def _etf_asset_from_payload(raw: dict):
             "fetched_at": _parse_datetime_or_now,
             "warnings": lambda value: tuple(value or ()),
             "backtest": _etf_backtest_from_payload,
+            "holdings": lambda items: tuple(
+                _dataclass_from_dict(ETFHolding, item)
+                for item in (items or [])
+                if isinstance(item, dict)
+            ),
         },
     )
 

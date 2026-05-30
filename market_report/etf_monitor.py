@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import csv
 import json
 import math
 import re
 import time
 import urllib.parse
 import urllib.request
+from html import unescape
 from bisect import bisect_right
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
@@ -38,6 +40,14 @@ _MARKET_ENV_HISTORY_CACHE: dict[str, list[tuple[date, float]]] | None = None
 class ETFPriceData:
     history: list[tuple[date, float]]
     volumes: list[tuple[date, float]]
+    meta: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class ETFHolding:
+    symbol: str
+    name: str
+    weight: float
 
 
 @dataclass(frozen=True)
@@ -143,6 +153,11 @@ class ETFAssetMonitor:
     liquidity_label: str = "流动性待确认"
     liquidity_note: str = "成交量、规模或价差数据不足。"
     liquidity_source: str = "unavailable"
+    holdings: tuple[ETFHolding, ...] = ()
+    holdings_count: int | None = None
+    top10_weight: float | None = None
+    metadata_status: str = "待确认"
+    metadata_note: str = "尚未完成 ticker 元数据审计。"
     trend_label: str = "趋势待确认"
     momentum_label: str = "动量待确认"
     valuation_label: str = "估值数据不足"
@@ -165,6 +180,9 @@ class ETFMonitor:
     summary: str
     assets: list[ETFAssetMonitor]
     warnings: list[str]
+    change_summary: list[str] = field(default_factory=list)
+    portfolio_summary: list[str] = field(default_factory=list)
+    portfolio_warnings: list[str] = field(default_factory=list)
 
 
 DEFAULT_ETF_SPECS = [
@@ -219,6 +237,7 @@ VALUATION_PROXY_SYMBOLS = {
 def fetch_etf_monitor(specs: list[ETFSpec] | None = None, macro_metrics: dict[str, Any] | None = None) -> ETFMonitor:
     fetched_at = datetime.now(timezone.utc)
     cache = _load_cache()
+    previous_assets = dict(cache.get("assets") or {})
     assets: list[ETFAssetMonitor] = []
     warnings: list[str] = []
     for spec in specs or DEFAULT_ETF_SPECS:
@@ -229,7 +248,15 @@ def fetch_etf_monitor(specs: list[ETFSpec] | None = None, macro_metrics: dict[st
         assets.append(asset)
         warnings.extend(asset.warnings)
     _save_cache(cache)
-    return ETFMonitor(summary=_build_summary(assets), assets=assets, warnings=list(dict.fromkeys(warnings)))
+    portfolio_summary, portfolio_warnings = _load_portfolio_summary(assets)
+    return ETFMonitor(
+        summary=_build_summary(assets),
+        assets=assets,
+        warnings=list(dict.fromkeys(warnings)),
+        change_summary=_build_change_summary(assets, previous_assets),
+        portfolio_summary=portfolio_summary,
+        portfolio_warnings=portfolio_warnings,
+    )
 
 
 def _fetch_etf_asset(
@@ -239,6 +266,9 @@ def _fetch_etf_asset(
     macro_metrics: dict[str, Any] | None = None,
 ) -> ETFAssetMonitor:
     price_data = _fetch_yahoo_price_data(spec.symbol)
+    metadata_status, metadata_note = _audit_metadata(spec, price_data.meta)
+    if metadata_status == "异常":
+        raise ValueError(f"metadata audit failed: {metadata_note}")
     history = price_data.history
     if len(history) < 2:
         raise ValueError(f"{spec.symbol} returned insufficient price history")
@@ -300,7 +330,7 @@ def _fetch_etf_asset(
         symbol=spec.symbol,
         theme=spec.theme,
         provider=spec.provider,
-        currency=spec.currency,
+        currency=_normalize_currency(price_data.meta.get("currency")) or spec.currency,
         value=value,
         previous_value=previous,
         as_of=history[-1][0],
@@ -332,6 +362,11 @@ def _fetch_etf_asset(
         liquidity_label=liquidity["label"],
         liquidity_note=liquidity["note"],
         liquidity_source=liquidity["source"],
+        holdings=liquidity["holdings"],
+        holdings_count=liquidity["holdings_count"],
+        top10_weight=liquidity["top10_weight"],
+        metadata_status=metadata_status,
+        metadata_note=metadata_note,
         source="Yahoo",
         warnings=tuple(warnings),
     )
@@ -372,6 +407,13 @@ def _cached_or_failed(
     reason: str,
     macro_metrics: dict[str, Any] | None = None,
 ) -> ETFAssetMonitor:
+    if "metadata audit failed" in reason:
+        return ETFAssetMonitor(
+            key=spec.key, label=spec.label, symbol=spec.symbol, theme=spec.theme, provider=spec.provider,
+            currency=spec.currency, value=None, previous_value=None, as_of=None, fetched_at=fetched_at,
+            ter=spec.ter, status="metadata-error", metadata_status="异常", metadata_note=reason,
+            warnings=(f"{spec.label}（{spec.symbol}）ticker元数据审计失败，已停止纳入评分：{reason}",),
+        )
     entry = (cache.get("assets") or {}).get(spec.key)
     if entry:
         asset = _asset_from_cache(spec, entry, fetched_at, reason)
@@ -440,7 +482,7 @@ def _fetch_yahoo_price_data(symbol: str) -> ETFPriceData:
             pairs.append((day, value * scale))
         if vol is not None:
             volumes.append((day, vol))
-    return ETFPriceData(history=pairs, volumes=volumes)
+    return ETFPriceData(history=pairs, volumes=volumes, meta=result.get("meta", {}))
 
 
 def _fetch_market_env_histories() -> dict[str, list[tuple[date, float]]]:
@@ -519,12 +561,20 @@ def _fetch_liquidity_profile(
     avg_volume_20d = sum(recent_volumes) / len(recent_volumes) if recent_volumes else None
     avg_traded_value_20d = sum(traded_values[-20:]) / len(traded_values[-20:]) if traded_values else None
     aum = None
+    holdings: tuple[ETFHolding, ...] = ()
+    holdings_count = None
+    top10_weight = None
     aum_source = ""
     try:
         aum = _fetch_stockanalysis_assets(spec.symbol)
         aum_source = "StockAnalysis assets" if aum is not None else ""
     except Exception as exc:
         warnings.append(f"{spec.symbol} AUM暂不可用：{type(exc).__name__}")
+    if spec.equity_like:
+        try:
+            holdings, holdings_count, top10_weight = _fetch_stockanalysis_holdings(spec.symbol)
+        except Exception as exc:
+            warnings.append(f"{spec.symbol} 持仓明细暂不可用：{type(exc).__name__}")
     source_parts = ["Yahoo volume"]
     if aum_source:
         source_parts.append(aum_source)
@@ -537,6 +587,9 @@ def _fetch_liquidity_profile(
         "label": label,
         "note": note,
         "source": "; ".join(source_parts),
+        "holdings": holdings,
+        "holdings_count": holdings_count,
+        "top10_weight": top10_weight,
         "warnings": warnings,
     }
 
@@ -552,6 +605,63 @@ def _fetch_stockanalysis_assets(symbol: str) -> float | None:
     if not match:
         return None
     return _parse_compact_number(match.group(1))
+
+
+def _fetch_stockanalysis_holdings(symbol: str) -> tuple[tuple[ETFHolding, ...], int | None, float | None]:
+    ticker = symbol.upper()
+    if ticker.endswith(".L"):
+        ticker = ticker[:-2]
+    if not ticker or not re.fullmatch(r"[A-Z0-9]+", ticker):
+        return (), None, None
+    text = _read_text(f"https://stockanalysis.com/quote/lon/{ticker}/holdings/", timeout=15)
+    holdings_count = _extract_html_number(text, "Total Holdings")
+    top10_weight = _extract_html_number(text, "Top 10 Percentage")
+    tbody = text[text.find("<tbody") : text.find("</tbody>")]
+    rows = re.findall(r"<tr[^>]*>(.*?)</tr>", tbody, re.IGNORECASE | re.DOTALL)
+    holdings: list[ETFHolding] = []
+    for row in rows[:10]:
+        cells = re.findall(r"<td[^>]*>(.*?)</td>", row, re.IGNORECASE | re.DOTALL)
+        if len(cells) < 4:
+            continue
+        symbol_text = _strip_html(cells[1])
+        name = _strip_html(cells[2])
+        weight = _safe_float(_strip_html(cells[3]).replace("%", ""))
+        if name and weight is not None:
+            holdings.append(ETFHolding(symbol=symbol_text, name=name, weight=weight))
+    return tuple(holdings), int(holdings_count) if holdings_count is not None else None, top10_weight
+
+
+def _extract_html_number(text: str, label: str) -> float | None:
+    match = re.search(rf"{re.escape(label)}\s*<div[^>]*>\s*([^<]+)", text, re.IGNORECASE)
+    return _safe_float(match.group(1).replace("%", "").replace(",", "").strip()) if match else None
+
+
+def _strip_html(text: str) -> str:
+    return unescape(re.sub(r"<[^>]+>|<!--.*?-->", "", text, flags=re.DOTALL)).strip()
+
+
+def _audit_metadata(spec: ETFSpec, meta: dict[str, Any]) -> tuple[str, str]:
+    exchange = str(meta.get("exchangeName") or "")
+    instrument = str(meta.get("instrumentType") or "")
+    long_name = str(meta.get("longName") or meta.get("shortName") or "")
+    problems = []
+    if exchange != "LSE":
+        problems.append(f"交易所为{exchange or '未知'}，预期LSE")
+    if spec.equity_like and instrument != "ETF":
+        problems.append(f"资产类型为{instrument or '未知'}，预期ETF")
+    if spec.theme == "Semiconductor" and "semiconductor" not in long_name.lower():
+        problems.append("基金名称未包含Semiconductor")
+    if spec.theme == "South Korea Equity" and "korea" not in long_name.lower():
+        problems.append("基金名称未包含Korea")
+    if problems:
+        return "异常", "；".join(problems)
+    currency = _normalize_currency(meta.get("currency")) or "币种未知"
+    return "已核验", f"{exchange} · {instrument or 'ETC'} · {currency} · {long_name}"
+
+
+def _normalize_currency(raw: Any) -> str:
+    currency = str(raw or "").strip()
+    return "GBP" if currency == "GBp" else currency
 
 
 def _parse_compact_number(raw: str) -> float | None:
@@ -739,6 +849,11 @@ def _write_asset_cache(cache: dict[str, Any], asset: ETFAssetMonitor) -> None:
         "liquidity_label": asset.liquidity_label,
         "liquidity_note": asset.liquidity_note,
         "liquidity_source": asset.liquidity_source,
+        "holdings": [holding.__dict__ for holding in asset.holdings],
+        "holdings_count": asset.holdings_count,
+        "top10_weight": asset.top10_weight,
+        "metadata_status": asset.metadata_status,
+        "metadata_note": asset.metadata_note,
         "trend_label": asset.trend_label,
         "momentum_label": asset.momentum_label,
         "sigma_label": asset.sigma_label,
@@ -806,6 +921,15 @@ def _asset_from_cache(spec: ETFSpec, entry: dict[str, Any], fetched_at: datetime
         liquidity_label=entry.get("liquidity_label") or "流动性待确认",
         liquidity_note=entry.get("liquidity_note") or "成交量、规模或价差数据不足。",
         liquidity_source=entry.get("liquidity_source") or "unavailable",
+        holdings=tuple(
+            ETFHolding(str(item.get("symbol") or ""), str(item.get("name") or ""), float(item.get("weight") or 0))
+            for item in (entry.get("holdings") or [])
+            if isinstance(item, dict)
+        ),
+        holdings_count=int(entry["holdings_count"]) if entry.get("holdings_count") is not None else None,
+        top10_weight=_safe_float(entry.get("top10_weight")),
+        metadata_status=entry.get("metadata_status") or "待确认",
+        metadata_note=entry.get("metadata_note") or "尚未完成 ticker 元数据审计。",
         sigma_label=entry.get("sigma_label") or "日波动待确认",
         trend_stretch_label=entry.get("trend_stretch_label") or "趋势拉伸待确认",
         trend_label=entry.get("trend_label") or "趋势待确认",
@@ -1505,6 +1629,61 @@ def _build_summary(assets: list[ETFAssetMonitor]) -> str:
     if weak:
         parts.append("低于200日线的资产包括：" + "、".join(asset.symbol for asset in weak[:4]) + "，趋势确认度较弱。")
     return " ".join(parts)
+
+
+def _build_change_summary(assets: list[ETFAssetMonitor], previous_assets: dict[str, Any]) -> list[str]:
+    changes: list[str] = []
+    for asset in assets:
+        previous = previous_assets.get(asset.key) or {}
+        previous_entry = previous.get("entry_score")
+        previous_crowding = previous.get("crowding_score")
+        previous_liquidity = previous.get("liquidity_label")
+        if isinstance(previous_entry, (int, float)) and abs(asset.entry_score - previous_entry) >= 10:
+            changes.append(f"{asset.symbol} 新增仓位环境由{int(previous_entry)}变为{asset.entry_score}。")
+        if isinstance(previous_crowding, (int, float)) and previous_crowding < 70 <= asset.crowding_score:
+            changes.append(f"{asset.symbol} 拥挤度升至{asset.crowding_score}/100，进入偏高区间。")
+        if previous_liquidity and previous_liquidity != asset.liquidity_label:
+            changes.append(f"{asset.symbol} 流动性观察由“{previous_liquidity}”变为“{asset.liquidity_label}”。")
+    return changes[:8] or ["ETF观察池未出现需要特别标记的状态切换。"]
+
+
+def _load_portfolio_summary(assets: list[ETFAssetMonitor], path: Path = Path("portfolio.csv")) -> tuple[list[str], list[str]]:
+    if not path.exists():
+        return [], ["尚未导入实际组合。可基于 Revolut investment statement 整理 portfolio.csv。"]
+    asset_map = {asset.symbol.upper(): asset for asset in assets}
+    rows = []
+    warnings = []
+    try:
+        with path.open("r", encoding="utf-8-sig", newline="") as handle:
+            rows = list(csv.DictReader(handle))
+    except Exception as exc:
+        return [], [f"portfolio.csv 无法读取：{type(exc).__name__}"]
+    positions = []
+    for row in rows:
+        symbol = str(row.get("symbol") or "").strip().upper()
+        weight = _safe_float(row.get("weight_pct"))
+        if not symbol or weight is None or weight <= 0:
+            continue
+        asset = asset_map.get(symbol)
+        if asset is None:
+            warnings.append(f"{symbol} 尚未在 ETF 默认观察池中，组合暴露分析暂不纳入。")
+            continue
+        positions.append((asset, weight))
+    if not positions:
+        return [], warnings + ["portfolio.csv 未包含可识别的 symbol,weight_pct 持仓。"]
+    total = sum(weight for _, weight in positions)
+    themes: dict[str, float] = {}
+    weighted_ter = 0.0
+    for asset, weight in positions:
+        themes[asset.theme] = themes.get(asset.theme, 0.0) + weight
+        weighted_ter += (asset.ter or 0) * weight
+    top_themes = sorted(themes.items(), key=lambda item: item[1], reverse=True)[:4]
+    summary = [
+        f"已导入{len(positions)}只 ETF，识别权重合计{total:.1f}%。",
+        "主要主题暴露：" + "、".join(f"{theme} {weight:.1f}%" for theme, weight in top_themes) + "。",
+        f"组合加权TER约{weighted_ter / total:.2f}%。",
+    ]
+    return summary, warnings
 
 
 def _valuation_warnings(

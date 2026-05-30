@@ -318,11 +318,15 @@ def _render_etf_monitor(monitor: ETFMonitor | None) -> str:
     warnings = ""
     if monitor.warnings:
         warnings = "<div class=\"small-note\">数据提示：" + escape(" ".join(monitor.warnings[:4])) + "</div>"
+    changes = _render_etf_notes("今日ETF变动摘要", monitor.change_summary)
+    portfolio = _render_etf_notes("实际组合视角", monitor.portfolio_summary + monitor.portfolio_warnings)
     return f"""<section class="panel">
       <h2>UK ETF估值、趋势与拥挤度监控器</h2>
       <div class="etf-summary">{escape(monitor.summary)}</div>
+      {changes}
+      {portfolio}
       <div class="etf-groups">{groups}</div>
-      <div class="small-note">PE衡量市场为每单位盈利支付的价格，Forward PE基于未来盈利预期；PB衡量市值相对账面净资产。PE位置优先显示本地历史分位；样本不足时显示“当前PE/近一年缓存最高PE”的近似比例。σ200使用63/126/252日窗口去极值后的稳健趋势波动率，避免少数极端日收益掩盖趋势拉伸。估值源若标记为proxy，表示使用高度相关的同类ETF作近似参考，并非该伦敦ETF自身披露口径。黄金ETC不适用PE/PB。</div>
+      <div class="small-note">PE衡量市场为每单位盈利支付的价格，Forward PE基于未来盈利预期；PB衡量市值相对账面净资产。PE位置优先显示本地历史分位；样本不足时显示“当前PE/近一年缓存最高PE”的近似比例。σ200使用63/126/252日窗口去极值后的稳健趋势波动率。持仓重叠度基于可获得的前十大持仓近似计算，并非完整穿透。估值源若标记为proxy，表示使用高度相关的同类ETF作近似参考。黄金ETC不适用PE/PB。</div>
       {warnings}
     </section>"""
 
@@ -333,6 +337,7 @@ def _render_etf_group(group: tuple[str, str, list[ETFAssetMonitor]], index: int 
     cards = "\n".join(_render_etf_card(asset) for asset in assets)
     symbols = "、".join(asset.symbol for asset in assets)
     stats = _etf_group_stats(assets)
+    comparison = _etf_group_comparison(assets)
     open_attr = " open" if index == 0 else ""
     return f"""<details class="etf-group"{open_attr}>
       <summary>
@@ -345,6 +350,7 @@ def _render_etf_group(group: tuple[str, str, list[ETFAssetMonitor]], index: int 
         </div>
       </summary>
       <div class="etf-group-body">
+        <div class="small-note">{escape(comparison)}</div>
         <div class="table-scroll">
       <table class="etf-table">
         <thead>
@@ -418,6 +424,52 @@ def _avg_number(values) -> float:
     return sum(clean) / len(clean) if clean else 0.0
 
 
+def _render_etf_notes(title: str, items: list[str]) -> str:
+    if not items:
+        return ""
+    rows = "".join(f"<li>{escape(item)}</li>" for item in items)
+    return f'<div class="strategy-list"><strong>{escape(title)}</strong><ul>{rows}</ul></div>'
+
+
+def _etf_group_comparison(assets: list[ETFAssetMonitor]) -> str:
+    parts = []
+    ter_assets = [asset for asset in assets if asset.ter is not None]
+    if ter_assets:
+        cheapest = min(ter_assets, key=lambda asset: asset.ter or 0)
+        parts.append(f"成本最低：{cheapest.symbol} TER {cheapest.ter:.2f}%")
+    aum_assets = [asset for asset in assets if asset.aum is not None]
+    if aum_assets:
+        largest = max(aum_assets, key=lambda asset: asset.aum or 0)
+        parts.append(f"规模最大：{largest.symbol} AUM {_fmt_money_short(largest.aum)}")
+    liquid_assets = [asset for asset in assets if asset.avg_traded_value_20d is not None]
+    if liquid_assets:
+        most_liquid = max(liquid_assets, key=lambda asset: asset.avg_traded_value_20d or 0)
+        parts.append(f"成交最活跃：{most_liquid.symbol} 20日均成交额 {_fmt_money_short(most_liquid.avg_traded_value_20d)}")
+    overlap = _max_holdings_overlap(assets)
+    if overlap:
+        left, right, score = overlap
+        parts.append(f"前十大持仓近似重叠最高：{left} / {right} {score:.0f}%")
+    return "；".join(parts) + "。"
+
+
+def _max_holdings_overlap(assets: list[ETFAssetMonitor]) -> tuple[str, str, float] | None:
+    best = None
+    for index, left in enumerate(assets):
+        for right in assets[index + 1 :]:
+            left_weights = {_holding_key(item): item.weight for item in left.holdings}
+            right_weights = {_holding_key(item): item.weight for item in right.holdings}
+            if not left_weights or not right_weights:
+                continue
+            overlap = sum(min(weight, right_weights.get(key, 0)) for key, weight in left_weights.items())
+            if best is None or overlap > best[2]:
+                best = (left.symbol, right.symbol, overlap)
+    return best
+
+
+def _holding_key(holding) -> str:
+    return (holding.symbol or holding.name).lower().replace(" ", "")
+
+
 def _render_etf_row(asset: ETFAssetMonitor) -> str:
     crowding_status = _crowding_status_class(asset.crowding_score)
     entry_status = _entry_status_class(asset.entry_score)
@@ -436,7 +488,7 @@ def _render_etf_row(asset: ETFAssetMonitor) -> str:
     cost = f"TER {escape(_fmt_ter(asset.ter))} · {escape(_ter_label(asset.ter))}"
     entry_cell = _render_entry_cell(asset, entry_status, compact=False)
     return f"""<tr>
-      <td><strong>{symbol}</strong><br><span class="muted">{escape(asset.label)}</span><br><span class="muted">{cost}</span></td>
+      <td><strong>{symbol}</strong><br><span class="muted">{escape(asset.label)}</span><br><span class="muted">{cost}</span><br><span class="muted">审计：{escape(asset.metadata_status)}</span></td>
       <td>{escape(asset.theme)}<br><span class="muted">{escape(asset.trend_label)}</span></td>
       <td>{escape(price)}</td>
       <td>{escape(one_day)}<br><span class="muted">{escape(sigma)} · {escape(asset.sigma_label)}</span></td>
@@ -756,6 +808,10 @@ def _fmt_price(value: float | None, currency: str) -> str:
         return "N/A"
     if currency == "GBP":
         return f"£{value:.2f}"
+    if currency == "USD":
+        return f"${value:.2f}"
+    if currency == "EUR":
+        return f"€{value:.2f}"
     return f"{value:.2f}"
 
 
