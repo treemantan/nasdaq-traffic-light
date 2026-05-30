@@ -10,6 +10,7 @@ secrets/
 config.json
 config.email.json
 portfolio.csv
+trading-account-statement_*.csv
 
 .env
 .venv/

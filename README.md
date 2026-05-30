@@ -178,6 +178,14 @@ DFND.L,10
 
 Revolut UK 官方支持下载 investment account statement：进入 `Invest → More → Documents → Stocks`，选择账户、statement 类型和时间范围。statement 可用于核对期末 portfolio snapshot；当前项目不直接读取 Revolut 账户，也不上传 statement。先将 ETF ticker 和组合权重整理进本地 `portfolio.csv` 即可。若未来提供脱敏 statement 样例，可再增加 PDF/CSV 自动解析适配器。
 
+若 Revolut statement 为 CSV 交易流水，可以直接运行导入器：
+
+```powershell
+python scripts/import_revolut_statement.py "trading-account-statement_YYYY-MM-DD_YYYY-MM-DD_en-us_xxxxx.csv"
+```
+
+导入器会按 `BUY`、`SELL` 和 `STOCK SPLIT` 重建当前数量，并生成本地 `portfolio.csv`。默认观察池内的 LSE ETF 使用 Yahoo 最新价估算；观察池外个股或 ETF 使用 statement 中最近成交价估算，并在组合视角中列为尚未覆盖。该文件只用于暴露观察，不等同于 Revolut 实时账户净值。原始 statement 和生成的 `portfolio.csv` 均已加入 `.gitignore`，不会上传到 GitHub。
+
 ETF 模块还会用 Yahoo 5 年日线做轻量历史检验。拥挤度口径统一为：`<35` 偏低，`65-69` 升温观察，`70-79` 偏高，`>=80` 高拥挤。回测采用周度抽样，默认把 `新增仓位环境 >= 60 且拥挤度 < 70` 视为“质量不差且尚未偏拥挤”的环境样本，并观察之后约 1M/3M/6M 的 forward return、3M 胜率和3M最大回撤，再与全样本对比。除此之外，系统会用当前的分数、拥挤度、RSI、1M/3M动量、距50/200日线、`σ200` 和日波动率做相似度匹配，并加入 SPY、QQQ、VIX、DXY、10Y yield、黄金和原油的同日历史环境代理变量，寻找历史上最接近当前市场环境的样本，并展示这些相似样本之后的 1M/3M/6M 表现与3M回撤。二级校准层会同时检验 `>=60`、`>=70`、`>=75` 三个阈值，并统一加入 `拥挤度 < 70` 的约束：`>=60` 表示环境尚可，`>=70` 表示环境较好，`>=75` 表示趋势结构较强但仍未进入偏拥挤区；系统会根据 forward return、3M胜率、3M回撤、样本数和相对全样本优势，动态给出“历史最优阈值”或“未发现稳定阈值优势”。该检验只使用当时已经可见的价格趋势、动量、波动和市场代理价格信息，不使用未来数据，也不把当前宏观指标回填到历史；因此它是环境评分的历史解释力检查，不是交易策略回测或买卖信号。
 
 估值字段采用 best-effort 方式抓取，不会因为估值接口失败而阻断价格和趋势监控：

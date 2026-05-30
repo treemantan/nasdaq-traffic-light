@@ -1659,6 +1659,7 @@ def _load_portfolio_summary(assets: list[ETFAssetMonitor], path: Path = Path("po
     except Exception as exc:
         return [], [f"portfolio.csv 无法读取：{type(exc).__name__}"]
     positions = []
+    uncovered = []
     for row in rows:
         symbol = str(row.get("symbol") or "").strip().upper()
         weight = _safe_float(row.get("weight_pct"))
@@ -1666,11 +1667,13 @@ def _load_portfolio_summary(assets: list[ETFAssetMonitor], path: Path = Path("po
             continue
         asset = asset_map.get(symbol)
         if asset is None:
-            warnings.append(f"{symbol} 尚未在 ETF 默认观察池中，组合暴露分析暂不纳入。")
+            uncovered.append(symbol)
             continue
         positions.append((asset, weight))
     if not positions:
         return [], warnings + ["portfolio.csv 未包含可识别的 symbol,weight_pct 持仓。"]
+    if uncovered:
+        warnings.append("以下个股或观察池外ETF暂未穿透分析：" + "、".join(uncovered) + "。")
     total = sum(weight for _, weight in positions)
     themes: dict[str, float] = {}
     weighted_ter = 0.0
