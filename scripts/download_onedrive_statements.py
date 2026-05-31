@@ -11,12 +11,20 @@ from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 
 
 GRAPH_ROOT = "https://graph.microsoft.com/v1.0"
 DEFAULT_FOLDER = "Trading/Revolut Transaction Statement"
 DEFAULT_PATTERN = "trading-account-statement_*.csv"
+
+
+class _PreauthenticatedDownloadRedirectHandler(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        redirected = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if redirected is not None:
+            redirected.remove_header("Authorization")
+        return redirected
 
 
 @dataclass(frozen=True)
@@ -184,7 +192,9 @@ def _download_item(token: str, config: GraphConfig, item: dict[str, Any], output
         request = Request(f"{GRAPH_ROOT}/users/{user_id}/drive/items/{item_id}/content", headers=_auth_headers(token))
     destination = _unique_destination(output_dir, Path(str(item["name"])).name)
     try:
-        with urlopen(request, timeout=30) as response:
+        # Graph /content redirects to a short-lived preauthenticated URL. The
+        # storage host must not receive the Graph bearer token.
+        with build_opener(_PreauthenticatedDownloadRedirectHandler()).open(request, timeout=30) as response:
             destination.write_bytes(response.read())
     except (HTTPError, URLError) as exc:
         raise RuntimeError(f"Failed to download OneDrive item {item.get('name')!r}: {exc}") from exc
