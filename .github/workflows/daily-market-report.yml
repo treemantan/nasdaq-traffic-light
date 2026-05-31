@@ -158,6 +158,7 @@ jobs:
           EMAIL_MODE: ${{ steps.email-mode.outputs.email_mode }}
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           REPORT_EMAIL_TO: ${{ secrets.REPORT_EMAIL_TO }}
+          PORTFOLIO_EMAIL_TO: ${{ secrets.PORTFOLIO_EMAIL_TO }}
           REPORT_EMAIL_FROM: ${{ secrets.REPORT_EMAIL_FROM }}
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
@@ -165,4 +166,4 @@ jobs:
           SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           SMTP_FROM: ${{ secrets.SMTP_FROM }}
-        run: python scripts/send_report_email.py
+        run: python scripts/send_cloud_report_email.py
