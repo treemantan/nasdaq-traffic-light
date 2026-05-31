@@ -2086,7 +2086,7 @@ def _portfolio_exposure_summary(
     )
     notes = [
         f"AI核心公司可识别暴露下限 {ai_total:.1f}%：直接持仓 {ai_direct:.1f}%，ETF前十大持仓间接暴露 {ai_indirect:.1f}%。",
-        f"其中 NVIDIA 与 Broadcom 合计可识别半导体核心暴露下限 {semiconductor_total:.1f}%。",
+        f"其中半导体设备、算力与存储链可识别暴露下限 {semiconductor_total:.1f}%。",
     ]
     if covered_etf_weight > lookthrough_weight:
         notes.append(
