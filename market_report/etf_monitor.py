@@ -195,6 +195,7 @@ class ETFAssetMonitor:
     forward_pe: float | None = None
     pb: float | None = None
     valuation_source: str = "unavailable"
+    valuation_as_of: str = ""
     pe_percentile: float | None = None
     pb_percentile: float | None = None
     pe_high_1y: float | None = None
@@ -294,6 +295,17 @@ VALUATION_PROXY_SYMBOLS = {
     "NATO.L": ("ITA", "StockAnalysis proxy: ITA"),
 }
 
+ISHARES_PORTFOLIO_VALUATION_URLS = {
+    "ISF.L": "https://www.ishares.com/uk/professional/en/products/251795/ishares-core-ftse-100-ucits-etf/?siteEntryPassthrough=true",
+    "CNX1.L": "https://www.ishares.com/uk/professional/en/products/253741/ishares-nasdaq-100-ucits-etf/?siteEntryPassthrough=true",
+    "IITU.L": "https://www.ishares.com/uk/professional/en/products/280510/ishares-sp-500-information-technology-sector-ucits-etf/?siteEntryPassthrough=true",
+    "SEMI.L": "https://www.ishares.com/uk/professional/en/products/319084/ishares-msci-global-semiconductors-ucits-etf/?siteEntryPassthrough=true",
+    "RBOT.L": "https://www.ishares.com/uk/professional/en/products/284219/ishares-automation-robotics-ucits-etf/?siteEntryPassthrough=true",
+    "LOCK.L": "https://www.ishares.com/uk/professional/en/products/297843/ishares-digital-security-ucits-etf/?siteEntryPassthrough=true",
+    "CSKR.L": "https://www.ishares.com/uk/professional/en/products/253733/ishares-msci-korea-ucits-etf-acc-fund/?siteEntryPassthrough=true",
+    "DFND.L": "https://www.ishares.com/uk/professional/en/products/334464/ishares-global-aerospace-defence-ucits-etf/?siteEntryPassthrough=true",
+}
+
 
 def fetch_etf_monitor(specs: list[ETFSpec] | None = None, macro_metrics: dict[str, Any] | None = None) -> ETFMonitor:
     fetched_at = datetime.now(timezone.utc)
@@ -348,12 +360,29 @@ def _fetch_etf_asset(
     trend_volatility = _robust_trend_volatility(daily_returns)
     daily_sigma = _sigma_move(one_day_change, daily_volatility)
     valuation_fetch_warning: str | None = None
+    valuations: dict[str, Any] = {}
+    valuation_source = "unavailable"
+    valuation_as_of = ""
+    if spec.equity_like and spec.symbol.upper() in ISHARES_PORTFOLIO_VALUATION_URLS:
+        try:
+            valuations = _fetch_ishares_portfolio_valuation(spec.symbol)
+            if _has_any_valuation(valuations):
+                valuation_source = "iShares官方组合估值"
+                valuation_as_of = str(valuations.get("asOf") or "")
+        except Exception as exc:
+            valuation_fetch_warning = f"iShares官方组合估值暂不可用：{type(exc).__name__}"
     try:
-        valuations = _fetch_yahoo_valuation(spec.symbol) if spec.equity_like else {}
+        yahoo_valuations = _fetch_yahoo_valuation(spec.symbol) if spec.equity_like else {}
+        valuations = _merge_missing_valuations(valuations, yahoo_valuations)
     except Exception as exc:
-        valuations = {}
-        valuation_fetch_warning = f"Yahoo估值接口暂不可用：{type(exc).__name__}"
-    valuation_source = "Yahoo" if _has_any_valuation(valuations) else "unavailable"
+        fallback_warning = f"Yahoo估值接口暂不可用：{type(exc).__name__}"
+        valuation_fetch_warning = (
+            f"{valuation_fetch_warning}; {fallback_warning}"
+            if valuation_fetch_warning
+            else fallback_warning
+        )
+    if valuation_source == "unavailable" and _has_any_valuation(valuations):
+        valuation_source = "Yahoo"
     if spec.equity_like and not _has_any_valuation(valuations):
         try:
             valuations = _fetch_stockanalysis_valuation(spec.symbol)
@@ -382,8 +411,9 @@ def _fetch_etf_asset(
     pb = _safe_float(valuations.get("priceToBook"))
     if pe is None and forward_pe is None and pb is None:
         valuation_source = "unavailable"
+    valuation_day = _parse_iso_date(valuation_as_of) or fetched_at.date()
     pe_percentile, pb_percentile, pe_high_1y, pe_high_1y_ratio = _update_valuation_history(
-        cache, spec.key, fetched_at.date(), pe, pb
+        cache, spec.key, valuation_day, pe, pb
     )
     warnings = _valuation_warnings(spec, pe, forward_pe, pb, pe_percentile, pe_high_1y_ratio)
     if valuation_fetch_warning:
@@ -417,6 +447,7 @@ def _fetch_etf_asset(
         forward_pe=forward_pe,
         pb=pb,
         valuation_source=valuation_source,
+        valuation_as_of=valuation_as_of,
         pe_percentile=pe_percentile,
         pb_percentile=pb_percentile,
         pe_high_1y=pe_high_1y,
@@ -654,6 +685,54 @@ def _fetch_yahoo_valuation(symbol: str) -> dict[str, float | None]:
         or _raw_number(raw.get("defaultKeyStatistics", {}).get("forwardPE")),
         "priceToBook": _raw_number(raw.get("defaultKeyStatistics", {}).get("priceToBook")),
     }
+
+
+def _fetch_ishares_portfolio_valuation(symbol: str) -> dict[str, Any]:
+    url = ISHARES_PORTFOLIO_VALUATION_URLS.get(symbol.upper())
+    if not url:
+        return {}
+    return _parse_ishares_portfolio_valuation(_read_text(url, timeout=15))
+
+
+def _parse_ishares_portfolio_valuation(text: str) -> dict[str, Any]:
+    plain = re.sub(r"\s+", " ", unescape(re.sub(r"<[^>]+>|<!--.*?-->", " ", text, flags=re.DOTALL))).strip()
+    pe, pe_as_of = _extract_ishares_portfolio_ratio(plain, "P/E Ratio")
+    pb, pb_as_of = _extract_ishares_portfolio_ratio(plain, "P/B Ratio")
+    as_of = pb_as_of or pe_as_of
+    return {
+        "trailingPE": pe,
+        "forwardPE": None,
+        "priceToBook": pb,
+        "asOf": as_of.isoformat() if as_of else "",
+    }
+
+
+def _extract_ishares_portfolio_ratio(text: str, label: str) -> tuple[float | None, date | None]:
+    match = re.search(
+        rf"{re.escape(label)}\s+as of\s+(\d{{1,2}}/[A-Za-z]+/\d{{4}})\s+(-?\d+(?:\.\d+)?)",
+        text,
+        re.IGNORECASE,
+    )
+    if not match:
+        return None, None
+    return _safe_float(match.group(2)), _parse_ishares_date(match.group(1))
+
+
+def _parse_ishares_date(raw: str) -> date | None:
+    for pattern in ("%d/%b/%Y", "%d/%B/%Y"):
+        try:
+            return datetime.strptime(raw, pattern).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _merge_missing_valuations(primary: dict[str, Any], fallback: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(primary)
+    for key in ("trailingPE", "forwardPE", "priceToBook"):
+        if _safe_float(merged.get(key)) is None and _safe_float(fallback.get(key)) is not None:
+            merged[key] = fallback[key]
+    return merged
 
 
 def _fetch_stockanalysis_valuation(symbol: str) -> dict[str, float | None]:
@@ -950,6 +1029,13 @@ def _row_within_days(row: dict[str, Any], day: date, days: int) -> bool:
     return 0 <= (day - row_day).days <= days
 
 
+def _parse_iso_date(raw: str) -> date | None:
+    try:
+        return date.fromisoformat(raw)
+    except (TypeError, ValueError):
+        return None
+
+
 def _write_asset_cache(cache: dict[str, Any], asset: ETFAssetMonitor) -> None:
     cache.setdefault("assets", {})[asset.key] = {
         "label": asset.label,
@@ -979,6 +1065,7 @@ def _write_asset_cache(cache: dict[str, Any], asset: ETFAssetMonitor) -> None:
         "forward_pe": asset.forward_pe,
         "pb": asset.pb,
         "valuation_source": asset.valuation_source,
+        "valuation_as_of": asset.valuation_as_of,
         "pe_percentile": asset.pe_percentile,
         "pb_percentile": asset.pb_percentile,
         "pe_high_1y": asset.pe_high_1y,
@@ -1052,6 +1139,7 @@ def _asset_from_cache(spec: ETFSpec, entry: dict[str, Any], fetched_at: datetime
         forward_pe=_safe_float(entry.get("forward_pe")),
         pb=_safe_float(entry.get("pb")),
         valuation_source=entry.get("valuation_source") or "unavailable",
+        valuation_as_of=str(entry.get("valuation_as_of") or ""),
         pe_percentile=_safe_float(entry.get("pe_percentile")),
         pb_percentile=_safe_float(entry.get("pb_percentile")),
         pe_high_1y=_safe_float(entry.get("pe_high_1y")),
@@ -1942,7 +2030,16 @@ def _portfolio_fx_notes(positions: list[PortfolioPosition]) -> list[str]:
 def _portfolio_exposure_summary(
     assets: list[ETFAssetMonitor], positions: list[PortfolioPosition]
 ) -> tuple[list[PortfolioExposure], list[str]]:
-    focus = {"NVDA": "NVIDIA", "AVGO": "Broadcom", "META": "Meta Platforms"}
+    focus = {
+        "NVDA": ("NVIDIA", ("NVDA", "NVIDIA")),
+        "AVGO": ("Broadcom", ("AVGO", "BROADCOM")),
+        "META": ("Meta Platforms", ("META", "META PLATFORMS")),
+        "AMD": ("AMD", ("AMD", "ADVANCED MICRO DEVICES")),
+        "TSM": ("TSMC", ("TSM", "TSMC", "TAIWAN SEMICONDUCTOR")),
+        "ASML": ("ASML", ("ASML",)),
+        "005930": ("Samsung Electronics", ("005930", "SAMSUNG ELECTRONICS", "SAMSUNG ELEC")),
+        "000660": ("SK hynix", ("000660", "SK HYNIX", "SKHYNIX")),
+    }
     asset_map = {asset.symbol.upper(): asset for asset in assets}
     direct = {symbol: 0.0 for symbol in focus}
     indirect = {symbol: 0.0 for symbol in focus}
@@ -1951,8 +2048,9 @@ def _portfolio_exposure_summary(
 
     for position in positions:
         symbol = position.symbol.upper()
-        if symbol in direct:
-            direct[symbol] += position.weight_pct
+        direct_symbol = _focus_exposure_symbol(symbol, symbol, focus)
+        if direct_symbol:
+            direct[direct_symbol] += position.weight_pct
         asset = asset_map.get(symbol)
         if asset is None:
             continue
@@ -1961,8 +2059,8 @@ def _portfolio_exposure_summary(
             continue
         lookthrough_weight += position.weight_pct
         for holding in asset.holdings:
-            holding_symbol = holding.symbol.upper()
-            if holding_symbol in indirect:
+            holding_symbol = _focus_exposure_symbol(holding.symbol, holding.name, focus)
+            if holding_symbol:
                 indirect[holding_symbol] += position.weight_pct * holding.weight / 100
 
     exposures = [
@@ -1973,7 +2071,7 @@ def _portfolio_exposure_summary(
             direct_weight_pct=direct[symbol],
             etf_weight_pct=indirect[symbol],
         )
-        for symbol, label in focus.items()
+        for symbol, (label, _aliases) in focus.items()
         if direct[symbol] + indirect[symbol] > 0
     ]
     exposures.sort(key=lambda item: item.weight_pct, reverse=True)
@@ -1983,7 +2081,9 @@ def _portfolio_exposure_summary(
     ai_total = sum(item.weight_pct for item in exposures)
     ai_direct = sum(item.direct_weight_pct for item in exposures)
     ai_indirect = sum(item.etf_weight_pct for item in exposures)
-    semiconductor_total = sum(item.weight_pct for item in exposures if item.symbol in {"NVDA", "AVGO"})
+    semiconductor_total = sum(
+        item.weight_pct for item in exposures if item.symbol in {"NVDA", "AVGO", "AMD", "TSM", "ASML", "005930", "000660"}
+    )
     notes = [
         f"AI核心公司可识别暴露下限 {ai_total:.1f}%：直接持仓 {ai_direct:.1f}%，ETF前十大持仓间接暴露 {ai_indirect:.1f}%。",
         f"其中 NVIDIA 与 Broadcom 合计可识别半导体核心暴露下限 {semiconductor_total:.1f}%。",
@@ -1994,7 +2094,21 @@ def _portfolio_exposure_summary(
             "未穿透部分可能继续包含AI相关公司。"
         )
     notes.append("组合穿透基于直接持仓与ETF前十大持仓近似计算，属于可识别下限，不等同于完整基金穿透。")
+    hbm_total = sum(item.weight_pct for item in exposures if item.symbol in {"005930", "000660"})
+    notes.append(f"Samsung Electronics 与 SK hynix 的 HBM / 存储链可识别暴露下限 {hbm_total:.1f}%。")
     return exposures, notes
+
+
+def _focus_exposure_symbol(
+    symbol: str,
+    name: str,
+    focus: dict[str, tuple[str, tuple[str, ...]]],
+) -> str | None:
+    haystack = f"{symbol} {name}".upper()
+    for canonical_symbol, (_label, aliases) in focus.items():
+        if any(re.search(rf"(?<![A-Z0-9]){re.escape(alias)}(?![A-Z0-9])", haystack) for alias in aliases):
+            return canonical_symbol
+    return None
 
 
 def _valuation_warnings(

@@ -12,6 +12,7 @@ from market_report.etf_monitor import (
     ETFSpec,
     _audit_metadata,
     _load_portfolio_summary,
+    _parse_ishares_portfolio_valuation,
     _parse_compact_number,
     _portfolio_exposure_summary,
 )
@@ -29,6 +30,17 @@ class ETFProductCheckTests(unittest.TestCase):
         )
         self.assertEqual(status, "异常")
         self.assertIn("Semiconductor", note)
+
+    def test_parse_ishares_portfolio_valuation_with_disclosure_date(self) -> None:
+        values = _parse_ishares_portfolio_valuation(
+            """
+            <div>P/E Ratio</div><div>as of 21/May/2026</div><div>46.17</div>
+            <div>P/B Ratio</div><div>as of 21/May/2026</div><div>10.02</div>
+            """
+        )
+        self.assertEqual(values["trailingPE"], 46.17)
+        self.assertEqual(values["priceToBook"], 10.02)
+        self.assertEqual(values["asOf"], "2026-05-21")
 
     def test_overlap_uses_top_holdings_weights(self) -> None:
         holdings_a = (ETFHolding("NVDA", "NVIDIA", 10), ETFHolding("AMD", "AMD", 8))
@@ -61,6 +73,21 @@ class ETFProductCheckTests(unittest.TestCase):
         self.assertEqual(exposure_map["NVDA"].direct_weight_pct, 6)
         self.assertEqual(exposure_map["NVDA"].etf_weight_pct, 4)
         self.assertTrue(any("可识别暴露下限" in item for item in notes))
+
+    def test_portfolio_exposure_recognizes_korean_hbm_holdings_by_name(self) -> None:
+        asset = self._asset(
+            "FLRK.L",
+            (
+                ETFHolding("005930.KS", "Samsung Electronics Co Ltd", 25),
+                ETFHolding("000660.KS", "SK hynix Inc", 12),
+            ),
+        )
+        positions = [PortfolioPosition("FLRK.L", 40, None, None, None, None, None, None, None, "covered")]
+        exposures, notes = _portfolio_exposure_summary([asset], positions)
+        exposure_map = {item.symbol: item for item in exposures}
+        self.assertEqual(exposure_map["005930"].weight_pct, 10)
+        self.assertEqual(exposure_map["000660"].weight_pct, 4.8)
+        self.assertTrue(any("HBM / 存储链" in item for item in notes))
 
     @staticmethod
     def _asset(symbol: str, holdings: tuple[ETFHolding, ...], ter: float = 0.10) -> ETFAssetMonitor:

@@ -130,7 +130,8 @@ def render_html_report(report: ScoredReport, title: str) -> str:
     .sensitivity-panel summary {{ cursor: pointer; padding: 12px 14px; background: rgba(255,255,255,.025); font-weight: 760; }}
     .sensitivity-table {{ min-width: 1120px; }}
     .etf-groups {{ display: grid; gap: 10px; }}
-    .etf-group {{ border: 1px solid var(--line); border-radius: 8px; background: rgba(255,255,255,.02); overflow: hidden; }}
+    .etf-group {{ border: 1px solid var(--line); border-left: 3px solid rgba(96,165,250,.48); border-radius: 8px; background: rgba(255,255,255,.02); overflow: hidden; }}
+    .etf-group[open] {{ border-color: rgba(96,165,250,.52); background: rgba(15,23,42,.62); }}
     .etf-group summary {{ cursor: pointer; list-style: none; padding: 12px 14px; background: rgba(255,255,255,.025); }}
     .etf-group summary::-webkit-details-marker {{ display: none; }}
     .etf-group-head {{ display: flex; justify-content: space-between; gap: 14px; align-items: start; }}
@@ -138,6 +139,7 @@ def render_html_report(report: ScoredReport, title: str) -> str:
     .etf-group-meta {{ color: var(--muted); font-size: 12px; margin-top: 3px; }}
     .etf-group-stats {{ text-align: right; color: var(--subtle); font-size: 12px; min-width: 180px; }}
     .etf-group-body {{ padding: 12px; }}
+    .etf-group-end {{ margin-top: 10px; padding-top: 8px; border-top: 1px dashed rgba(148,163,184,.28); color: var(--muted); font-size: 12px; }}
     .table-scroll {{ max-width: 100%; overflow-x: auto; overflow-y: hidden; }}
     .table-scroll table {{ min-width: 1580px; }}
     .etf-cards {{ display: none; }}
@@ -387,7 +389,7 @@ def _render_etf_monitor(monitor: ETFMonitor | None) -> str:
     groups = "\n".join(_render_etf_group(group, index) for index, group in enumerate(_group_etf_assets(monitor.assets)))
     warnings = ""
     if monitor.warnings:
-        warnings = "<div class=\"small-note\">数据提示：" + escape(" ".join(monitor.warnings[:4])) + "</div>"
+        warnings = "<div class=\"small-note\">数据提示：" + escape(_summarize_etf_warnings(monitor.warnings)) + "</div>"
     changes = _render_etf_notes("今日ETF变动摘要", monitor.change_summary)
     portfolio = _render_portfolio_panel(monitor)
     sensitivities = _render_sensitivity_panel(monitor)
@@ -398,7 +400,7 @@ def _render_etf_monitor(monitor: ETFMonitor | None) -> str:
       {portfolio}
       {sensitivities}
       <div class="etf-groups">{groups}</div>
-      <div class="small-note">PE衡量市场为每单位盈利支付的价格，Forward PE基于未来盈利预期；PB衡量市值相对账面净资产。PE位置优先显示本地历史分位；样本不足时显示“当前PE/近一年缓存最高PE”的近似比例。σ200使用63/126/252日窗口去极值后的稳健趋势波动率。持仓重叠度基于可获得的前十大持仓近似计算，并非完整穿透。估值源若标记为proxy，表示使用高度相关的同类ETF作近似参考。黄金ETC不适用PE/PB。</div>
+      <div class="small-note">PE衡量底层持仓组合的盈利估值，Forward PE基于未来盈利预期；组合P/B衡量底层持仓市值相对账面净资产的加权估值，并非ETF自身资产负债表指标。组合估值按发行商披露节奏更新，不等同于实时行情。PE位置优先显示本地历史分位；样本不足时显示“当前PE/近一年缓存最高PE”的近似比例。σ200使用63/126/252日窗口去极值后的稳健趋势波动率。持仓重叠度基于可获得的前十大持仓近似计算，并非完整穿透。估值源若标记为proxy，表示使用高度相关的同类ETF作近似参考。黄金ETC不适用PE/PB。</div>
       {warnings}
     </section>"""
 
@@ -418,7 +420,7 @@ def _render_portfolio_panel(monitor: ETFMonitor) -> str:
         for item in monitor.portfolio_exposures
     )
     exposure_panel = (
-        f'<div class="portfolio-notes"><strong>AI核心公司穿透（可识别下限）</strong></div>'
+        f'<div class="portfolio-notes"><strong>AI算力、平台与存储链穿透（可识别下限）</strong></div>'
         f'<div class="portfolio-exposure-grid">{exposures}</div>'
         if exposures
         else ""
@@ -524,7 +526,7 @@ def _render_etf_group(group: tuple[str, str, list[ETFAssetMonitor]], index: int 
             <th>1M</th>
             <th>RSI14</th>
             <th>SMA13/200</th>
-            <th>PE / Forward PE / PB</th>
+            <th>组合PE / Forward PE / 组合P/B</th>
             <th>规模/流动性</th>
             <th>PE位置</th>
             <th>新增仓位环境</th>
@@ -537,8 +539,23 @@ def _render_etf_group(group: tuple[str, str, list[ETFAssetMonitor]], index: int 
         <div class="etf-cards">
           <div class="etf-card-grid">{cards}</div>
         </div>
+        <div class="etf-group-end">本组结束：{escape(title)} · 共{len(assets)}只</div>
       </div>
     </details>"""
+
+
+def _summarize_etf_warnings(warnings: list[str]) -> str:
+    cached = [item for item in warnings if "使用本地ETF缓存" in item]
+    network_blocked = any("WinError 10013" in item for item in warnings)
+    remaining = [item for item in warnings if item not in cached]
+    parts: list[str] = []
+    if cached:
+        parts.append(f"{len(cached)}只ETF使用本地缓存")
+    if network_blocked:
+        parts.append("本机网络权限阻止Yahoo实时抓取；该降级并非由非交易日直接触发")
+    if remaining:
+        parts.append("；".join(remaining[:3]))
+    return "；".join(parts) + "。"
 
 
 def _group_etf_assets(assets: list[ETFAssetMonitor]) -> list[tuple[str, str, list[ETFAssetMonitor]]]:
@@ -645,7 +662,7 @@ def _render_etf_row(asset: ETFAssetMonitor) -> str:
     sma = f"{_fmt_price(asset.sma13, asset.currency)} / {_fmt_price(asset.sma200, asset.currency)}"
     trend_sigma = _fmt_sigma_200d(asset.trend_sigma_200d)
     valuation = f"{_fmt_plain(asset.pe)} / {_fmt_plain(asset.forward_pe)} / {_fmt_plain(asset.pb)}"
-    valuation_source = f"估值源：{asset.valuation_source}" if asset.valuation_source != "unavailable" else "估值源：暂无"
+    valuation_source = _fmt_valuation_source(asset)
     liquidity = _fmt_liquidity(asset)
     pe_position = _fmt_pe_position(asset)
     symbol = f"{escape(asset.symbol)} · {escape(asset.provider)}"
@@ -675,7 +692,7 @@ def _render_etf_card(asset: ETFAssetMonitor) -> str:
     one_month = _fmt_pct(asset.momentum_1m)
     rsi = "N/A" if asset.rsi14 is None else f"{asset.rsi14:.1f}"
     valuation = f"{_fmt_plain(asset.pe)} / {_fmt_plain(asset.forward_pe)} / {_fmt_plain(asset.pb)}"
-    valuation_source = f"估值源：{asset.valuation_source}" if asset.valuation_source != "unavailable" else "估值源：暂无"
+    valuation_source = _fmt_valuation_source(asset)
     liquidity = _fmt_liquidity(asset)
     trend_line = f"距200日线 {_fmt_pct(asset.distance_sma200)} / {_fmt_sigma_200d(asset.trend_sigma_200d)}"
     cost_line = f"TER {_fmt_ter(asset.ter)} · {_ter_label(asset.ter)}"
@@ -694,11 +711,18 @@ def _render_etf_card(asset: ETFAssetMonitor) -> str:
         <div class="etf-card-line"><strong>1D / 1M</strong>{escape(one_day)} / {escape(one_month)}<br>{escape(_fmt_sigma(asset.daily_sigma))}</div>
         <div class="etf-card-line"><strong>RSI14</strong>{escape(rsi)}<br>{escape(asset.momentum_label)}</div>
         <div class="etf-card-line"><strong>趋势拉伸</strong>{escape(trend_line)}<br>{escape(asset.trend_stretch_label)}</div>
-        <div class="etf-card-line"><strong>PE / Fwd / PB</strong>{escape(valuation)}<br>{escape(_fmt_pe_position(asset))} · {escape(valuation_source)}</div>
+        <div class="etf-card-line"><strong>组合PE / Fwd / 组合P/B</strong>{escape(valuation)}<br>{escape(_fmt_pe_position(asset))} · {escape(valuation_source)}</div>
         <div class="etf-card-line"><strong>规模/流动性</strong>{escape(asset.liquidity_label)}<br>{escape(liquidity)}</div>
         <div class="etf-card-line">{entry_cell}</div>
       </div>
     </article>"""
+
+
+def _fmt_valuation_source(asset: ETFAssetMonitor) -> str:
+    if asset.valuation_source == "unavailable":
+        return "估值源：暂无"
+    as_of = f" · 最近披露：{asset.valuation_as_of}" if asset.valuation_as_of else ""
+    return f"估值源：{asset.valuation_source}{as_of}"
 
 
 def _render_entry_cell(asset: ETFAssetMonitor, status_class: str, compact: bool) -> str:

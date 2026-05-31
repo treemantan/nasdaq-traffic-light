@@ -11,6 +11,7 @@ config.json
 config.email.json
 portfolio.csv
 trading-account-statement_*.csv
+.cloud-statements/
 
 .env
 .venv/

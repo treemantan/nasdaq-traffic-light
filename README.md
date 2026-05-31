@@ -44,9 +44,70 @@ C:\Users\<Windows用户名>\OneDrive\Trading\Revolut Transaction Statement
 
 OneDrive 主账号、MFA 验证方式和 recovery 邮箱由 Windows OneDrive 客户端管理。脚本仅访问已经同步到本地的 CSV 文件，不保存 OneDrive 邮箱、密码、验证码或 OAuth token。
 
+从 Task Scheduler 手动点击 `Macro Regime Radar OneDrive Portfolio Import` 后，任务会在隐藏窗口中运行，完整抓取通常需要数分钟。最新状态记录在：
+
+```text
+logs/portfolio-report-status.txt
+```
+
+状态可能是 `RUNNING`、`SUCCESS`、`FAILED` 或 `SKIPPED_BUSY`。脚本带有并发锁；如果定时任务仍在运行，再次点击不会重复启动新的抓取实例。
+
 默认 inbox 可以直接保存每个账户的最新 CSV。为避免 statement 时间窗口重叠导致重复计算，请及时删除同一账户的旧导出。需要长期保留历史导出时，可以按账户建立子目录，并用 `scripts\run_portfolio_report.ps1 -UseLatestPerAccountFolder` 让脚本只选择每个账户目录中的最新 CSV。
 
-后续可选增强：使用 Microsoft Graph API 从 OneDrive 私人目录读取最新 CSV，使 GitHub Actions 在本地电脑关机时也能更新持仓。该方案需要单独配置 OAuth 权限与 refresh token，目前版本不启用。
+云端版本已经支持使用 Microsoft Graph API 从 OneDrive 目录读取最新 CSV，使 GitHub Actions 在本地电脑关机时也能更新持仓。Windows 同步目录仍然保留，适合本地双击刷新和故障排查。
+
+### GitHub Actions 直接读取 OneDrive statement
+
+workflow 会在生成报告之前运行：
+
+```text
+python scripts/download_onedrive_statements.py --output-dir .cloud-statements --import-portfolio
+```
+
+下载的原始 CSV 与生成的 `portfolio.csv` 只存在于当次 GitHub runner，不会上传为 artifact，也不会提交到仓库。推荐在 OneDrive 中使用：
+
+```text
+Trading/Revolut Transaction Statement
+```
+
+该功能采用免费路径：只使用 Microsoft Entra 应用注册和 Microsoft Graph 的标准 OneDrive 文件读取接口，不创建 Azure VM、Function、Storage、Logic Apps、数据库或其他按量计费资源。无需将应用关联到 Graph metered API billing，也不要在 Azure Portal 中点击“创建资源”。如果已有可用 OneDrive 账号，优先使用下方 delegated refresh token 模式；它权限更小，也不要求购买 Microsoft Entra P1/P2。
+
+如果有多个投资账户，建议在该目录下按账户建立子目录，并在 GitHub repository variables 中将 `ONEDRIVE_USE_LATEST_PER_ACCOUNT_FOLDER` 设置为 `true`。云端脚本会分别选取每个账户目录中最后修改时间最新的 CSV，减少 statement 时间窗口重叠导致的重复计算。
+
+支持两种 Microsoft Graph 认证方式：
+
+1. Delegated refresh token 模式，推荐使用。它适合个人 Microsoft 账号，也适合希望使用最小权限的 OneDrive。创建支持 personal Microsoft account 的 public-client app registration，添加 Microsoft Graph `Delegated` 权限 `Files.Read`，并允许 public client flow。然后在本地运行：
+
+```powershell
+python scripts/get_onedrive_refresh_token.py "<ONEDRIVE_CLIENT_ID>"
+```
+
+按照终端提示登录并授权后，将输出值保存为 GitHub repository secret：
+
+```text
+ONEDRIVE_CLIENT_ID
+ONEDRIVE_REFRESH_TOKEN
+```
+
+2. Entra 云端应用模式，仅作为组织 OneDrive 的可选方案。它同样不创建收费 Azure 资源，但权限范围更宽；仅在你明确需要组织账号无人值守访问时使用。创建 app registration，添加 Microsoft Graph `Application` 权限 `Files.Read.All` 并授予 admin consent。随后配置 repository secrets：
+
+```text
+ONEDRIVE_CLIENT_ID
+ONEDRIVE_TENANT_ID
+ONEDRIVE_CLIENT_SECRET
+ONEDRIVE_USER_ID
+```
+
+其中 `ONEDRIVE_USER_ID` 填 OneDrive 所属用户的登录邮箱或 Entra user object ID。该模式不需要 refresh token。
+
+两种模式都可以设置 repository variable：
+
+```text
+ONEDRIVE_FOLDER_PATH=Trading/Revolut Transaction Statement
+ONEDRIVE_USE_LATEST_PER_ACCOUNT_FOLDER=false
+```
+
+`ONEDRIVE_FOLDER_PATH` 未设置时使用上述默认目录。statement 属于敏感投资数据；不要将 CSV、refresh token 或 client secret 提交到 GitHub，也不要在 issue、日志或聊天中粘贴。
 
 其中 JSON 是结构化评分对象，供云端轻量邮件使用；HTML 是完整仪表盘。
 
@@ -81,6 +142,7 @@ python -m market_report --config config.json
 
 - `RESEND_API_KEY`：Resend API key
 - `REPORT_EMAIL_TO`：收件人邮箱，多个地址用英文逗号分隔
+- `PORTFOLIO_EMAIL_TO`：可选。私人组合报告收件人；当 `full` 报告包含云端导入的 `portfolio.csv` 时，系统向 `REPORT_EMAIL_TO` 发送移除实际持仓的公开版，并向该地址另发保留实际持仓的私人完整版
 - `REPORT_EMAIL_FROM`：Resend 已验证的发件地址或域名邮箱
 
 如果没有自己的域名，也可以改用 Gmail SMTP。设置以下 repository secrets：
@@ -219,7 +281,7 @@ python scripts/import_revolut_statement.py "stocks-isa.csv" "general-investment.
 
 网页报告会生成接近券商持仓页的“实际组合持仓”面板，展示数量、GBP平均成本、native currency 当前价格、native currency 市值、GBP参考市值、FX参考汇率、未实现盈亏、日变化与组合占比。Revolut statement 中的历史成交已经折算为 GBP，因此历史成本使用 statement 的 GBP 口径；当前市值使用 Yahoo 最近 native quote，并按报告抓取时点的 `GBP/USD` 或 `GBP/EUR` 换算为 GBP reference value。报告会明确显示 FX rate 和抓取时间。该面板只覆盖导入 statement 所属的账户和时间范围，不等同于 Revolut 实时账户净值；如 Revolut 中存在多个投资账户，需要分别导出并合并适配。原始 statement 和生成的 `portfolio.csv` 均已加入 `.gitignore`，不会上传到 GitHub。
 
-组合面板还会将直接持有的 `NVDA`、`AVGO`、`META` 与 ETF 可获得的前十大持仓合并，显示 AI 核心公司与半导体核心暴露的“可识别下限”。直接个股仓位按完整权重计入；ETF 间接暴露仅根据公开前十大持仓近似计算，因此不等同于完整基金穿透。`ISF.L` 已纳入 UK 大盘股观察，`IGTM.L` 已纳入固定收益与久期观察；IGTM 不套用股票 PE 或 AI 拥挤度模型。
+组合面板还会将直接持有的 `NVDA`、`AVGO`、`META`、`AMD`、`TSM`、`ASML` 与 ETF 可获得的前十大持仓合并，并识别韩国 ETF 中的 Samsung Electronics 和 SK hynix，显示 AI 算力、平台、半导体设备与 HBM / 存储链暴露的“可识别下限”。直接个股仓位按完整权重计入；ETF 间接暴露仅根据公开前十大持仓近似计算，因此不等同于完整基金穿透。`ISF.L` 已纳入 UK 大盘股观察，`IGTM.L` 已纳入固定收益与久期观察；IGTM 不套用股票 PE 或 AI 拥挤度模型。
 
 ### 本地双击生成组合报告
 
@@ -247,11 +309,11 @@ ETF 模块还会用 Yahoo 5 年日线做轻量历史检验。拥挤度口径统�
 
 估值字段采用 best-effort 方式抓取，不会因为估值接口失败而阻断价格和趋势监控：
 
-- `PE`：市盈率，衡量市场愿意为每单位盈利支付多少价格；对成长和科技 ETF 的利率敏感度判断较有用。
+- `PE`：底层持仓组合市盈率，衡量市场愿意为每单位盈利支付多少价格；对成长和科技 ETF 的利率敏感度判断较有用。
 - `Forward PE`：基于未来盈利预期的市盈率，更贴近市场当前定价逻辑，但依赖分析师盈利预测。
-- `PB`：市净率，衡量市值相对账面净资产；对金融、周期和重资产行业更有解释力，对半导体、AI、量子等轻资产主题 ETF 的解释力弱于 PE。
+- `组合P/B`：ETF 底层持仓市值相对账面净资产的加权估值，不是 ETF 自身资产负债表的市净率。该指标对金融、周期和重资产行业更有解释力；对半导体、AI、量子等轻资产主题 ETF 的解释力弱于 PE。
 
-估值源优先使用 Yahoo，若不可用则尝试 StockAnalysis 的伦敦 ETF 页面。若伦敦 ETF 本身不披露 PE，少数核心产品会使用高度相关的同类 ETF 作为 proxy，例如 `VWRL.L` 使用 `VT`、`VUAG.L` 使用 `VOO`、`IITU.L` 使用 `XLK`、半导体 ETF 使用 `SMH`、`QWTM.L` 使用 `QTUM`、韩国 ETF 使用 `EWY`、`DFND.L` / `DFNG.L` / `NATO.L` 使用 `ITA` 近似观察相关资产池估值；报告会明确标注 `proxy`，不把代理估值伪装成基金自身披露数据。韩国组优先纳入 Yahoo 可稳定抓取且 UK/LSE 可跟踪的 `CSKR.L`、`HKOR.L`、`FLRK.L`；若某些 Korea ticker 在 Yahoo 返回空历史，例如 `KWL.L`，默认池会暂不纳入，避免报告产生不可用资产。欧洲防务和防务创新 ETF 若缺少可比 proxy，会保留价格、趋势、拥挤度和历史环境检验，不强行填充不匹配估值。
+组合估值优先使用发行商官方产品页；第一阶段已接入 iShares 官方组合估值，包括可用的组合 PE、组合P/B 和最近披露日期。发行商组合估值通常按自身披露节奏更新，不等同于 ETF 实时行情，也不应伪装为每日新观测。若官方组合估值不可用，系统会尝试 Yahoo，再尝试 StockAnalysis 的伦敦 ETF 页面。若伦敦 ETF 本身不披露 PE，少数核心产品会使用高度相关的同类 ETF 作为 proxy，例如 `VWRL.L` 使用 `VT`、`VUAG.L` 使用 `VOO`、`IITU.L` 使用 `XLK`、半导体 ETF 使用 `SMH`、`QWTM.L` 使用 `QTUM`、韩国 ETF 使用 `EWY`、`DFND.L` / `DFNG.L` / `NATO.L` 使用 `ITA` 近似观察相关资产池估值；报告会明确标注 `proxy`，不把代理估值伪装成基金自身披露数据。韩国组优先纳入 Yahoo 可稳定抓取且 UK/LSE 可跟踪的 `CSKR.L`、`HKOR.L`、`FLRK.L`；若某些 Korea ticker 在 Yahoo 返回空历史，例如 `KWL.L`，默认池会暂不纳入，避免报告产生不可用资产。欧洲防务和防务创新 ETF 若缺少可比 proxy，会保留价格、趋势、拥挤度和历史环境检验，不强行填充不匹配估值。
 
 黄金 ETC 没有盈利和净资产口径，因此不展示 PE/PB，应结合实际利率、美元和金价趋势解释。PE/PB 历史分位数会通过本地缓存逐步积累；样本不足时，报告会退而显示 `当前PE / 近一年缓存最高PE` 的近似比例，用来粗略判断当前估值是否贴近过去一年已观察到的高位，但该比例依赖本地缓存积累，不等同于严格历史分位。
 
@@ -260,6 +322,9 @@ GitHub Actions 会通过 `actions/cache` 持续保存 `output/cache`，因此云
 ## 后续路线图
 
 - 真实买卖价差：优先考虑后续接入 IBKR 或其他稳定报价源。
-- 组合穿透：在本地组合导入基础上，进一步聚合 Nvidia、Samsung、SK hynix 等底层持仓暴露。
+
+## 已完成增强
+
+- 组合穿透：在实际组合导入基础上，聚合 Nvidia、Broadcom、Meta、AMD、TSMC、ASML、Samsung Electronics 与 SK hynix 的直接持仓和 ETF 前十大持仓近似暴露。
 - 相关性与 beta 面板：滚动观察 ETF 对 Nasdaq、DXY、10Y yield 和黄金的敏感度变化。
 - Walk-forward 历史验证：展示相似环境样本日期、距离分数和未来路径分布，减少均值掩盖尾部风险的问题。
