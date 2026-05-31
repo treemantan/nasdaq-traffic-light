@@ -1,8 +1,15 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
-from market_report.news_monitor import _dedupe_events, _is_relevant_event, classify_news_event
+from market_report.news_monitor import (
+    _dedupe_events,
+    _is_relevant_event,
+    _is_supported_title_language,
+    _translate_event_if_needed,
+    classify_news_event,
+)
 
 
 class NewsMonitorTests(unittest.TestCase):
@@ -62,6 +69,29 @@ class NewsMonitorTests(unittest.TestCase):
         )
 
         self.assertFalse(_is_relevant_event(event))
+
+    def test_non_english_non_chinese_title_is_not_included(self) -> None:
+        self.assertFalse(_is_supported_title_language("Czesi uważają, że Donald Trump osłabia NATO"))
+        self.assertTrue(_is_supported_title_language("Trump discusses NATO spending"))
+        self.assertTrue(_is_supported_title_language("特朗普讨论半导体关税"))
+
+    def test_non_english_title_is_translated_and_original_is_retained(self) -> None:
+        event = classify_news_event(
+            "Czesi uważają, że Donald Trump osłabia NATO",
+            "Example",
+            "2026-05-31",
+            "https://example.com/nato",
+            "新闻聚合",
+        )
+        with patch(
+            "market_report.news_monitor._translate_title_to_english",
+            return_value="Czechs believe Donald Trump is weakening NATO",
+        ):
+            translated = _translate_event_if_needed(event)
+
+        self.assertEqual(translated.title, "Czechs believe Donald Trump is weakening NATO")
+        self.assertEqual(translated.original_title, event.title)
+        self.assertIn("国防与航空航天", translated.themes)
 
 
 if __name__ == "__main__":

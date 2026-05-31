@@ -360,11 +360,17 @@ def _render_news_monitor(monitor: NewsMonitor | None) -> str:
 def _render_news_event(event: NewsEvent) -> str:
     tags = "".join(f'<span class="tag">{escape(theme)}</span>' for theme in event.themes)
     tickers = f" · 相关Ticker：{escape('、'.join(event.tickers))}" if event.tickers else ""
+    original_title = (
+        f'<details class="news-meta"><summary>查看原始标题</summary>{escape(event.original_title)}</details>'
+        if event.original_title
+        else ""
+    )
     return f"""<article class="news-item">
   <a href="{escape(event.url)}" target="_blank" rel="noopener noreferrer">{escape(event.title)}</a>
   <div class="news-meta">{escape(event.source)} · {escape(event.published_at)} · {escape(event.source_type)} · 影响：{escape(event.impact)} · 置信度：{escape(event.confidence)}{tickers}</div>
   <div class="news-meta">{escape(event.direction)}</div>
   <div class="news-tags">{tags}</div>
+  {original_title}
 </article>"""
 
 

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
+import unicodedata
 import urllib.parse
 import xml.etree.ElementTree as ET
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -29,6 +30,7 @@ GOOGLE_NEWS_URL = "https://news.google.com/rss/search?" + urllib.parse.urlencode
         "ceid": "GB:en",
     }
 )
+GOOGLE_TRANSLATE_URL = "https://translate.googleapis.com/translate_a/single"
 
 THEMES = {
     "贸易与关税": ("tariff", "trade", "export control", "import", "customs"),
@@ -110,6 +112,7 @@ class NewsEvent:
     impact: str
     confidence: str
     source_type: str
+    original_title: str = ""
 
 
 @dataclass(frozen=True)
@@ -218,14 +221,64 @@ def _fetch_rss(source: str, url: str, source_type: str = "政策原文") -> list
         if title and link:
             event = classify_news_event(title, source, published, link, source_type)
             if _is_relevant_event(event):
-                events.append(event)
+                events.append(_translate_event_if_needed(event))
     return events
 
 
 def _is_relevant_event(event: NewsEvent) -> bool:
     if event.source_type == "政策原文":
         return event.themes != ("跨资产叙事",) or bool(event.tickers)
-    return "trump" in event.title.lower() or bool(event.tickers)
+    searchable_title = f"{event.title} {event.original_title}".lower()
+    return "trump" in searchable_title or bool(event.tickers)
+
+
+def _is_supported_title_language(title: str) -> bool:
+    for character in title:
+        if character.isascii():
+            continue
+        if "\u4e00" <= character <= "\u9fff":
+            continue
+        if unicodedata.category(character)[0] in {"P", "S", "Z"}:
+            continue
+        return False
+    return True
+
+
+def _translate_event_if_needed(event: NewsEvent) -> NewsEvent:
+    if _is_supported_title_language(event.title):
+        return event
+    try:
+        translated = _translate_title_to_english(event.title)
+        if translated:
+            translated_event = classify_news_event(
+                translated,
+                event.source,
+                event.published_at,
+                event.url,
+                event.source_type,
+            )
+            return replace(translated_event, original_title=event.title)
+    except Exception:
+        pass
+    return replace(
+        event,
+        title="Non-English headline; automatic translation is temporarily unavailable. Open the source link for the original.",
+        original_title=event.title,
+    )
+
+
+def _translate_title_to_english(title: str) -> str:
+    query = urllib.parse.urlencode(
+        {
+            "client": "gtx",
+            "sl": "auto",
+            "tl": "en",
+            "dt": "t",
+            "q": title,
+        }
+    )
+    payload = json.loads(_read_text(f"{GOOGLE_TRANSLATE_URL}?{query}", timeout=12))
+    return "".join(str(part[0]) for part in payload[0] if part and part[0]).strip()
 
 
 def _fetch_gdelt() -> list[NewsEvent]:
@@ -250,7 +303,9 @@ def _fetch_gdelt() -> list[NewsEvent]:
             continue
         source = str(item.get("domain") or item.get("sourcecountry") or "GDELT").strip()
         published = str(item.get("seendate") or "").strip()
-        events.append(classify_news_event(title, source, published, url, "新闻聚合"))
+        event = classify_news_event(title, source, published, url, "新闻聚合")
+        if _is_relevant_event(event):
+            events.append(_translate_event_if_needed(event))
     return events
 
 
@@ -301,7 +356,12 @@ def _load_cache(now: datetime) -> NewsMonitor | None:
             fetched_at=fetched_at.isoformat(timespec="seconds"),
             status=str(raw.get("status") or "使用缓存"),
             summary=str(raw.get("summary") or ""),
-            events=tuple(NewsEvent(**item) for item in raw.get("events", [])),
+            events=tuple(
+                event
+                for item in raw.get("events", [])
+                for event in (NewsEvent(**item),)
+                if _is_relevant_event(event)
+            ),
             warnings=tuple(str(item) for item in raw.get("warnings", [])),
             used_cache=True,
         )
