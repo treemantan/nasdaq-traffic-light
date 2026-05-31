@@ -155,6 +155,9 @@ class ETFBacktestStats:
     summary: str
     similar_count: int = 0
     similar_phase_count: int = 0
+    similar_tail_phase_count: int = 0
+    similar_tail_phase_rate: float | None = None
+    similar_closest_tail_distance: float | None = None
     similar_avg_score: float | None = None
     similar_avg_distance: float | None = None
     similar_forward_1m: float | None = None
@@ -1283,6 +1286,9 @@ def _backtest_entry_environment(
             summary=f"过去可用周度样本中，分数≥{threshold}的信号较少，统计结论需谨慎。",
             similar_count=int(similar_values["count"]),
             similar_phase_count=int(similar_values["phase_count"]),
+            similar_tail_phase_count=int(similar_values["tail_phase_count"]),
+            similar_tail_phase_rate=similar_values["tail_phase_rate"],
+            similar_closest_tail_distance=similar_values["closest_tail_distance"],
             similar_avg_score=similar_values["avg_score"],
             similar_avg_distance=similar_values["avg_distance"],
             similar_forward_1m=similar_values["forward_1m"],
@@ -1335,6 +1341,9 @@ def _backtest_entry_environment(
         summary=summary,
         similar_count=int(similar_values["count"]),
         similar_phase_count=int(similar_values["phase_count"]),
+        similar_tail_phase_count=int(similar_values["tail_phase_count"]),
+        similar_tail_phase_rate=similar_values["tail_phase_rate"],
+        similar_closest_tail_distance=similar_values["closest_tail_distance"],
         similar_avg_score=similar_values["avg_score"],
         similar_avg_distance=similar_values["avg_distance"],
         similar_forward_1m=similar_values["forward_1m"],
@@ -1580,6 +1589,9 @@ def _similar_stats(samples: list[dict[str, Any]]) -> dict[str, Any]:
         return {
             "count": 0,
             "phase_count": 0,
+            "tail_phase_count": 0,
+            "tail_phase_rate": None,
+            "closest_tail_distance": None,
             "avg_score": None,
             "avg_distance": None,
             "forward_1m": None,
@@ -1594,6 +1606,7 @@ def _similar_stats(samples: list[dict[str, Any]]) -> dict[str, Any]:
         }
     phase_rows = _cluster_similar_samples(samples)
     representatives = [item["representative"] for item in phase_rows]
+    tail_representatives = [row for row in representatives if _is_tail_case(row)]
     phase_by_date = {
         str(row.get("as_of") or ""): (phase["phase_id"], row is phase["representative"])
         for phase in phase_rows
@@ -1603,6 +1616,9 @@ def _similar_stats(samples: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "count": len(samples),
         "phase_count": len(representatives),
+        "tail_phase_count": len(tail_representatives),
+        "tail_phase_rate": len(tail_representatives) / len(representatives) * 100 if representatives else None,
+        "closest_tail_distance": min((float(row["distance"]) for row in tail_representatives), default=None),
         "avg_score": _avg([float(row["score"]) for row in representatives]),
         "avg_distance": _avg([float(row["distance"]) for row in representatives]),
         "forward_1m": _avg([float(row["forward_1m"]) for row in representatives]),
@@ -1887,6 +1903,9 @@ def _backtest_to_cache(backtest: ETFBacktestStats | None) -> dict[str, Any] | No
         "summary": backtest.summary,
         "similar_count": backtest.similar_count,
         "similar_phase_count": backtest.similar_phase_count,
+        "similar_tail_phase_count": backtest.similar_tail_phase_count,
+        "similar_tail_phase_rate": backtest.similar_tail_phase_rate,
+        "similar_closest_tail_distance": backtest.similar_closest_tail_distance,
         "similar_avg_score": backtest.similar_avg_score,
         "similar_avg_distance": backtest.similar_avg_distance,
         "similar_forward_1m": backtest.similar_forward_1m,
@@ -1928,6 +1947,9 @@ def _backtest_from_cache(entry: Any) -> ETFBacktestStats | None:
             summary=str(entry.get("summary") or "历史回测样本不足。"),
             similar_count=int(entry.get("similar_count") or 0),
             similar_phase_count=int(entry.get("similar_phase_count") or 0),
+            similar_tail_phase_count=int(entry.get("similar_tail_phase_count") or 0),
+            similar_tail_phase_rate=_safe_float(entry.get("similar_tail_phase_rate")),
+            similar_closest_tail_distance=_safe_float(entry.get("similar_closest_tail_distance")),
             similar_avg_score=_safe_float(entry.get("similar_avg_score")),
             similar_avg_distance=_safe_float(entry.get("similar_avg_distance")),
             similar_forward_1m=_safe_float(entry.get("similar_forward_1m")),

@@ -777,6 +777,7 @@ def _render_backtest_details(asset: ETFAssetMonitor) -> str:
         else ""
     )
     phase_count = backtest.similar_phase_count or backtest.similar_count
+    tail_summary = _fmt_tail_phase_summary(backtest)
     sample_rows = "".join(
         f"<tr><td>{escape(item.phase_id or '旧缓存')}</td><td>{'是' if item.phase_representative else ''}</td>"
         f"<td>{escape(item.as_of)}</td><td>{item.distance:.2f}</td>"
@@ -815,6 +816,7 @@ def _render_backtest_details(asset: ETFAssetMonitor) -> str:
         f"<div>当前相似市场环境：{backtest.similar_count}个历史样本，聚合为{phase_count}个独立历史阶段；"
         f"之后1/3/6M {escape(similar_path)}，3M胜率 {escape(_fmt_rate(backtest.similar_hit_rate_3m))}，"
         f"3M回撤 {escape(_fmt_pct(backtest.similar_max_drawdown_3m))}。</div>"
+        f"<div>{escape(tail_summary)}</div>"
         f"<div>{escape(threshold_summary)}</div>"
         f"{samples}"
         f"{tail_panel}"
@@ -908,8 +910,26 @@ def _fmt_backtest(asset: ETFAssetMonitor) -> str:
     return (
         f"当前相似市场环境：{backtest.similar_count}个历史样本，聚合为{phase_count}个独立历史阶段；"
         f"之后1/3/6M {similar_path}，3M胜率 {_fmt_rate(backtest.similar_hit_rate_3m)}，"
-        f"3M回撤 {_fmt_pct(backtest.similar_max_drawdown_3m)}。"
+        f"3M回撤 {_fmt_pct(backtest.similar_max_drawdown_3m)}。{_fmt_tail_phase_summary(backtest)}"
         f"阈值质检：{backtest.reliability}；{backtest.best_threshold_label}。"
+    )
+
+
+def _fmt_tail_phase_summary(backtest: ETFBacktestStats) -> str:
+    phase_count = backtest.similar_phase_count or backtest.similar_count
+    if phase_count <= 0:
+        return "尾部路径观察：暂无足够的独立历史阶段。"
+    if backtest.similar_tail_phase_count <= 0:
+        return "尾部路径观察：相似独立阶段中暂未出现显著负收益或较大回撤案例。"
+    distance = (
+        f"{backtest.similar_closest_tail_distance:.2f}"
+        if backtest.similar_closest_tail_distance is not None
+        else "N/A"
+    )
+    return (
+        f"尾部路径观察：{backtest.similar_tail_phase_count}/{phase_count}个独立阶段出现负收益或较大回撤，"
+        f"占比{_fmt_rate(backtest.similar_tail_phase_rate)}；最接近尾部案例距离{distance}。"
+        "这反映当前起点与历史脆弱窗口的接近程度，不是回撤概率预测。"
     )
 
 

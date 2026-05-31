@@ -133,6 +133,9 @@ class ETFBacktestTests(unittest.TestCase):
 
         self.assertEqual(stats["count"], 3)
         self.assertEqual(stats["phase_count"], 2)
+        self.assertEqual(stats["tail_phase_count"], 1)
+        self.assertAlmostEqual(stats["tail_phase_rate"], 50)
+        self.assertAlmostEqual(stats["closest_tail_distance"], 0.67)
         self.assertAlmostEqual(stats["forward_3m"], (-3.48 + 6.85) / 2)
         rows = stats["samples"]
         self.assertTrue(rows[0].tail_case)
@@ -197,6 +200,9 @@ class ETFBacktestTests(unittest.TestCase):
             summary="test",
             similar_count=stats["count"],
             similar_phase_count=stats["phase_count"],
+            similar_tail_phase_count=stats["tail_phase_count"],
+            similar_tail_phase_rate=stats["tail_phase_rate"],
+            similar_closest_tail_distance=stats["closest_tail_distance"],
             similar_samples=stats["samples"],
         )
 
@@ -205,6 +211,9 @@ class ETFBacktestTests(unittest.TestCase):
         self.assertIsNotNone(restored)
         assert restored is not None
         self.assertEqual(restored.similar_phase_count, 1)
+        self.assertEqual(restored.similar_tail_phase_count, 1)
+        self.assertAlmostEqual(restored.similar_tail_phase_rate or 0, 100)
+        self.assertAlmostEqual(restored.similar_closest_tail_distance or 0, 0.67)
         self.assertEqual(restored.similar_samples[0].phase_id, "P1")
         self.assertTrue(restored.similar_samples[0].tail_case)
         self.assertTrue(restored.similar_samples[0].driver_notes)
