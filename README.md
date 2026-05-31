@@ -128,6 +128,7 @@ Yahoo Finance、Investing、CNN、NAAIM 与 FRED 用于不同类别的数据源�
 
 - `VWRL.L`：Vanguard FTSE All-World UCITS ETF
 - `VUAG.L`：Vanguard S&P 500 UCITS ETF
+- `ISF.L`：iShares Core FTSE 100 UCITS ETF
 - `CNX1.L`：iShares Nasdaq 100 UCITS ETF
 - `IITU.L`：iShares S&P 500 Information Technology Sector UCITS ETF
 - `AINF.L`：iShares AI Infrastructure UCITS ETF
@@ -145,6 +146,7 @@ Yahoo Finance、Investing、CNN、NAAIM 与 FRED 用于不同类别的数据源�
 - `CSKR.L`：iShares MSCI Korea UCITS ETF
 - `HKOR.L`：HSBC MSCI Korea Capped UCITS ETF
 - `FLRK.L`：Franklin FTSE Korea UCITS ETF
+- `IGTM.L`：iShares $ Treasury Bond 7-10yr UCITS ETF GBP Hedged
 - `DFND.L`：iShares Global Aerospace & Defence UCITS ETF
 - `WDEF.L`：WisdomTree Europe Defence UCITS ETF
 - `DFNG.L`：VanEck Defense UCITS ETF
@@ -193,6 +195,8 @@ python scripts/import_revolut_statement.py "stocks-isa.csv" "general-investment.
 导入器会合并多个 statement，按 `BUY`、`SELL` 和 `STOCK SPLIT` 重建当前数量与平均成本，并生成本地 `portfolio.csv`。默认使用 Yahoo 最近价格估算当前市值、未实现盈亏、日变化和组合权重；美元资产会通过 `GBPUSD=X` 转换为英镑。若最新价格暂不可用，导入器会显式标记 `statement-average-cost fallback`，不会把降级估算伪装成实时价格。观察池外个股或 ETF 会列为尚未穿透覆盖。
 
 网页报告会生成接近券商持仓页的“实际组合持仓”面板，展示数量、平均成本、当前价格、估算市值、未实现盈亏、日变化与组合占比。该面板只覆盖导入 statement 所属的账户和时间范围，不等同于 Revolut 实时账户净值；如 Revolut 中存在多个投资账户，需要分别导出并合并适配。原始 statement 和生成的 `portfolio.csv` 均已加入 `.gitignore`，不会上传到 GitHub。
+
+组合面板还会将直接持有的 `NVDA`、`AVGO`、`META` 与 ETF 可获得的前十大持仓合并，显示 AI 核心公司与半导体核心暴露的“可识别下限”。直接个股仓位按完整权重计入；ETF 间接暴露仅根据公开前十大持仓近似计算，因此不等同于完整基金穿透。`ISF.L` 已纳入 UK 大盘股观察，`IGTM.L` 已纳入固定收益与久期观察；IGTM 不套用股票 PE 或 AI 拥挤度模型。
 
 ### 本地双击生成组合报告
 

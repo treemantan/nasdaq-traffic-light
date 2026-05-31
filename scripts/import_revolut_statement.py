@@ -30,7 +30,12 @@ def main() -> int:
     if not positions:
         raise SystemExit("No open positions found in Revolut statement.")
     rows = _build_portfolio_rows(positions)
-    output.write_text(_to_csv(rows), encoding="utf-8")
+    try:
+        output.write_text(_to_csv(rows), encoding="utf-8")
+    except PermissionError as exc:
+        raise SystemExit(
+            f"Cannot update {output}: the file is locked. Close portfolio.csv in Excel or another editor, then run again."
+        ) from exc
 
     print(f"Portfolio written to {output.resolve()}")
     print(f"Open positions: {len(rows)}")

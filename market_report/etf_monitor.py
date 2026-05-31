@@ -65,6 +65,15 @@ class PortfolioPosition:
 
 
 @dataclass(frozen=True)
+class PortfolioExposure:
+    symbol: str
+    label: str
+    weight_pct: float
+    direct_weight_pct: float
+    etf_weight_pct: float
+
+
+@dataclass(frozen=True)
 class ETFSpec:
     key: str
     label: str
@@ -199,11 +208,14 @@ class ETFMonitor:
     portfolio_warnings: list[str] = field(default_factory=list)
     portfolio_positions: list[PortfolioPosition] = field(default_factory=list)
     portfolio_total_value_gbp: float | None = None
+    portfolio_exposures: list[PortfolioExposure] = field(default_factory=list)
+    portfolio_exposure_notes: list[str] = field(default_factory=list)
 
 
 DEFAULT_ETF_SPECS = [
     ETFSpec("vwrl", "Vanguard FTSE All-World UCITS ETF", "VWRL.L", "Global Equity", "Vanguard", ter=0.22),
     ETFSpec("vuag", "Vanguard S&P 500 UCITS ETF", "VUAG.L", "S&P 500", "Vanguard", ter=0.07),
+    ETFSpec("isf", "iShares Core FTSE 100 UCITS ETF", "ISF.L", "UK Large Cap", "iShares", ter=0.07),
     ETFSpec("cnx1", "iShares Nasdaq 100 UCITS ETF", "CNX1.L", "Nasdaq 100", "iShares", ter=0.33),
     ETFSpec("iitu", "iShares S&P 500 Information Technology Sector ETF", "IITU.L", "US Technology", "iShares", ter=0.15),
     ETFSpec("ainf", "iShares AI Infrastructure UCITS ETF", "AINF.L", "AI Infrastructure", "iShares", ter=0.35),
@@ -221,6 +233,7 @@ DEFAULT_ETF_SPECS = [
     ETFSpec("cskr", "iShares MSCI Korea UCITS ETF", "CSKR.L", "South Korea Equity", "iShares", ter=0.65),
     ETFSpec("hkor", "HSBC MSCI Korea Capped UCITS ETF", "HKOR.L", "South Korea Equity", "HSBC", ter=0.50),
     ETFSpec("flrk", "Franklin FTSE Korea UCITS ETF", "FLRK.L", "South Korea Equity", "Franklin", ter=0.09),
+    ETFSpec("igtm", "iShares $ Treasury Bond 7-10yr UCITS ETF GBP Hedged", "IGTM.L", "US Treasury 7-10Y GBP Hedged", "iShares", equity_like=False, ter=0.10),
     ETFSpec("dfnd", "iShares Global Aerospace & Defence UCITS ETF", "DFND.L", "Defence", "iShares", ter=0.35),
     ETFSpec("wdef", "WisdomTree Europe Defence UCITS ETF", "WDEF.L", "European Defence", "WisdomTree", ter=0.40),
     ETFSpec("dfng", "VanEck Defense UCITS ETF", "DFNG.L", "Defence", "VanEck", ter=0.55),
@@ -265,6 +278,7 @@ def fetch_etf_monitor(specs: list[ETFSpec] | None = None, macro_metrics: dict[st
         warnings.extend(asset.warnings)
     _save_cache(cache)
     portfolio_summary, portfolio_warnings, portfolio_positions, portfolio_total = _load_portfolio_summary(assets)
+    portfolio_exposures, portfolio_exposure_notes = _portfolio_exposure_summary(assets, portfolio_positions)
     return ETFMonitor(
         summary=_build_summary(assets),
         assets=assets,
@@ -274,6 +288,8 @@ def fetch_etf_monitor(specs: list[ETFSpec] | None = None, macro_metrics: dict[st
         portfolio_warnings=portfolio_warnings,
         portfolio_positions=portfolio_positions,
         portfolio_total_value_gbp=portfolio_total,
+        portfolio_exposures=portfolio_exposures,
+        portfolio_exposure_notes=portfolio_exposure_notes,
     )
 
 
@@ -1710,7 +1726,7 @@ def _load_portfolio_summary(
     if not positions:
         return [], warnings + ["portfolio.csv 未包含可识别的 symbol,weight_pct 持仓。"], portfolio_positions, portfolio_total
     if uncovered:
-        warnings.append("以下个股或观察池外ETF暂未穿透分析：" + "、".join(uncovered) + "。")
+        warnings.append("以下个股或观察池外ETF暂未纳入ETF趋势模型；直接持仓仍会计入组合暴露：" + "、".join(uncovered) + "。")
     total = sum(weight for _, weight in positions)
     themes: dict[str, float] = {}
     weighted_ter = 0.0
@@ -1726,6 +1742,64 @@ def _load_portfolio_summary(
     return summary, warnings, portfolio_positions, portfolio_total
 
 
+def _portfolio_exposure_summary(
+    assets: list[ETFAssetMonitor], positions: list[PortfolioPosition]
+) -> tuple[list[PortfolioExposure], list[str]]:
+    focus = {"NVDA": "NVIDIA", "AVGO": "Broadcom", "META": "Meta Platforms"}
+    asset_map = {asset.symbol.upper(): asset for asset in assets}
+    direct = {symbol: 0.0 for symbol in focus}
+    indirect = {symbol: 0.0 for symbol in focus}
+    covered_etf_weight = 0.0
+    lookthrough_weight = 0.0
+
+    for position in positions:
+        symbol = position.symbol.upper()
+        if symbol in direct:
+            direct[symbol] += position.weight_pct
+        asset = asset_map.get(symbol)
+        if asset is None:
+            continue
+        covered_etf_weight += position.weight_pct
+        if not asset.holdings:
+            continue
+        lookthrough_weight += position.weight_pct
+        for holding in asset.holdings:
+            holding_symbol = holding.symbol.upper()
+            if holding_symbol in indirect:
+                indirect[holding_symbol] += position.weight_pct * holding.weight / 100
+
+    exposures = [
+        PortfolioExposure(
+            symbol=symbol,
+            label=label,
+            weight_pct=direct[symbol] + indirect[symbol],
+            direct_weight_pct=direct[symbol],
+            etf_weight_pct=indirect[symbol],
+        )
+        for symbol, label in focus.items()
+        if direct[symbol] + indirect[symbol] > 0
+    ]
+    exposures.sort(key=lambda item: item.weight_pct, reverse=True)
+    if not exposures:
+        return [], []
+
+    ai_total = sum(item.weight_pct for item in exposures)
+    ai_direct = sum(item.direct_weight_pct for item in exposures)
+    ai_indirect = sum(item.etf_weight_pct for item in exposures)
+    semiconductor_total = sum(item.weight_pct for item in exposures if item.symbol in {"NVDA", "AVGO"})
+    notes = [
+        f"AI核心公司可识别暴露下限 {ai_total:.1f}%：直接持仓 {ai_direct:.1f}%，ETF前十大持仓间接暴露 {ai_indirect:.1f}%。",
+        f"其中 NVIDIA 与 Broadcom 合计可识别半导体核心暴露下限 {semiconductor_total:.1f}%。",
+    ]
+    if covered_etf_weight > lookthrough_weight:
+        notes.append(
+            f"当前已识别ETF权重 {covered_etf_weight:.1f}%，其中 {lookthrough_weight:.1f}% 可获得前十大持仓；"
+            "未穿透部分可能继续包含AI相关公司。"
+        )
+    notes.append("组合穿透基于直接持仓与ETF前十大持仓近似计算，属于可识别下限，不等同于完整基金穿透。")
+    return exposures, notes
+
+
 def _valuation_warnings(
     spec: ETFSpec,
     pe: float | None,
@@ -1734,8 +1808,10 @@ def _valuation_warnings(
     pe_percentile: float | None,
     pe_high_1y_ratio: float | None,
 ) -> list[str]:
-    if not spec.equity_like:
+    if spec.theme == "Gold":
         return ["黄金ETC不适用PE/PB估值，需结合实际利率、美元和金价趋势观察。"]
+    if not spec.equity_like:
+        return ["固定收益ETF不适用PE/PB估值，需结合久期、收益率曲线与利率风险观察。"]
     warnings: list[str] = []
     if pe is None and forward_pe is None:
         warnings.append("Yahoo暂未返回可靠PE/Forward PE，估值分位数需要继续积累或使用发行商数据补充。")
@@ -1778,8 +1854,10 @@ def _momentum_label(rsi14: float | None, momentum_1m: float | None) -> str:
 
 
 def _valuation_label(spec: ETFSpec, pe: float | None, forward_pe: float | None, pe_percentile: float | None) -> str:
-    if not spec.equity_like:
+    if spec.theme == "Gold":
         return "黄金不适用盈利估值，重点观察实际利率与美元"
+    if not spec.equity_like:
+        return "固定收益ETF不适用盈利估值，重点观察久期与利率风险"
     active_pe = forward_pe or pe
     if active_pe is None:
         return "估值数据不足，暂不判断重估压力"
@@ -1832,7 +1910,9 @@ def _crowding_label(score: int, rsi14: float | None, distance_sma200: float | No
 
 
 def _entry_quality(asset: ETFAssetMonitor, macro_metrics: dict[str, Any] | None = None) -> tuple[int, str, str, str]:
-    if asset.key == "sgln" or not _is_equity_entry_model_asset(asset):
+    if asset.theme == "US Treasury 7-10Y GBP Hedged":
+        return _fixed_income_entry_quality(asset)
+    if asset.theme == "Gold":
         return _gold_entry_quality(asset, macro_metrics)
     if asset.value is None or asset.sma200 is None:
         return (
@@ -1925,6 +2005,40 @@ def _entry_label(score: int) -> str:
     if score >= 45:
         return "信号分歧，等待确认"
     return "追高风险或趋势压力较高"
+
+
+def _fixed_income_entry_quality(asset: ETFAssetMonitor) -> tuple[int, str, str, str]:
+    if asset.value is None or asset.sma200 is None:
+        return (
+            50,
+            "久期环境待确认",
+            "价格历史不足，暂不判断中久期美债配置环境。",
+            "固定收益ETF需结合久期、收益率曲线与利率波动观察。",
+        )
+    score = 50.0
+    score += 10 if asset.value >= asset.sma200 else -10
+    if asset.sma50 is not None and asset.sma200 is not None:
+        score += 5 if asset.sma50 >= asset.sma200 else -5
+    if asset.rsi14 is not None:
+        if 40 <= asset.rsi14 <= 65:
+            score += 6
+        elif asset.rsi14 >= 75:
+            score -= 8
+    if asset.momentum_1m is not None:
+        if 0 <= asset.momentum_1m <= 5:
+            score += 5
+        elif asset.momentum_1m < -5:
+            score -= 5
+    final_score = _clamp(score)
+    if final_score >= 65:
+        label = "中久期美债趋势环境偏友好"
+    elif final_score >= 45:
+        label = "中久期美债环境中性"
+    else:
+        label = "中久期美债价格趋势承压"
+    note = "IGTM为GBP对冲的美国7-10年期国债ETF，趋势分数只反映价格与久期环境，不套用股票估值或AI拥挤度框架。"
+    risk = "风险管理重点：观察美国长端收益率、MOVE债券波动率与期限溢价变化。"
+    return final_score, label, note, risk
 
 
 def _gold_entry_quality(asset: ETFAssetMonitor, macro_metrics: dict[str, Any] | None = None) -> tuple[int, str, str, str]:
@@ -2072,10 +2186,6 @@ def _metric_change(metrics: dict[str, Any] | None, key: str) -> float | None:
 def _metric_change_pct(metrics: dict[str, Any] | None, key: str) -> float | None:
     metric = (metrics or {}).get(key)
     return _safe_float(getattr(metric, "change_pct", None))
-
-
-def _is_equity_entry_model_asset(asset: ETFAssetMonitor) -> bool:
-    return asset.key != "sgln"
 
 
 def _sma(values: list[float], window: int) -> float | None:

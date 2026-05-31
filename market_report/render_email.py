@@ -220,7 +220,24 @@ def _render_portfolio_email(monitor: ETFMonitor) -> str:
     if not monitor.portfolio_positions:
         return _render_email_notes("实际组合视角", monitor.portfolio_summary + monitor.portfolio_warnings)
     rows = "".join(_render_portfolio_email_row(position) for position in monitor.portfolio_positions)
-    notes = "".join(f"<li>{escape(item)}</li>" for item in monitor.portfolio_summary + monitor.portfolio_warnings)
+    notes = "".join(
+        f"<li>{escape(item)}</li>"
+        for item in monitor.portfolio_summary + monitor.portfolio_warnings + monitor.portfolio_exposure_notes
+    )
+    exposures = "".join(
+        f"""<td valign="top" style="padding:8px;border:1px solid #263244;">
+          <span style="font-size:12px;color:#9ca3af;">{escape(item.label)} · {escape(item.symbol)}</span><br>
+          <strong style="font-size:17px;color:#f3f4f6;">{item.weight_pct:.2f}%</strong><br>
+          <span style="font-size:11px;color:#9ca3af;">直接 {item.direct_weight_pct:.2f}% · ETF间接 {item.etf_weight_pct:.2f}%</span>
+        </td>"""
+        for item in monitor.portfolio_exposures
+    )
+    exposure_panel = (
+        '<div style="font-size:12px;font-weight:700;color:#f3f4f6;margin:8px 0 4px;">AI核心公司穿透（可识别下限）</div>'
+        f'<table width="100%" cellspacing="0" cellpadding="0" style="margin-bottom:6px;"><tr>{exposures}</tr></table>'
+        if exposures
+        else ""
+    )
     return f"""
         <div style="font-size:15px;font-weight:700;color:#f3f4f6;margin:14px 0 4px;">实际组合持仓（Revolut statement 估算）</div>
         <div style="font-size:12px;color:#9ca3af;margin-bottom:6px;">持仓估算市值 {_fmt_gbp(monitor.portfolio_total_value_gbp)}。基于导出的 statement 与 Yahoo 最近价格估算，不等同于券商实时账户净值。</div>
@@ -234,6 +251,7 @@ def _render_portfolio_email(monitor: ETFMonitor) -> str:
           </tr>
           {rows}
         </table>
+        {exposure_panel}
         <ul style="color:#9ca3af;padding-left:18px;margin:5px 0 10px;font-size:12px;">{notes}</ul>"""
 
 
@@ -289,12 +307,13 @@ def _render_etf_row(asset: ETFAssetMonitor) -> str:
 
 def _group_etf_assets(assets: list[ETFAssetMonitor]) -> list[tuple[str, str, list[ETFAssetMonitor]]]:
     definitions = [
-        ("宽基与核心资产", "组合底仓与主要指数风险暴露", {"Global Equity", "S&P 500", "Nasdaq 100"}),
+        ("宽基与核心资产", "组合底仓与主要指数风险暴露", {"Global Equity", "S&P 500", "UK Large Cap", "Nasdaq 100"}),
         ("AI、科技与软件链", "AI基础设施、信息技术、云软件、网络安全与自动化", {"US Technology", "AI Infrastructure", "Artificial Intelligence", "Cloud Software", "Cybersecurity", "Robotics & Automation"}),
         ("半导体", "全球半导体周期与AI算力核心上游", {"Semiconductor"}),
         ("量子计算", "高beta前沿主题，适合单独观察热度与波动", {"Quantum Computing"}),
         ("韩国权益与存储链", "Samsung Electronics、SK hynix及韩国科技/工业周期暴露", {"South Korea Equity"}),
         ("军工与防务", "全球/欧洲防务、网络防务与防务创新", {"Defence", "European Defence", "Defence Innovation"}),
+        ("固定收益与久期", "利率、久期与债券波动环境观察", {"US Treasury 7-10Y GBP Hedged"}),
         ("黄金与实物资产", "实际利率、美元与避险需求的交叉验证", {"Gold"}),
     ]
     remaining = list(assets)

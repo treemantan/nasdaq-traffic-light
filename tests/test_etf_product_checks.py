@@ -8,10 +8,12 @@ from pathlib import Path
 from market_report.etf_monitor import (
     ETFAssetMonitor,
     ETFHolding,
+    PortfolioPosition,
     ETFSpec,
     _audit_metadata,
     _load_portfolio_summary,
     _parse_compact_number,
+    _portfolio_exposure_summary,
 )
 from market_report.render import _max_holdings_overlap
 
@@ -46,6 +48,19 @@ class ETFProductCheckTests(unittest.TestCase):
         self.assertEqual(len(positions), 2)
         self.assertIsNone(total)
         self.assertTrue(any("组合加权TER约0.18%" in item for item in summary))
+
+    def test_portfolio_exposure_combines_direct_and_etf_top_holdings(self) -> None:
+        asset = self._asset("A.L", (ETFHolding("NVDA", "NVIDIA", 10), ETFHolding("AVGO", "Broadcom", 5)))
+        positions = [
+            PortfolioPosition("A.L", 40, None, None, None, None, None, None, None, "covered"),
+            PortfolioPosition("NVDA", 6, None, None, None, None, None, None, None, "outside-monitor-pool"),
+        ]
+        exposures, notes = _portfolio_exposure_summary([asset], positions)
+        exposure_map = {item.symbol: item for item in exposures}
+        self.assertEqual(exposure_map["NVDA"].weight_pct, 10)
+        self.assertEqual(exposure_map["NVDA"].direct_weight_pct, 6)
+        self.assertEqual(exposure_map["NVDA"].etf_weight_pct, 4)
+        self.assertTrue(any("可识别暴露下限" in item for item in notes))
 
     @staticmethod
     def _asset(symbol: str, holdings: tuple[ETFHolding, ...], ter: float = 0.10) -> ETFAssetMonitor:

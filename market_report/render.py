@@ -107,6 +107,9 @@ def render_html_report(report: ScoredReport, title: str) -> str:
     .portfolio-total {{ text-align: right; }}
     .portfolio-total strong {{ display: block; font-size: 24px; }}
     .portfolio-notes {{ padding: 0 14px 12px; color: var(--subtle); font-size: 12px; }}
+    .portfolio-exposure-grid {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; padding: 12px 14px 4px; }}
+    .portfolio-exposure {{ border: 1px solid var(--line); border-radius: 6px; padding: 9px; background: rgba(255,255,255,.025); }}
+    .portfolio-exposure strong {{ display: block; font-size: 18px; }}
     .portfolio-table-scroll {{ max-width: 100%; overflow-x: auto; overflow-y: hidden; }}
     .portfolio-table {{ min-width: 1080px; }}
     .portfolio-table td, .portfolio-table th {{ white-space: nowrap; }}
@@ -185,6 +188,7 @@ def render_html_report(report: ScoredReport, title: str) -> str:
       .etf-group-stats {{ text-align: left; margin-top: 7px; }}
       .portfolio-head {{ grid-template-columns: 1fr; }}
       .portfolio-total {{ text-align: left; }}
+      .portfolio-exposure-grid {{ grid-template-columns: 1fr; }}
       .table-scroll {{ display: none; }}
       .etf-cards {{ display: block; }}
     }}
@@ -351,7 +355,21 @@ def _render_portfolio_panel(monitor: ETFMonitor) -> str:
         return _render_etf_notes("实际组合视角", monitor.portfolio_summary + monitor.portfolio_warnings)
     rows = "\n".join(_render_portfolio_row(position) for position in monitor.portfolio_positions)
     notes = monitor.portfolio_summary + monitor.portfolio_warnings
-    note_html = "".join(f"<li>{escape(item)}</li>" for item in notes)
+    note_html = "".join(f"<li>{escape(item)}</li>" for item in notes + monitor.portfolio_exposure_notes)
+    exposures = "".join(
+        f"""<div class="portfolio-exposure">
+          <span class="muted">{escape(item.label)} · {escape(item.symbol)}</span>
+          <strong>{item.weight_pct:.2f}%</strong>
+          <span class="portfolio-scope">直接 {item.direct_weight_pct:.2f}% · ETF间接 {item.etf_weight_pct:.2f}%</span>
+        </div>"""
+        for item in monitor.portfolio_exposures
+    )
+    exposure_panel = (
+        f'<div class="portfolio-notes"><strong>AI核心公司穿透（可识别下限）</strong></div>'
+        f'<div class="portfolio-exposure-grid">{exposures}</div>'
+        if exposures
+        else ""
+    )
     total = _fmt_gbp(monitor.portfolio_total_value_gbp)
     return f"""<div class="portfolio-panel">
       <div class="portfolio-head">
@@ -372,6 +390,7 @@ def _render_portfolio_panel(monitor: ETFMonitor) -> str:
           <tbody>{rows}</tbody>
         </table>
       </div>
+      {exposure_panel}
       <div class="portfolio-notes"><ul>{note_html}</ul></div>
     </div>"""
 
@@ -443,12 +462,13 @@ def _render_etf_group(group: tuple[str, str, list[ETFAssetMonitor]], index: int 
 
 def _group_etf_assets(assets: list[ETFAssetMonitor]) -> list[tuple[str, str, list[ETFAssetMonitor]]]:
     definitions = [
-        ("宽基与核心资产", "组合底仓与主要指数风险暴露", {"Global Equity", "S&P 500", "Nasdaq 100"}),
+        ("宽基与核心资产", "组合底仓与主要指数风险暴露", {"Global Equity", "S&P 500", "UK Large Cap", "Nasdaq 100"}),
         ("AI、科技与软件链", "AI基础设施、信息技术、云软件、网络安全与自动化", {"US Technology", "AI Infrastructure", "Artificial Intelligence", "Cloud Software", "Cybersecurity", "Robotics & Automation"}),
         ("半导体", "全球半导体周期与AI算力核心上游", {"Semiconductor"}),
         ("量子计算", "高beta前沿主题，适合单独观察热度与波动", {"Quantum Computing"}),
         ("韩国权益与存储链", "Samsung Electronics、SK hynix及韩国科技/工业周期暴露", {"South Korea Equity"}),
         ("军工与防务", "全球/欧洲防务、网络防务与防务创新", {"Defence", "European Defence", "Defence Innovation"}),
+        ("固定收益与久期", "利率、久期与债券波动环境观察", {"US Treasury 7-10Y GBP Hedged"}),
         ("黄金与实物资产", "实际利率、美元与避险需求的交叉验证", {"Gold"}),
     ]
     remaining = list(assets)
