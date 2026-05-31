@@ -266,6 +266,7 @@ def _report_from_payload(payload: dict):
                         converters={
                             "themes": lambda themes: tuple(themes or ()),
                             "tickers": lambda tickers: tuple(tickers or ()),
+                            "entities": lambda entities: tuple(entities or ()),
                         },
                     )
                     for item in (raw or [])

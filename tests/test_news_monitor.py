@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from market_report.news_monitor import (
     _dedupe_events,
+    _is_ai_event,
     _is_relevant_event,
     _is_supported_title_language,
     _translate_event_if_needed,
@@ -92,6 +93,32 @@ class NewsMonitorTests(unittest.TestCase):
         self.assertEqual(translated.title, "Czechs believe Donald Trump is weakening NATO")
         self.assertEqual(translated.original_title, event.title)
         self.assertIn("国防与航空航天", translated.themes)
+
+    def test_ai_ipo_news_is_retained_with_entity_and_ticker_mapping(self) -> None:
+        event = classify_news_event(
+            "Cerebras prices AI chip IPO after strong data center demand",
+            "Example",
+            "2026-05-31",
+            "https://example.com/cerebras",
+            "新闻聚合",
+            channel="AI产业事件",
+        )
+
+        self.assertTrue(_is_ai_event(event))
+        self.assertEqual(event.entities, ("Cerebras",))
+        self.assertEqual(event.tickers, ("CBRS",))
+
+    def test_generic_ai_article_without_catalyst_is_excluded(self) -> None:
+        event = classify_news_event(
+            "An introduction to artificial intelligence",
+            "Example",
+            "2026-05-31",
+            "https://example.com/ai",
+            "新闻聚合",
+            channel="AI产业事件",
+        )
+
+        self.assertFalse(_is_ai_event(event))
 
 
 if __name__ == "__main__":

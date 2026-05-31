@@ -208,7 +208,7 @@ def _render_news_monitor(monitor: NewsMonitor | None) -> str:
         f"""<tr>
           <td style="padding:8px;border-bottom:1px solid #263244;">
             <a href="{escape(event.url)}" style="color:#bfdbfe;text-decoration:none;">{escape(event.title)}</a>
-            <div style="font-size:12px;color:#9ca3af;margin-top:4px;">{escape(event.source)} · {escape(event.published_at)} · {escape(event.source_type)} · 影响：{escape(event.impact)}{f" · 相关Ticker：{escape('、'.join(event.tickers))}" if event.tickers else ""}{' · 已自动翻译为英文' if event.original_title else ''}</div>
+            <div style="font-size:12px;color:#9ca3af;margin-top:4px;">{escape(event.channel)} · {escape(event.source)} · {escape(event.published_at)} · {escape(event.source_type)} · 影响：{escape(event.impact)}{f" · 相关Ticker：{escape('、'.join(event.tickers))}" if event.tickers else ""}{f" · 相关实体：{escape('、'.join(event.entities))}" if event.entities else ""}{' · 已自动翻译为英文' if event.original_title else ''}</div>
             <div style="font-size:12px;color:#d1d5db;margin-top:3px;">{escape(event.direction)} · {escape("、".join(event.themes))}</div>
           </td>
         </tr>"""

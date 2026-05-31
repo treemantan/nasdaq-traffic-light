@@ -30,6 +30,21 @@ GOOGLE_NEWS_URL = "https://news.google.com/rss/search?" + urllib.parse.urlencode
         "ceid": "GB:en",
     }
 )
+AI_NEWS_QUERY = (
+    '("artificial intelligence" OR AI OR OpenAI OR Anthropic OR Nvidia OR Cerebras OR CoreWeave) '
+    '(CEO OR IPO OR capex OR investment OR funding OR "data center" OR semiconductor OR chip OR infrastructure)'
+)
+AI_GOOGLE_NEWS_URL = "https://news.google.com/rss/search?" + urllib.parse.urlencode(
+    {
+        "q": AI_NEWS_QUERY,
+        "hl": "en-GB",
+        "gl": "GB",
+        "ceid": "GB:en",
+    }
+)
+COMPANY_FEEDS = (
+    ("NVIDIA Newsroom", "https://nvidianews.nvidia.com/rss.xml"),
+)
 GOOGLE_TRANSLATE_URL = "https://translate.googleapis.com/translate_a/single"
 
 THEMES = {
@@ -85,6 +100,44 @@ HIGH_IMPACT_TERMS = (
     "defense",
     "defence",
 )
+AI_TERMS = (
+    "artificial intelligence",
+    " ai ",
+    "openai",
+    "anthropic",
+    "nvidia",
+    "cerebras",
+    "coreweave",
+    "nebius",
+    "semiconductor",
+    "chip",
+    "data center",
+    "datacenter",
+    "gpu",
+    "inference",
+)
+AI_CATALYST_TERMS = (
+    "ceo",
+    "ipo",
+    "public offering",
+    "listing",
+    "capex",
+    "capital expenditure",
+    "investment",
+    "funding",
+    "fundraise",
+    "deal",
+    "partnership",
+    "earnings",
+    "revenue",
+    "guidance",
+    "data center",
+    "datacenter",
+    "semiconductor",
+    "chip",
+    "gpu",
+    "infrastructure",
+)
 TICKER_TERMS = {
     "DELL": ("dell",),
     "NVDA": ("nvidia",),
@@ -97,6 +150,19 @@ TICKER_TERMS = {
     "CVX": ("chevron",),
     "LMT": ("lockheed",),
     "RTX": ("raytheon", "rtx"),
+    "AMD": ("advanced micro devices", "amd"),
+    "GOOG": ("alphabet", "google"),
+    "ORCL": ("oracle",),
+    "CRWV": ("coreweave",),
+    "NBIS": ("nebius",),
+    "CBRS": ("cerebras",),
+}
+ENTITY_TERMS = {
+    "OpenAI": ("openai",),
+    "Anthropic": ("anthropic",),
+    "Cerebras": ("cerebras",),
+    "CoreWeave": ("coreweave",),
+    "Nebius": ("nebius",),
 }
 
 
@@ -113,6 +179,8 @@ class NewsEvent:
     confidence: str
     source_type: str
     original_title: str = ""
+    channel: str = "政策与政治事件"
+    entities: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -136,6 +204,17 @@ def fetch_news_monitor(now: datetime | None = None) -> NewsMonitor:
         except Exception as exc:
             warnings.append(f"{source}暂不可用：{type(exc).__name__}")
 
+    for source, url in COMPANY_FEEDS:
+        try:
+            events.extend(_fetch_rss(source, url, source_type="公司原文", channel="AI产业事件"))
+        except Exception as exc:
+            warnings.append(f"{source}暂不可用：{type(exc).__name__}")
+
+    try:
+        events.extend(_fetch_rss("Google News AI聚合", AI_GOOGLE_NEWS_URL, source_type="新闻聚合", channel="AI产业事件"))
+    except Exception as exc:
+        warnings.append(f"Google News AI聚合暂不可用：{type(exc).__name__}")
+
     try:
         events.extend(_fetch_gdelt())
     except Exception as exc:
@@ -145,13 +224,13 @@ def fetch_news_monitor(now: datetime | None = None) -> NewsMonitor:
         except Exception as fallback_exc:
             warnings.append(f"Google News聚合暂不可用：{type(fallback_exc).__name__}")
 
-    deduped = _dedupe_events(events)
+    deduped = _select_events(_dedupe_events(events))
     if deduped:
         monitor = NewsMonitor(
             fetched_at=fetched_at.isoformat(timespec="seconds"),
             status="正常" if not warnings else "部分来源不可用",
             summary=_summary(deduped),
-            events=tuple(deduped[:8]),
+            events=tuple(deduped),
             warnings=tuple(warnings),
         )
         _write_cache(monitor)
@@ -183,10 +262,12 @@ def classify_news_event(
     published_at: str,
     url: str,
     source_type: str,
+    channel: str = "政策与政治事件",
 ) -> NewsEvent:
     lowered = title.lower()
     themes = tuple(label for label, keywords in THEMES.items() if any(term in lowered for term in keywords))
     tickers = tuple(ticker for ticker, terms in TICKER_TERMS.items() if any(term in lowered for term in terms))
+    entities = tuple(entity for entity, terms in ENTITY_TERMS.items() if any(term in lowered for term in terms))
     positive = sum(term in lowered for term in POSITIVE_TERMS)
     negative = sum(term in lowered for term in NEGATIVE_TERMS)
     if negative > positive:
@@ -196,7 +277,7 @@ def classify_news_event(
     else:
         direction = "方向待确认"
     impact = "高" if any(term in lowered for term in HIGH_IMPACT_TERMS) else "中"
-    confidence = "高" if source_type == "政策原文" else "中"
+    confidence = "高" if source_type in {"政策原文", "公司原文"} else "中"
     return NewsEvent(
         title=title.strip(),
         source=source.strip(),
@@ -208,10 +289,17 @@ def classify_news_event(
         impact=impact,
         confidence=confidence,
         source_type=source_type,
+        channel=channel,
+        entities=entities,
     )
 
 
-def _fetch_rss(source: str, url: str, source_type: str = "政策原文") -> list[NewsEvent]:
+def _fetch_rss(
+    source: str,
+    url: str,
+    source_type: str = "政策原文",
+    channel: str = "政策与政治事件",
+) -> list[NewsEvent]:
     root = ET.fromstring(_read_text(url, timeout=15))
     events = []
     for item in root.findall(".//item")[:8]:
@@ -219,17 +307,26 @@ def _fetch_rss(source: str, url: str, source_type: str = "政策原文") -> list
         link = (item.findtext("link") or "").strip()
         published = (item.findtext("pubDate") or "").strip()
         if title and link:
-            event = classify_news_event(title, source, published, link, source_type)
+            event = classify_news_event(title, source, published, link, source_type, channel=channel)
             if _is_relevant_event(event):
                 events.append(_translate_event_if_needed(event))
     return events
 
 
 def _is_relevant_event(event: NewsEvent) -> bool:
+    if event.channel == "AI产业事件":
+        return _is_ai_event(event)
     if event.source_type == "政策原文":
         return event.themes != ("跨资产叙事",) or bool(event.tickers)
     searchable_title = f"{event.title} {event.original_title}".lower()
     return "trump" in searchable_title or bool(event.tickers)
+
+
+def _is_ai_event(event: NewsEvent) -> bool:
+    searchable_title = f" {event.title} {event.original_title} ".lower()
+    has_ai_focus = any(term in searchable_title for term in AI_TERMS) or bool(event.entities)
+    has_catalyst = any(term in searchable_title for term in AI_CATALYST_TERMS)
+    return has_ai_focus and (has_catalyst or event.source_type == "公司原文")
 
 
 def _is_supported_title_language(title: str) -> bool:
@@ -256,6 +353,7 @@ def _translate_event_if_needed(event: NewsEvent) -> NewsEvent:
                 event.published_at,
                 event.url,
                 event.source_type,
+                channel=event.channel,
             )
             return replace(translated_event, original_title=event.title)
     except Exception:
@@ -321,6 +419,12 @@ def _dedupe_events(events: list[NewsEvent]) -> list[NewsEvent]:
     return sorted(result, key=lambda item: (item.impact == "高", item.published_at), reverse=True)
 
 
+def _select_events(events: list[NewsEvent]) -> list[NewsEvent]:
+    policy_events = [event for event in events if event.channel != "AI产业事件"][:6]
+    ai_events = [event for event in events if event.channel == "AI产业事件"][:6]
+    return sorted(policy_events + ai_events, key=lambda item: (item.impact == "高", item.published_at), reverse=True)
+
+
 def _summary(events: list[NewsEvent]) -> str:
     high_impact = sum(event.impact == "高" for event in events)
     restrictive = sum(event.direction.startswith("偏紧缩") for event in events)
@@ -330,9 +434,11 @@ def _summary(events: list[NewsEvent]) -> str:
             if theme not in themes:
                 themes.append(theme)
     theme_text = "、".join(themes[:4]) or "跨资产叙事"
+    ai_events = sum(event.channel == "AI产业事件" for event in events)
     return (
         f"最近事件覆盖{theme_text}；识别到{high_impact}条高影响事件，"
         f"其中{restrictive}条带有金融条件收紧或风险溢价上行含义。"
+        f"AI产业事件{ai_events}条，重点观察CEO表态、IPO、资本开支与算力供应链变化。"
         "新闻模块仅用于解释市场叙事，不直接改变量化评分。"
     )
 
