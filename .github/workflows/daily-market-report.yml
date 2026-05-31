@@ -111,6 +111,24 @@ jobs:
           restore-keys: |
             market-report-cache-${{ runner.os }}-
 
+      - name: Import latest portfolio statements from OneDrive
+        if: steps.email-mode.outputs.should_run == 'true'
+        shell: bash
+        env:
+          ONEDRIVE_CLIENT_ID: ${{ secrets.ONEDRIVE_CLIENT_ID }}
+          ONEDRIVE_TENANT_ID: ${{ secrets.ONEDRIVE_TENANT_ID }}
+          ONEDRIVE_CLIENT_SECRET: ${{ secrets.ONEDRIVE_CLIENT_SECRET }}
+          ONEDRIVE_USER_ID: ${{ secrets.ONEDRIVE_USER_ID }}
+          ONEDRIVE_REFRESH_TOKEN: ${{ secrets.ONEDRIVE_REFRESH_TOKEN }}
+          ONEDRIVE_FOLDER_PATH: ${{ vars.ONEDRIVE_FOLDER_PATH }}
+          ONEDRIVE_USE_LATEST_PER_ACCOUNT_FOLDER: ${{ vars.ONEDRIVE_USE_LATEST_PER_ACCOUNT_FOLDER }}
+        run: |
+          if [ -z "$ONEDRIVE_CLIENT_ID" ]; then
+            echo "OneDrive cloud portfolio import is not configured; generating the market report without portfolio.csv."
+            exit 0
+          fi
+          python scripts/download_onedrive_statements.py --output-dir .cloud-statements --import-portfolio
+
       - name: Generate report
         if: steps.email-mode.outputs.should_run == 'true'
         run: python -m market_report --config config.example.json --dry-run
