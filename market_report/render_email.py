@@ -4,6 +4,7 @@ from html import escape
 
 from .data_sources import MarketMetric
 from .etf_monitor import ETFAssetMonitor, ETFMonitor, PortfolioPosition
+from .news_monitor import NewsMonitor
 from .scoring import IronCondorAssessment, ScoredMetric, ScoredReport
 
 
@@ -23,6 +24,7 @@ def render_email_report(report: ScoredReport) -> str:
     risks = "".join(f"<li>{escape(item)}</li>" for item in report.risks)
     data_rows = "".join(_render_data_row(item.metric) for item in report.metrics.values())
     iron_condor = _render_iron_condor(report.iron_condor)
+    news_monitor = _render_news_monitor(report.news_monitor)
     etf_monitor = _render_etf_monitor(report.etf_monitor)
     accent = report.light_color
 
@@ -79,6 +81,7 @@ def render_email_report(report: ScoredReport) -> str:
             </td>
           </tr>
           {iron_condor}
+          {news_monitor}
           {etf_monitor}
           {groups}
           <tr>
@@ -196,6 +199,31 @@ def _render_assessment_items(items: list[str]) -> str:
     if not items:
         return "<li>暂无明显信号。</li>"
     return "".join(f"<li>{escape(item)}</li>" for item in items)
+
+
+def _render_news_monitor(monitor: NewsMonitor | None) -> str:
+    if monitor is None:
+        return ""
+    rows = "".join(
+        f"""<tr>
+          <td style="padding:8px;border-bottom:1px solid #263244;">
+            <a href="{escape(event.url)}" style="color:#bfdbfe;text-decoration:none;">{escape(event.title)}</a>
+            <div style="font-size:12px;color:#9ca3af;margin-top:4px;">{escape(event.source)} · {escape(event.published_at)} · {escape(event.source_type)} · 影响：{escape(event.impact)}{f" · 相关Ticker：{escape('、'.join(event.tickers))}" if event.tickers else ""}</div>
+            <div style="font-size:12px;color:#d1d5db;margin-top:3px;">{escape(event.direction)} · {escape("、".join(event.themes))}</div>
+          </td>
+        </tr>"""
+        for event in monitor.events[:5]
+    )
+    return f"""<tr>
+      <td style="padding:0 24px 18px;">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#151f2d;border:1px solid #263244;border-radius:8px;">
+          <tr><td style="padding:12px 12px 4px;font-size:17px;font-weight:700;color:#f3f4f6;">重要新闻与政策叙事监控</td></tr>
+          <tr><td style="padding:0 12px 8px;font-size:13px;color:#d1d5db;">{escape(monitor.summary)}</td></tr>
+          {rows or '<tr><td style="padding:8px 12px;color:#9ca3af;">暂无可核验的重要新闻事件。</td></tr>'}
+          <tr><td style="padding:8px 12px;color:#9ca3af;font-size:12px;">新闻情绪仅用于辅助解释跨资产叙事，不直接改变量化评分。</td></tr>
+        </table>
+      </td>
+    </tr>"""
 
 
 def _render_etf_monitor(monitor: ETFMonitor | None) -> str:

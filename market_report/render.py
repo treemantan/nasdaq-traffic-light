@@ -5,6 +5,7 @@ from html import escape
 
 from .data_sources import MarketMetric
 from .etf_monitor import ETFAssetMonitor, ETFMonitor, PortfolioPosition
+from .news_monitor import NewsEvent, NewsMonitor
 from .scoring import IronCondorAssessment, ScoredMetric, ScoredReport
 from .time_utils import format_timestamp
 
@@ -27,6 +28,7 @@ def render_html_report(report: ScoredReport, title: str) -> str:
     weights = "\n".join(_render_weight_row(key, value, report.metrics) for key, value in report.weights.items())
     health_notes = _render_health_notes(report)
     iron_condor = _render_iron_condor(report.iron_condor)
+    news_monitor = _render_news_monitor(report.news_monitor)
     etf_monitor = _render_etf_monitor(report.etf_monitor)
 
     return f"""<!doctype html>
@@ -100,6 +102,13 @@ def render_html_report(report: ScoredReport, title: str) -> str:
     .strategy-lists {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 14px; }}
     .strategy-list {{ background: rgba(255,255,255,.025); border: 1px solid var(--line); border-radius: 8px; padding: 12px; }}
     .disclaimer {{ margin-top: 12px; color: var(--muted); font-size: 12px; }}
+    .news-panel {{ margin-bottom: 14px; }}
+    .news-head {{ display: grid; grid-template-columns: 1fr auto; gap: 14px; align-items: start; }}
+    .news-grid {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 12px; }}
+    .news-item {{ border: 1px solid var(--line); border-radius: 6px; padding: 10px; background: rgba(255,255,255,.025); }}
+    .news-item a {{ color: #bfdbfe; text-decoration: none; }}
+    .news-meta {{ color: var(--muted); font-size: 12px; margin-top: 5px; }}
+    .news-tags {{ display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }}
     .etf-summary {{ color: var(--subtle); margin-bottom: 12px; }}
     .portfolio-panel {{ margin: 12px 0; border: 1px solid var(--line); border-radius: 8px; background: rgba(255,255,255,.02); overflow: hidden; }}
     .portfolio-head {{ display: grid; grid-template-columns: 1fr auto; gap: 14px; padding: 14px; background: rgba(255,255,255,.025); }}
@@ -244,6 +253,7 @@ def render_html_report(report: ScoredReport, title: str) -> str:
     </section>
 
     {iron_condor}
+    {news_monitor}
     {etf_monitor}
 
     <section class="grid">{groups}</section>
@@ -324,7 +334,38 @@ def _render_iron_condor(assessment: IronCondorAssessment) -> str:
         <div class="strategy-list"><h2>阻断项</h2><ul>{blockers}</ul></div>
       </div>
       <div class="disclaimer">本模块仅评估市场环境是否适合区间型卖波动策略，不构成期权交易建议。</div>
-    </section>"""
+</section>"""
+
+
+def _render_news_monitor(monitor: NewsMonitor | None) -> str:
+    if monitor is None:
+        return ""
+    events = "\n".join(_render_news_event(event) for event in monitor.events)
+    warnings = "".join(f"<li>{escape(item)}</li>" for item in monitor.warnings)
+    cache_note = " · 使用缓存" if monitor.used_cache else ""
+    return f"""<section class="panel news-panel">
+  <div class="news-head">
+    <div>
+      <h2>重要新闻与政策叙事监控</h2>
+      <div class="summary">{escape(monitor.summary)}</div>
+    </div>
+    <span class="tag">{escape(monitor.status)}{cache_note}</span>
+  </div>
+  <div class="news-grid">{events or '<div class="muted">暂无可核验的重要新闻事件。</div>'}</div>
+  {f'<ul class="small-note">{warnings}</ul>' if warnings else ''}
+  <div class="disclaimer">新闻情绪来自规则化主题识别与来源分级，仅用于辅助解释跨资产叙事，不构成交易建议。政治表态需结合后续政策文本与市场价格验证。</div>
+</section>"""
+
+
+def _render_news_event(event: NewsEvent) -> str:
+    tags = "".join(f'<span class="tag">{escape(theme)}</span>' for theme in event.themes)
+    tickers = f" · 相关Ticker：{escape('、'.join(event.tickers))}" if event.tickers else ""
+    return f"""<article class="news-item">
+  <a href="{escape(event.url)}" target="_blank" rel="noopener noreferrer">{escape(event.title)}</a>
+  <div class="news-meta">{escape(event.source)} · {escape(event.published_at)} · {escape(event.source_type)} · 影响：{escape(event.impact)} · 置信度：{escape(event.confidence)}{tickers}</div>
+  <div class="news-meta">{escape(event.direction)}</div>
+  <div class="news-tags">{tags}</div>
+</article>"""
 
 
 def _render_assessment_list(items: list[str]) -> str:

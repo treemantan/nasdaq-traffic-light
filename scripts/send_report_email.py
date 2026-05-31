@@ -218,6 +218,7 @@ def _report_from_payload(payload: dict):
         ScoredMetric,
         ScoredReport,
     )
+    from market_report.news_monitor import NewsEvent, NewsMonitor
 
     metrics = {
         key: _dataclass_from_dict(
@@ -252,6 +253,27 @@ def _report_from_payload(payload: dict):
                 ],
             },
         )
+    news_monitor = None
+    if isinstance(payload.get("news_monitor"), dict):
+        news_monitor = _dataclass_from_dict(
+            NewsMonitor,
+            payload["news_monitor"],
+            converters={
+                "events": lambda raw: tuple(
+                    _dataclass_from_dict(
+                        NewsEvent,
+                        item,
+                        converters={
+                            "themes": lambda themes: tuple(themes or ()),
+                            "tickers": lambda tickers: tuple(tickers or ()),
+                        },
+                    )
+                    for item in (raw or [])
+                    if isinstance(item, dict)
+                ),
+                "warnings": lambda raw: tuple(raw or ()),
+            },
+        )
 
     return _dataclass_from_dict(
         ScoredReport,
@@ -261,6 +283,7 @@ def _report_from_payload(payload: dict):
             "regime": lambda raw: _dataclass_from_dict(RegimeAssessment, raw or {}),
             "iron_condor": lambda raw: _dataclass_from_dict(IronCondorAssessment, raw or {}),
             "etf_monitor": lambda _raw: etf_monitor,
+            "news_monitor": lambda _raw: news_monitor,
         },
     )
 

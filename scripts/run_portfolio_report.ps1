@@ -1,13 +1,18 @@
 param(
     [string]$ProjectDir = "",
+    [string]$StatementDir = "",
     [string]$StatementPattern = "trading-account-statement_*.csv",
     [string]$ConfigPath = "config.example.json",
-    [string]$LogDir = "logs"
+    [string]$LogDir = "logs",
+    [switch]$UseLatestPerAccountFolder
 )
 
 $ErrorActionPreference = "Stop"
 if (-not $ProjectDir) {
     $ProjectDir = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+}
+else {
+    $ProjectDir = (Resolve-Path $ProjectDir).Path
 }
 
 function Write-Log {
@@ -65,15 +70,41 @@ $script:LogFile = Join-Path $fullLogDir ("portfolio-report-{0}.log" -f (Get-Date
 
 Write-Log "Starting local portfolio import and report generation."
 Write-Log "ProjectDir=$ProjectDir"
+if ($StatementDir) {
+    Write-Log "StatementDir=$StatementDir"
+}
 Write-Log "StatementPattern=$StatementPattern"
 
 try {
-    $statementFiles = @(
-        Get-ChildItem -Path $ProjectDir -File -Filter $StatementPattern |
-            Sort-Object Name
-    )
+    if ($StatementDir -and -not (Test-Path -LiteralPath $StatementDir)) {
+        throw "Revolut statement inbox does not exist: $StatementDir"
+    }
+
+    if ($StatementDir -and $UseLatestPerAccountFolder) {
+        $accountFolders = @(Get-ChildItem -LiteralPath $StatementDir -Directory | Sort-Object Name)
+        $statementFiles = @(
+            foreach ($folder in $accountFolders) {
+                $latest = Get-ChildItem -LiteralPath $folder.FullName -File -Filter $StatementPattern |
+                    Sort-Object LastWriteTime -Descending |
+                    Select-Object -First 1
+                if ($latest) {
+                    Write-Log ("Account inbox {0}: selected latest export {1}" -f $folder.Name, $latest.Name)
+                    $latest
+                }
+            }
+        )
+        if ($statementFiles.Count -eq 0) {
+            Write-Log "No statement found inside account folders; checking the inbox root for compatibility." "WARN"
+            $statementFiles = @(Get-ChildItem -LiteralPath $StatementDir -File -Filter $StatementPattern | Sort-Object LastWriteTime -Descending)
+        }
+    }
+    else {
+        $searchDir = if ($StatementDir) { $StatementDir } else { $ProjectDir }
+        $statementFiles = @(Get-ChildItem -LiteralPath $searchDir -File -Filter $StatementPattern | Sort-Object Name)
+    }
+
     if ($statementFiles.Count -eq 0) {
-        throw "No Revolut statement CSV found. Place the latest trading-account-statement_*.csv files in the project root."
+        throw "No Revolut statement CSV found. Save the latest trading-account-statement_*.csv export into the configured inbox."
     }
 
     $uniqueStatements = @(
@@ -85,7 +116,12 @@ try {
     foreach ($statement in $uniqueStatements) {
         Write-Log ("Statement: {0}" -f $statement.Name)
     }
-    Write-Log "Keep only one latest export per investment account in the project root to avoid double counting overlapping exports." "WARN"
+    if ($StatementDir -and $UseLatestPerAccountFolder) {
+        Write-Log "Using only the latest export from each account folder to avoid double counting overlapping statement windows."
+    }
+    else {
+        Write-Log "Keep only one latest export per investment account in the statement directory to avoid double counting overlapping exports." "WARN"
+    }
 
     $importArgs = @("scripts\import_revolut_statement.py") + @($uniqueStatements | ForEach-Object { $_.FullName })
     $importExitCode = Invoke-LoggedProcess -FileName "python" -Arguments $importArgs

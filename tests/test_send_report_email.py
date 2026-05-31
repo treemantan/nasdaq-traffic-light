@@ -52,6 +52,27 @@ class SendReportEmailTests(unittest.TestCase):
                 "blockers": [],
             },
             "etf_monitor": None,
+            "news_monitor": {
+                "fetched_at": "2026-05-27T21:14:00+01:00",
+                "status": "正常",
+                "summary": "新闻测试摘要。",
+                "events": [
+                    {
+                        "title": "Trump tells crowd to buy a Dell computer",
+                        "source": "Example",
+                        "published_at": "2026-05-27",
+                        "url": "https://example.com/dell",
+                        "themes": ["半导体与AI基础设施"],
+                        "tickers": ["DELL"],
+                        "direction": "方向待确认",
+                        "impact": "中",
+                        "confidence": "中",
+                        "source_type": "新闻聚合",
+                    }
+                ],
+                "warnings": [],
+                "used_cache": False,
+            },
             "data_warnings": [],
             "data_quality": "正常",
             "data_health": {"core_cached": 0, "aux_missing": 0},
@@ -68,6 +89,8 @@ class SendReportEmailTests(unittest.TestCase):
         self.assertIn("Macro Regime Radar：宏观状态雷达", html)
         self.assertIn("background:#0b1017", html)
         self.assertNotIn("<style>", html)
+        self.assertIn("Trump tells crowd to buy a Dell computer", html)
+        self.assertIn("DELL", html)
         self.assertIn("email-optimized HTML", text)
 
 

@@ -12,6 +12,7 @@
 - 数据韧性：重试、本地缓存、最新有效观察值、异常区间校验、核心/辅助指标分层
 - 解释层：宏观 regime、流动性 regime、收益率驱动归因、跨资产一致性、置信度、known unknowns
 - 策略环境过滤：Iron Condor 环境过滤器，仅评估区间型卖波动环境，不提供交易建议
+- 新闻与政策叙事：抓取白宫原文与 GDELT 新闻聚合，识别重要主题、方向、来源置信度和被点名公司 ticker；新闻层仅用于解释市场叙事，不直接改变量化评分
 
 ## 本地生成报告
 
@@ -25,6 +26,25 @@ python -m market_report --config config.example.json --dry-run
 output/market-report-YYYY-MM-DD.html
 output/market-report-YYYY-MM-DD.json
 ```
+
+## 手机保存 Revolut statement：OneDrive inbox
+
+推荐在手机中将 Revolut 导出的 CSV 保存到已经由 Windows OneDrive 客户端同步的固定目录：
+
+```text
+C:\Users\<Windows用户名>\OneDrive\Trading\Revolut Transaction Statement
+```
+
+项目根目录提供两个入口：
+
+- `setup_onedrive_portfolio_inbox.bat`：创建 inbox 并注册工作日 `21:30` 本地定时导入任务。
+- `run_onedrive_portfolio_report.bat`：立即从 OneDrive inbox 导入 statement 并刷新本地报告。
+
+OneDrive 主账号、MFA 验证方式和 recovery 邮箱由 Windows OneDrive 客户端管理。脚本仅访问已经同步到本地的 CSV 文件，不保存 OneDrive 邮箱、密码、验证码或 OAuth token。
+
+默认 inbox 可以直接保存每个账户的最新 CSV。为避免 statement 时间窗口重叠导致重复计算，请及时删除同一账户的旧导出。需要长期保留历史导出时，可以按账户建立子目录，并用 `scripts\run_portfolio_report.ps1 -UseLatestPerAccountFolder` 让脚本只选择每个账户目录中的最新 CSV。
+
+后续可选增强：使用 Microsoft Graph API 从 OneDrive 私人目录读取最新 CSV，使 GitHub Actions 在本地电脑关机时也能更新持仓。该方案需要单独配置 OAuth 权限与 refresh token，目前版本不启用。
 
 其中 JSON 是结构化评分对象，供云端轻量邮件使用；HTML 是完整仪表盘。
 
