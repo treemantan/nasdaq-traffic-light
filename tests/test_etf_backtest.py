@@ -75,6 +75,35 @@ class ETFBacktestTests(unittest.TestCase):
         self.assertIn("mkt_vix_level", features)
         self.assertIn("mkt_dxy_1m", features)
 
+    def test_similarity_features_ignore_prices_after_historical_as_of_date(self) -> None:
+        start = date(2020, 1, 1)
+        history = []
+        value = 100.0
+        for index in range(330):
+            value *= 1.0005
+            history.append((start + timedelta(days=index), value))
+        historical_window = history[:300]
+        as_of = historical_window[-1][0]
+        known_spy = [(day, close * 1.1) for day, close in history[:300]]
+        future_spy = [
+            (start + timedelta(days=index), 10_000.0 + index)
+            for index in range(300, 330)
+        ]
+
+        features_without_future = _entry_similarity_features(
+            ETFSpec("demo", "Demo ETF", "DEMO.L", "Demo", "Demo"),
+            historical_window,
+            market_histories={"spy": known_spy},
+        )
+        features_with_future = _entry_similarity_features(
+            ETFSpec("demo", "Demo ETF", "DEMO.L", "Demo", "Demo"),
+            historical_window,
+            market_histories={"spy": known_spy + future_spy},
+        )
+
+        self.assertEqual(historical_window[-1][0], as_of)
+        self.assertEqual(features_without_future, features_with_future)
+
     def test_rolling_sensitivity_tracks_correlated_factor(self) -> None:
         start = date(2026, 1, 1)
         factor = []
