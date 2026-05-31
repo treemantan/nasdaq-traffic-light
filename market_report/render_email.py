@@ -3,7 +3,7 @@ from __future__ import annotations
 from html import escape
 
 from .data_sources import MarketMetric
-from .etf_monitor import ETFAssetMonitor, ETFMonitor
+from .etf_monitor import ETFAssetMonitor, ETFMonitor, PortfolioPosition
 from .scoring import IronCondorAssessment, ScoredMetric, ScoredReport
 
 
@@ -203,7 +203,7 @@ def _render_etf_monitor(monitor: ETFMonitor | None) -> str:
         return ""
     grouped_rows = "".join(_render_etf_email_group(group) for group in _group_etf_assets(monitor.assets))
     changes = _render_email_notes("今日ETF变动摘要", monitor.change_summary)
-    portfolio = _render_email_notes("实际组合视角", monitor.portfolio_summary + monitor.portfolio_warnings)
+    portfolio = _render_portfolio_email(monitor)
     return f"""<tr>
       <td style="padding:0 24px 18px;">
         <div style="font-size:19px;font-weight:700;color:#f3f4f6;margin:8px 0 8px;">UK ETF估值、趋势与拥挤度监控器</div>
@@ -213,6 +213,40 @@ def _render_etf_monitor(monitor: ETFMonitor | None) -> str:
         {grouped_rows}
         <div style="font-size:12px;color:#9ca3af;margin-top:8px;">PE位置优先显示本地历史分位；样本不足时显示当前PE/近一年缓存最高PE的近似比例。σ200使用去极值后的稳健趋势波动率，避免少数极端日收益掩盖趋势拉伸。proxy 表示使用同类ETF作近似估值参考；黄金ETC不适用PE/PB。</div>
       </td>
+    </tr>"""
+
+
+def _render_portfolio_email(monitor: ETFMonitor) -> str:
+    if not monitor.portfolio_positions:
+        return _render_email_notes("实际组合视角", monitor.portfolio_summary + monitor.portfolio_warnings)
+    rows = "".join(_render_portfolio_email_row(position) for position in monitor.portfolio_positions)
+    notes = "".join(f"<li>{escape(item)}</li>" for item in monitor.portfolio_summary + monitor.portfolio_warnings)
+    return f"""
+        <div style="font-size:15px;font-weight:700;color:#f3f4f6;margin:14px 0 4px;">实际组合持仓（Revolut statement 估算）</div>
+        <div style="font-size:12px;color:#9ca3af;margin-bottom:6px;">持仓估算市值 {_fmt_gbp(monitor.portfolio_total_value_gbp)}。基于导出的 statement 与 Yahoo 最近价格估算，不等同于券商实时账户净值。</div>
+        <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;font-size:12px;color:#d1d5db;margin-bottom:6px;">
+          <tr>
+            <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">资产</th>
+            <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">估算市值</th>
+            <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">未实现盈亏</th>
+            <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">日变化</th>
+            <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">占比</th>
+          </tr>
+          {rows}
+        </table>
+        <ul style="color:#9ca3af;padding-left:18px;margin:5px 0 10px;font-size:12px;">{notes}</ul>"""
+
+
+def _render_portfolio_email_row(position: PortfolioPosition) -> str:
+    pnl_color = _pnl_color(position.unrealized_pnl_gbp)
+    day_color = _pnl_color(position.day_change_pct)
+    scope = "ETF观察池" if position.monitor_status == "covered" else "待穿透"
+    return f"""<tr>
+      <td style="padding:7px;border-bottom:1px solid #263244;"><strong>{escape(position.symbol)}</strong><br><span style="color:#9ca3af;">{scope}</span></td>
+      <td style="padding:7px;border-bottom:1px solid #263244;">{escape(_fmt_gbp(position.market_value_gbp))}</td>
+      <td style="padding:7px;border-bottom:1px solid #263244;color:{pnl_color};">{escape(_fmt_signed_gbp(position.unrealized_pnl_gbp))}<br>{escape(_fmt_pct(position.unrealized_pnl_pct))}</td>
+      <td style="padding:7px;border-bottom:1px solid #263244;color:{day_color};">{escape(_fmt_pct(position.day_change_pct))}</td>
+      <td style="padding:7px;border-bottom:1px solid #263244;">{position.weight_pct:.2f}%</td>
     </tr>"""
 
 
@@ -499,6 +533,25 @@ def _fmt_pct(value: float | None) -> str:
         return "N/A"
     sign = "+" if value >= 0 else ""
     return f"{sign}{value:.2f}%"
+
+
+def _fmt_gbp(value: float | None) -> str:
+    if value is None:
+        return "N/A"
+    return f"£{value:,.2f}"
+
+
+def _fmt_signed_gbp(value: float | None) -> str:
+    if value is None:
+        return "N/A"
+    sign = "+" if value >= 0 else "-"
+    return f"{sign}£{abs(value):,.2f}"
+
+
+def _pnl_color(value: float | None) -> str:
+    if value is None:
+        return "#9ca3af"
+    return "#4ade80" if value >= 0 else "#f87171"
 
 
 def _fmt_sigma(value: float | None) -> str:

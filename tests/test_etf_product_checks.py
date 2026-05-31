@@ -38,11 +38,13 @@ class ETFProductCheckTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "portfolio.csv"
             path.write_text("symbol,weight_pct\nA.L,60\nB.L,40\n", encoding="utf-8")
-            summary, warnings = _load_portfolio_summary(
+            summary, warnings, positions, total = _load_portfolio_summary(
                 [self._asset("A.L", (), ter=0.10), self._asset("B.L", (), ter=0.30)],
                 path,
             )
         self.assertFalse(warnings)
+        self.assertEqual(len(positions), 2)
+        self.assertIsNone(total)
         self.assertTrue(any("组合加权TER约0.18%" in item for item in summary))
 
     @staticmethod

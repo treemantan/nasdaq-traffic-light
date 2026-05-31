@@ -51,6 +51,20 @@ class ETFHolding:
 
 
 @dataclass(frozen=True)
+class PortfolioPosition:
+    symbol: str
+    weight_pct: float
+    quantity: float | None
+    average_cost_gbp: float | None
+    current_price_gbp: float | None
+    market_value_gbp: float | None
+    unrealized_pnl_gbp: float | None
+    unrealized_pnl_pct: float | None
+    day_change_pct: float | None
+    monitor_status: str
+
+
+@dataclass(frozen=True)
 class ETFSpec:
     key: str
     label: str
@@ -183,6 +197,8 @@ class ETFMonitor:
     change_summary: list[str] = field(default_factory=list)
     portfolio_summary: list[str] = field(default_factory=list)
     portfolio_warnings: list[str] = field(default_factory=list)
+    portfolio_positions: list[PortfolioPosition] = field(default_factory=list)
+    portfolio_total_value_gbp: float | None = None
 
 
 DEFAULT_ETF_SPECS = [
@@ -248,7 +264,7 @@ def fetch_etf_monitor(specs: list[ETFSpec] | None = None, macro_metrics: dict[st
         assets.append(asset)
         warnings.extend(asset.warnings)
     _save_cache(cache)
-    portfolio_summary, portfolio_warnings = _load_portfolio_summary(assets)
+    portfolio_summary, portfolio_warnings, portfolio_positions, portfolio_total = _load_portfolio_summary(assets)
     return ETFMonitor(
         summary=_build_summary(assets),
         assets=assets,
@@ -256,6 +272,8 @@ def fetch_etf_monitor(specs: list[ETFSpec] | None = None, macro_metrics: dict[st
         change_summary=_build_change_summary(assets, previous_assets),
         portfolio_summary=portfolio_summary,
         portfolio_warnings=portfolio_warnings,
+        portfolio_positions=portfolio_positions,
+        portfolio_total_value_gbp=portfolio_total,
     )
 
 
@@ -1647,9 +1665,11 @@ def _build_change_summary(assets: list[ETFAssetMonitor], previous_assets: dict[s
     return changes[:8] or ["ETF观察池未出现需要特别标记的状态切换。"]
 
 
-def _load_portfolio_summary(assets: list[ETFAssetMonitor], path: Path = Path("portfolio.csv")) -> tuple[list[str], list[str]]:
+def _load_portfolio_summary(
+    assets: list[ETFAssetMonitor], path: Path = Path("portfolio.csv")
+) -> tuple[list[str], list[str], list[PortfolioPosition], float | None]:
     if not path.exists():
-        return [], ["尚未导入实际组合。可基于 Revolut investment statement 整理 portfolio.csv。"]
+        return [], ["尚未导入实际组合。可基于 Revolut investment statement 整理 portfolio.csv。"], [], None
     asset_map = {asset.symbol.upper(): asset for asset in assets}
     rows = []
     warnings = []
@@ -1657,7 +1677,24 @@ def _load_portfolio_summary(assets: list[ETFAssetMonitor], path: Path = Path("po
         with path.open("r", encoding="utf-8-sig", newline="") as handle:
             rows = list(csv.DictReader(handle))
     except Exception as exc:
-        return [], [f"portfolio.csv 无法读取：{type(exc).__name__}"]
+        return [], [f"portfolio.csv 无法读取：{type(exc).__name__}"], [], None
+    portfolio_positions = [
+        PortfolioPosition(
+            symbol=str(row.get("symbol") or "").strip().upper(),
+            weight_pct=_safe_float(row.get("weight_pct")) or 0,
+            quantity=_safe_float(row.get("quantity")),
+            average_cost_gbp=_safe_float(row.get("average_cost_gbp")),
+            current_price_gbp=_safe_float(row.get("current_price_gbp")),
+            market_value_gbp=_safe_float(row.get("estimated_market_value_gbp")),
+            unrealized_pnl_gbp=_safe_float(row.get("unrealized_pnl_gbp")),
+            unrealized_pnl_pct=_safe_float(row.get("unrealized_pnl_pct")),
+            day_change_pct=_safe_float(row.get("day_change_pct")),
+            monitor_status=str(row.get("monitor_status") or "unknown"),
+        )
+        for row in rows
+        if str(row.get("symbol") or "").strip()
+    ]
+    portfolio_total = sum(item.market_value_gbp or 0 for item in portfolio_positions) or None
     positions = []
     uncovered = []
     for row in rows:
@@ -1671,7 +1708,7 @@ def _load_portfolio_summary(assets: list[ETFAssetMonitor], path: Path = Path("po
             continue
         positions.append((asset, weight))
     if not positions:
-        return [], warnings + ["portfolio.csv 未包含可识别的 symbol,weight_pct 持仓。"]
+        return [], warnings + ["portfolio.csv 未包含可识别的 symbol,weight_pct 持仓。"], portfolio_positions, portfolio_total
     if uncovered:
         warnings.append("以下个股或观察池外ETF暂未穿透分析：" + "、".join(uncovered) + "。")
     total = sum(weight for _, weight in positions)
@@ -1686,7 +1723,7 @@ def _load_portfolio_summary(assets: list[ETFAssetMonitor], path: Path = Path("po
         "主要主题暴露：" + "、".join(f"{theme} {weight:.1f}%" for theme, weight in top_themes) + "。",
         f"组合加权TER约{weighted_ter / total:.2f}%。",
     ]
-    return summary, warnings
+    return summary, warnings, portfolio_positions, portfolio_total
 
 
 def _valuation_warnings(

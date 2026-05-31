@@ -4,7 +4,7 @@ from datetime import datetime
 from html import escape
 
 from .data_sources import MarketMetric
-from .etf_monitor import ETFAssetMonitor, ETFMonitor
+from .etf_monitor import ETFAssetMonitor, ETFMonitor, PortfolioPosition
 from .scoring import IronCondorAssessment, ScoredMetric, ScoredReport
 from .time_utils import format_timestamp
 
@@ -101,6 +101,19 @@ def render_html_report(report: ScoredReport, title: str) -> str:
     .strategy-list {{ background: rgba(255,255,255,.025); border: 1px solid var(--line); border-radius: 8px; padding: 12px; }}
     .disclaimer {{ margin-top: 12px; color: var(--muted); font-size: 12px; }}
     .etf-summary {{ color: var(--subtle); margin-bottom: 12px; }}
+    .portfolio-panel {{ margin: 12px 0; border: 1px solid var(--line); border-radius: 8px; background: rgba(255,255,255,.02); overflow: hidden; }}
+    .portfolio-head {{ display: grid; grid-template-columns: 1fr auto; gap: 14px; padding: 14px; background: rgba(255,255,255,.025); }}
+    .portfolio-title {{ font-size: 16px; font-weight: 760; }}
+    .portfolio-total {{ text-align: right; }}
+    .portfolio-total strong {{ display: block; font-size: 24px; }}
+    .portfolio-notes {{ padding: 0 14px 12px; color: var(--subtle); font-size: 12px; }}
+    .portfolio-table-scroll {{ max-width: 100%; overflow-x: auto; overflow-y: hidden; }}
+    .portfolio-table {{ min-width: 1080px; }}
+    .portfolio-table td, .portfolio-table th {{ white-space: nowrap; }}
+    .portfolio-symbol {{ font-weight: 760; }}
+    .portfolio-scope {{ color: var(--muted); font-size: 12px; }}
+    .pnl-up {{ color: #4ade80; }}
+    .pnl-down {{ color: #f87171; }}
     .etf-groups {{ display: grid; gap: 10px; }}
     .etf-group {{ border: 1px solid var(--line); border-radius: 8px; background: rgba(255,255,255,.02); overflow: hidden; }}
     .etf-group summary {{ cursor: pointer; list-style: none; padding: 12px 14px; background: rgba(255,255,255,.025); }}
@@ -170,6 +183,8 @@ def render_html_report(report: ScoredReport, title: str) -> str:
       .datebox {{ text-align: left; }}
       .etf-group-head {{ display: block; }}
       .etf-group-stats {{ text-align: left; margin-top: 7px; }}
+      .portfolio-head {{ grid-template-columns: 1fr; }}
+      .portfolio-total {{ text-align: left; }}
       .table-scroll {{ display: none; }}
       .etf-cards {{ display: block; }}
     }}
@@ -319,7 +334,7 @@ def _render_etf_monitor(monitor: ETFMonitor | None) -> str:
     if monitor.warnings:
         warnings = "<div class=\"small-note\">数据提示：" + escape(" ".join(monitor.warnings[:4])) + "</div>"
     changes = _render_etf_notes("今日ETF变动摘要", monitor.change_summary)
-    portfolio = _render_etf_notes("实际组合视角", monitor.portfolio_summary + monitor.portfolio_warnings)
+    portfolio = _render_portfolio_panel(monitor)
     return f"""<section class="panel">
       <h2>UK ETF估值、趋势与拥挤度监控器</h2>
       <div class="etf-summary">{escape(monitor.summary)}</div>
@@ -329,6 +344,53 @@ def _render_etf_monitor(monitor: ETFMonitor | None) -> str:
       <div class="small-note">PE衡量市场为每单位盈利支付的价格，Forward PE基于未来盈利预期；PB衡量市值相对账面净资产。PE位置优先显示本地历史分位；样本不足时显示“当前PE/近一年缓存最高PE”的近似比例。σ200使用63/126/252日窗口去极值后的稳健趋势波动率。持仓重叠度基于可获得的前十大持仓近似计算，并非完整穿透。估值源若标记为proxy，表示使用高度相关的同类ETF作近似参考。黄金ETC不适用PE/PB。</div>
       {warnings}
     </section>"""
+
+
+def _render_portfolio_panel(monitor: ETFMonitor) -> str:
+    if not monitor.portfolio_positions:
+        return _render_etf_notes("实际组合视角", monitor.portfolio_summary + monitor.portfolio_warnings)
+    rows = "\n".join(_render_portfolio_row(position) for position in monitor.portfolio_positions)
+    notes = monitor.portfolio_summary + monitor.portfolio_warnings
+    note_html = "".join(f"<li>{escape(item)}</li>" for item in notes)
+    total = _fmt_gbp(monitor.portfolio_total_value_gbp)
+    return f"""<div class="portfolio-panel">
+      <div class="portfolio-head">
+        <div>
+          <div class="portfolio-title">实际组合持仓（Revolut statement 估算）</div>
+          <div class="small-note">基于导出的交易 statement 重建持仓，并使用 Yahoo 最近价格估算。仅覆盖本次导出账户范围，不等同于券商实时账户净值。</div>
+        </div>
+        <div class="portfolio-total"><span class="muted">持仓估算市值</span><strong>{escape(total)}</strong></div>
+      </div>
+      <div class="portfolio-table-scroll">
+        <table class="portfolio-table">
+          <thead>
+            <tr>
+              <th>资产</th><th>数量</th><th>平均成本</th><th>当前价格</th><th>估算市值</th>
+              <th>未实现盈亏</th><th>未实现盈亏%</th><th>日变化</th><th>组合占比</th>
+            </tr>
+          </thead>
+          <tbody>{rows}</tbody>
+        </table>
+      </div>
+      <div class="portfolio-notes"><ul>{note_html}</ul></div>
+    </div>"""
+
+
+def _render_portfolio_row(position: PortfolioPosition) -> str:
+    pnl_class = _pnl_class(position.unrealized_pnl_gbp)
+    day_class = _pnl_class(position.day_change_pct)
+    scope = "ETF观察池" if position.monitor_status == "covered" else "待穿透分析"
+    return f"""<tr>
+      <td><span class="portfolio-symbol">{escape(position.symbol)}</span><br><span class="portfolio-scope">{scope}</span></td>
+      <td>{escape(_fmt_quantity(position.quantity))}</td>
+      <td>{escape(_fmt_gbp(position.average_cost_gbp))}</td>
+      <td>{escape(_fmt_gbp(position.current_price_gbp))}</td>
+      <td>{escape(_fmt_gbp(position.market_value_gbp))}</td>
+      <td class="{pnl_class}">{escape(_fmt_signed_gbp(position.unrealized_pnl_gbp))}</td>
+      <td class="{pnl_class}">{escape(_fmt_pct(position.unrealized_pnl_pct))}</td>
+      <td class="{day_class}">{escape(_fmt_pct(position.day_change_pct))}</td>
+      <td>{position.weight_pct:.2f}%</td>
+    </tr>"""
 
 
 def _render_etf_group(group: tuple[str, str, list[ETFAssetMonitor]], index: int = 0) -> str:
@@ -828,6 +890,31 @@ def _fmt_pct(value: float | None) -> str:
         return "N/A"
     sign = "+" if value >= 0 else ""
     return f"{sign}{value:.2f}%"
+
+
+def _fmt_gbp(value: float | None) -> str:
+    if value is None:
+        return "N/A"
+    return f"£{value:,.2f}"
+
+
+def _fmt_signed_gbp(value: float | None) -> str:
+    if value is None:
+        return "N/A"
+    sign = "+" if value >= 0 else "-"
+    return f"{sign}£{abs(value):,.2f}"
+
+
+def _fmt_quantity(value: float | None) -> str:
+    if value is None:
+        return "N/A"
+    return f"{value:,.6f}".rstrip("0").rstrip(".")
+
+
+def _pnl_class(value: float | None) -> str:
+    if value is None:
+        return ""
+    return "pnl-up" if value >= 0 else "pnl-down"
 
 
 def _fmt_sigma(value: float | None) -> str:

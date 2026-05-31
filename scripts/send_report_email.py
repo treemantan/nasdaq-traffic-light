@@ -209,6 +209,7 @@ def _report_from_payload(payload: dict):
         ETFBacktestStats,
         ETFMonitor,
         ETFThresholdCalibration,
+        PortfolioPosition,
     )
     from market_report.scoring import (
         IronCondorAssessment,
@@ -238,6 +239,11 @@ def _report_from_payload(payload: dict):
                     if isinstance(item, dict)
                 ],
                 "warnings": lambda raw: list(raw or []),
+                "portfolio_positions": lambda raw: [
+                    _dataclass_from_dict(PortfolioPosition, item)
+                    for item in (raw or [])
+                    if isinstance(item, dict)
+                ],
             },
         )
 
