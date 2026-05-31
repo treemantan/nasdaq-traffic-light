@@ -4,11 +4,12 @@ import argparse
 import csv
 import sys
 from collections import defaultdict
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from market_report.etf_monitor import DEFAULT_ETF_SPECS, _fetch_yahoo_history, _safe_float
+from market_report.etf_monitor import DEFAULT_ETF_SPECS, _fetch_yahoo_price_data, _normalize_currency, _safe_float
 
 
 UK_SYMBOL_OVERRIDES = {"IGTM": "IGTM.L", "ISF": "ISF.L"}
@@ -72,23 +73,32 @@ def _reconstruct_positions(paths: list[Path]) -> dict[str, dict[str, float]]:
 
 def _build_portfolio_rows(positions: dict[str, dict[str, float]]) -> list[dict[str, str]]:
     monitor_symbols = {spec.symbol[:-2] if spec.symbol.endswith(".L") else spec.symbol: spec.symbol for spec in DEFAULT_ETF_SPECS}
-    gbpusd = _latest_price("GBPUSD=X")[0]
+    fx_quotes = {
+        "USD": _latest_quote("GBPUSD=X"),
+        "EUR": _latest_quote("GBPEUR=X"),
+    }
+    fx_as_of = datetime.now(timezone.utc).isoformat(timespec="seconds")
     valued = []
     for ticker, position in positions.items():
         quantity = position["quantity"]
         monitor_symbol = monitor_symbols.get(ticker)
         yahoo_symbol = monitor_symbol or UK_SYMBOL_OVERRIDES.get(ticker) or ticker
-        price, previous_price = _latest_price(yahoo_symbol)
+        price, previous_price, native_currency = _latest_quote(yahoo_symbol)
         price_source = f"Yahoo:{yahoo_symbol}"
-        if yahoo_symbol == ticker and gbpusd:
-            price = price / gbpusd if price is not None else None
-            previous_price = previous_price / gbpusd if previous_price is not None else None
-            price_source += "；FX:GBPUSD=X"
+        fx_pair = ""
+        fx_rate = 1.0 if native_currency == "GBP" else None
+        if native_currency in fx_quotes:
+            fx_pair = f"GBP/{native_currency}"
+            fx_rate = fx_quotes[native_currency][0]
+        price_gbp = price / fx_rate if price is not None and fx_rate not in (None, 0) else None
+        if fx_pair:
+            price_source += f" | FX:{fx_pair}"
         average_cost = position["cost_gbp"] / quantity if quantity else 0.0
-        if price is None:
-            price = average_cost or None
+        if price_gbp is None:
+            price_gbp = average_cost or None
             price_source = "statement-average-cost fallback"
-        market_value = quantity * price if price is not None else 0.0
+        market_value_native = quantity * price if price is not None else None
+        market_value = quantity * price_gbp if price_gbp is not None else 0.0
         unrealized = market_value - position["cost_gbp"]
         unrealized_pct = unrealized / position["cost_gbp"] * 100 if position["cost_gbp"] else None
         day_change_pct = (price / previous_price - 1) * 100 if price is not None and previous_price not in (None, 0) else None
@@ -97,11 +107,17 @@ def _build_portfolio_rows(positions: dict[str, dict[str, float]]) -> list[dict[s
                 "symbol": monitor_symbol or ticker,
                 "quantity": quantity,
                 "average_cost": average_cost,
-                "current_price": price,
+                "current_price": price_gbp,
+                "native_currency": native_currency,
+                "current_price_native": price,
+                "market_value_native": market_value_native,
                 "market_value": market_value,
                 "unrealized_pnl": unrealized,
                 "unrealized_pnl_pct": unrealized_pct,
                 "day_change_pct": day_change_pct,
+                "fx_pair": fx_pair,
+                "fx_rate": fx_rate,
+                "fx_as_of": fx_as_of,
                 "price_source": price_source,
                 "monitor_status": "covered" if monitor_symbol else "outside-monitor-pool",
             }
@@ -117,10 +133,16 @@ def _build_portfolio_rows(positions: dict[str, dict[str, float]]) -> list[dict[s
                 "quantity": f"{item['quantity']:.8f}".rstrip("0").rstrip("."),
                 "average_cost_gbp": _fmt_number(item["average_cost"]),
                 "current_price_gbp": _fmt_number(item["current_price"]),
+                "native_currency": str(item["native_currency"] or ""),
+                "current_price_native": _fmt_number(item["current_price_native"]),
+                "market_value_native": _fmt_number(item["market_value_native"]),
                 "estimated_market_value_gbp": f"{item['market_value']:.2f}",
                 "unrealized_pnl_gbp": _fmt_number(item["unrealized_pnl"]),
                 "unrealized_pnl_pct": _fmt_number(item["unrealized_pnl_pct"]),
                 "day_change_pct": _fmt_number(item["day_change_pct"]),
+                "fx_pair": str(item["fx_pair"]),
+                "fx_rate": _fmt_number(item["fx_rate"]),
+                "fx_as_of": str(item["fx_as_of"]),
                 "price_source": str(item["price_source"]),
                 "monitor_status": str(item["monitor_status"]),
             }
@@ -128,14 +150,16 @@ def _build_portfolio_rows(positions: dict[str, dict[str, float]]) -> list[dict[s
     return rows
 
 
-def _latest_price(symbol: str) -> tuple[float | None, float | None]:
+def _latest_quote(symbol: str) -> tuple[float | None, float | None, str]:
     try:
-        history = _fetch_yahoo_history(symbol)
+        price_data = _fetch_yahoo_price_data(symbol)
+        history = price_data.history
         if history:
-            return history[-1][1], history[-2][1] if len(history) > 1 else None
+            currency = _normalize_currency(price_data.meta.get("currency")) or ""
+            return history[-1][1], history[-2][1] if len(history) > 1 else None, currency
     except Exception:
         pass
-    return None, None
+    return None, None, ""
 
 
 def _parse_money(raw: object) -> float | None:

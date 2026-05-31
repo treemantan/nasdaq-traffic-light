@@ -280,7 +280,7 @@ def _market_metric_from_payload(raw: dict):
 
 
 def _etf_asset_from_payload(raw: dict):
-    from market_report.etf_monitor import ETFAssetMonitor, ETFHolding
+    from market_report.etf_monitor import ETFAssetMonitor, ETFHolding, ETFSensitivity
 
     return _dataclass_from_dict(
         ETFAssetMonitor,
@@ -295,12 +295,17 @@ def _etf_asset_from_payload(raw: dict):
                 for item in (items or [])
                 if isinstance(item, dict)
             ),
+            "sensitivities": lambda items: tuple(
+                _dataclass_from_dict(ETFSensitivity, item)
+                for item in (items or [])
+                if isinstance(item, dict)
+            ),
         },
     )
 
 
 def _etf_backtest_from_payload(raw: object):
-    from market_report.etf_monitor import ETFBacktestStats, ETFThresholdCalibration
+    from market_report.etf_monitor import ETFBacktestStats, ETFSimilarSample, ETFThresholdCalibration
 
     if not isinstance(raw, dict):
         return None
@@ -310,6 +315,11 @@ def _etf_backtest_from_payload(raw: object):
         converters={
             "threshold_calibrations": lambda items: tuple(
                 _dataclass_from_dict(ETFThresholdCalibration, item)
+                for item in (items or [])
+                if isinstance(item, dict)
+            ),
+            "similar_samples": lambda items: tuple(
+                _dataclass_from_dict(ETFSimilarSample, item)
                 for item in (items or [])
                 if isinstance(item, dict)
             ),

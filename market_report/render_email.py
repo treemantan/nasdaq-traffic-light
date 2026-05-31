@@ -244,7 +244,7 @@ def _render_portfolio_email(monitor: ETFMonitor) -> str:
         <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;font-size:12px;color:#d1d5db;margin-bottom:6px;">
           <tr>
             <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">资产</th>
-            <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">估算市值</th>
+            <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">Native / GBP参考市值</th>
             <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">未实现盈亏</th>
             <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">日变化</th>
             <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">占比</th>
@@ -261,7 +261,7 @@ def _render_portfolio_email_row(position: PortfolioPosition) -> str:
     scope = "ETF观察池" if position.monitor_status == "covered" else "待穿透"
     return f"""<tr>
       <td style="padding:7px;border-bottom:1px solid #263244;"><strong>{escape(position.symbol)}</strong><br><span style="color:#9ca3af;">{scope}</span></td>
-      <td style="padding:7px;border-bottom:1px solid #263244;">{escape(_fmt_gbp(position.market_value_gbp))}</td>
+      <td style="padding:7px;border-bottom:1px solid #263244;">{escape(_fmt_native(position.market_value_native, position.native_currency))}<br><span style="color:#9ca3af;">{escape(_fmt_gbp(position.market_value_gbp))} · {escape(_fmt_fx(position))}</span></td>
       <td style="padding:7px;border-bottom:1px solid #263244;color:{pnl_color};">{escape(_fmt_signed_gbp(position.unrealized_pnl_gbp))}<br>{escape(_fmt_pct(position.unrealized_pnl_pct))}</td>
       <td style="padding:7px;border-bottom:1px solid #263244;color:{day_color};">{escape(_fmt_pct(position.day_change_pct))}</td>
       <td style="padding:7px;border-bottom:1px solid #263244;">{position.weight_pct:.2f}%</td>
@@ -309,6 +309,7 @@ def _group_etf_assets(assets: list[ETFAssetMonitor]) -> list[tuple[str, str, lis
     definitions = [
         ("宽基与核心资产", "组合底仓与主要指数风险暴露", {"Global Equity", "S&P 500", "UK Large Cap", "Nasdaq 100"}),
         ("AI、科技与软件链", "AI基础设施、信息技术、云软件、网络安全与自动化", {"US Technology", "AI Infrastructure", "Artificial Intelligence", "Cloud Software", "Cybersecurity", "Robotics & Automation"}),
+        ("光通信与Photonics", "光模块、激光器、光学元件与AI数据中心互连产业链", {"Optical Technology & Photonics"}),
         ("半导体", "全球半导体周期与AI算力核心上游", {"Semiconductor"}),
         ("量子计算", "高beta前沿主题，适合单独观察热度与波动", {"Quantum Computing"}),
         ("韩国权益与存储链", "Samsung Electronics、SK hynix及韩国科技/工业周期暴露", {"South Korea Equity"}),
@@ -552,6 +553,26 @@ def _fmt_pct(value: float | None) -> str:
         return "N/A"
     sign = "+" if value >= 0 else ""
     return f"{sign}{value:.2f}%"
+
+
+def _fmt_native(value: float | None, currency: str) -> str:
+    if value is None:
+        return "N/A"
+    if currency == "GBP":
+        return f"£{value:,.2f}"
+    if currency == "USD":
+        return f"${value:,.2f}"
+    if currency == "EUR":
+        return f"€{value:,.2f}"
+    return f"{value:,.2f} {currency}".strip()
+
+
+def _fmt_fx(position) -> str:
+    if not position.fx_pair:
+        return "GBP"
+    if position.fx_rate is None:
+        return f"{position.fx_pair} N/A"
+    return f"{position.fx_pair} {position.fx_rate:.4f}"
 
 
 def _fmt_gbp(value: float | None) -> str:

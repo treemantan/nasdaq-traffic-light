@@ -132,6 +132,7 @@ Yahoo Finance、Investing、CNN、NAAIM 与 FRED 用于不同类别的数据源�
 - `CNX1.L`：iShares Nasdaq 100 UCITS ETF
 - `IITU.L`：iShares S&P 500 Information Technology Sector UCITS ETF
 - `AINF.L`：iShares AI Infrastructure UCITS ETF
+- `LAZR.L`：L&G Optical Technology & Photonics ESG Exclusions UCITS ETF
 - `WTAI.L`：WisdomTree Artificial Intelligence UCITS ETF
 - `AIAI.L`：L&G Artificial Intelligence UCITS ETF
 - `SEMI.L`：iShares Global Semiconductors UCITS ETF
@@ -194,7 +195,7 @@ python scripts/import_revolut_statement.py "stocks-isa.csv" "general-investment.
 
 导入器会合并多个 statement，按 `BUY`、`SELL` 和 `STOCK SPLIT` 重建当前数量与平均成本，并生成本地 `portfolio.csv`。默认使用 Yahoo 最近价格估算当前市值、未实现盈亏、日变化和组合权重；美元资产会通过 `GBPUSD=X` 转换为英镑。若最新价格暂不可用，导入器会显式标记 `statement-average-cost fallback`，不会把降级估算伪装成实时价格。观察池外个股或 ETF 会列为尚未穿透覆盖。
 
-网页报告会生成接近券商持仓页的“实际组合持仓”面板，展示数量、平均成本、当前价格、估算市值、未实现盈亏、日变化与组合占比。该面板只覆盖导入 statement 所属的账户和时间范围，不等同于 Revolut 实时账户净值；如 Revolut 中存在多个投资账户，需要分别导出并合并适配。原始 statement 和生成的 `portfolio.csv` 均已加入 `.gitignore`，不会上传到 GitHub。
+网页报告会生成接近券商持仓页的“实际组合持仓”面板，展示数量、GBP平均成本、native currency 当前价格、native currency 市值、GBP参考市值、FX参考汇率、未实现盈亏、日变化与组合占比。Revolut statement 中的历史成交已经折算为 GBP，因此历史成本使用 statement 的 GBP 口径；当前市值使用 Yahoo 最近 native quote，并按报告抓取时点的 `GBP/USD` 或 `GBP/EUR` 换算为 GBP reference value。报告会明确显示 FX rate 和抓取时间。该面板只覆盖导入 statement 所属的账户和时间范围，不等同于 Revolut 实时账户净值；如 Revolut 中存在多个投资账户，需要分别导出并合并适配。原始 statement 和生成的 `portfolio.csv` 均已加入 `.gitignore`，不会上传到 GitHub。
 
 组合面板还会将直接持有的 `NVDA`、`AVGO`、`META` 与 ETF 可获得的前十大持仓合并，显示 AI 核心公司与半导体核心暴露的“可识别下限”。直接个股仓位按完整权重计入；ETF 间接暴露仅根据公开前十大持仓近似计算，因此不等同于完整基金穿透。`ISF.L` 已纳入 UK 大盘股观察，`IGTM.L` 已纳入固定收益与久期观察；IGTM 不套用股票 PE 或 AI 拥挤度模型。
 
@@ -215,6 +216,12 @@ logs/portfolio-report-YYYY-MM-DD.log
 由于 Revolut CSV 不包含稳定的账户标识，项目无法可靠判断两个内容不同的 CSV 是否属于同一个账户的不同时点导出。项目根目录中应只保留每个投资账户的一份最新导出文件；旧版本请移至其他目录，避免重复计算。该双击入口默认不发送邮件。
 
 ETF 模块还会用 Yahoo 5 年日线做轻量历史检验。拥挤度口径统一为：`<35` 偏低，`65-69` 升温观察，`70-79` 偏高，`>=80` 高拥挤。回测采用周度抽样，默认把 `新增仓位环境 >= 60 且拥挤度 < 70` 视为“质量不差且尚未偏拥挤”的环境样本，并观察之后约 1M/3M/6M 的 forward return、3M 胜率和3M最大回撤，再与全样本对比。除此之外，系统会用当前的分数、拥挤度、RSI、1M/3M动量、距50/200日线、`σ200` 和日波动率做相似度匹配，并加入 SPY、QQQ、VIX、DXY、10Y yield、黄金和原油的同日历史环境代理变量，寻找历史上最接近当前市场环境的样本，并展示这些相似样本之后的 1M/3M/6M 表现与3M回撤。二级校准层会同时检验 `>=60`、`>=70`、`>=75` 三个阈值，并统一加入 `拥挤度 < 70` 的约束：`>=60` 表示环境尚可，`>=70` 表示环境较好，`>=75` 表示趋势结构较强但仍未进入偏拥挤区；系统会根据 forward return、3M胜率、3M回撤、样本数和相对全样本优势，动态给出“历史最优阈值”或“未发现稳定阈值优势”。该检验只使用当时已经可见的价格趋势、动量、波动和市场代理价格信息，不使用未来数据，也不把当前宏观指标回填到历史；因此它是环境评分的历史解释力检查，不是交易策略回测或买卖信号。
+
+报告新增“相关性与Beta面板”，使用滚动60日数据展示每只ETF对 Nasdaq 100、DXY、美国10年期收益率和黄金的敏感度。Nasdaq、DXY和黄金的Beta按因子每变动1%解释；10年期收益率Beta按每上行10bp解释。该模块用于判断韩国ETF、半导体ETF或光通信ETF是否正在转化为AI capex、美元或久期代理变量。
+
+相似环境模块采用 walk-forward 口径：历史样本只使用当时已经可见的信息计算距离，再观察其后的1M/3M/6M路径。网页会展示样本日期、距离分数、forward return、3M回撤，以及3M路径的P25/中位数/P75分布，降低少数极端行情对平均回报的误导。
+
+`LAZR.L` 用于观察光学技术、Photonics、光模块、激光器与AI数据中心互连产业链。该ETF的规模较小，系统会将其标记为“观察型标的”，并要求在执行前额外核对实时买卖价差和盘口深度；它不应与高流动性的宽基ETF使用相同的执行假设。
 
 估值字段采用 best-effort 方式抓取，不会因为估值接口失败而阻断价格和趋势监控：
 

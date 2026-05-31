@@ -111,12 +111,15 @@ def render_html_report(report: ScoredReport, title: str) -> str:
     .portfolio-exposure {{ border: 1px solid var(--line); border-radius: 6px; padding: 9px; background: rgba(255,255,255,.025); }}
     .portfolio-exposure strong {{ display: block; font-size: 18px; }}
     .portfolio-table-scroll {{ max-width: 100%; overflow-x: auto; overflow-y: hidden; }}
-    .portfolio-table {{ min-width: 1080px; }}
+    .portfolio-table {{ min-width: 1340px; }}
     .portfolio-table td, .portfolio-table th {{ white-space: nowrap; }}
     .portfolio-symbol {{ font-weight: 760; }}
     .portfolio-scope {{ color: var(--muted); font-size: 12px; }}
     .pnl-up {{ color: #4ade80; }}
     .pnl-down {{ color: #f87171; }}
+    .sensitivity-panel {{ margin: 12px 0; border: 1px solid var(--line); border-radius: 8px; background: rgba(255,255,255,.02); overflow: hidden; }}
+    .sensitivity-panel summary {{ cursor: pointer; padding: 12px 14px; background: rgba(255,255,255,.025); font-weight: 760; }}
+    .sensitivity-table {{ min-width: 1120px; }}
     .etf-groups {{ display: grid; gap: 10px; }}
     .etf-group {{ border: 1px solid var(--line); border-radius: 8px; background: rgba(255,255,255,.02); overflow: hidden; }}
     .etf-group summary {{ cursor: pointer; list-style: none; padding: 12px 14px; background: rgba(255,255,255,.025); }}
@@ -339,11 +342,13 @@ def _render_etf_monitor(monitor: ETFMonitor | None) -> str:
         warnings = "<div class=\"small-note\">数据提示：" + escape(" ".join(monitor.warnings[:4])) + "</div>"
     changes = _render_etf_notes("今日ETF变动摘要", monitor.change_summary)
     portfolio = _render_portfolio_panel(monitor)
+    sensitivities = _render_sensitivity_panel(monitor)
     return f"""<section class="panel">
       <h2>UK ETF估值、趋势与拥挤度监控器</h2>
       <div class="etf-summary">{escape(monitor.summary)}</div>
       {changes}
       {portfolio}
+      {sensitivities}
       <div class="etf-groups">{groups}</div>
       <div class="small-note">PE衡量市场为每单位盈利支付的价格，Forward PE基于未来盈利预期；PB衡量市值相对账面净资产。PE位置优先显示本地历史分位；样本不足时显示“当前PE/近一年缓存最高PE”的近似比例。σ200使用63/126/252日窗口去极值后的稳健趋势波动率。持仓重叠度基于可获得的前十大持仓近似计算，并非完整穿透。估值源若标记为proxy，表示使用高度相关的同类ETF作近似参考。黄金ETC不适用PE/PB。</div>
       {warnings}
@@ -383,8 +388,8 @@ def _render_portfolio_panel(monitor: ETFMonitor) -> str:
         <table class="portfolio-table">
           <thead>
             <tr>
-              <th>资产</th><th>数量</th><th>平均成本</th><th>当前价格</th><th>估算市值</th>
-              <th>未实现盈亏</th><th>未实现盈亏%</th><th>日变化</th><th>组合占比</th>
+              <th>资产</th><th>数量</th><th>平均成本GBP</th><th>当前价格Native</th><th>Native市值</th><th>GBP参考市值</th>
+              <th>FX参考</th><th>未实现盈亏GBP</th><th>未实现盈亏%</th><th>日变化</th><th>组合占比</th>
             </tr>
           </thead>
           <tbody>{rows}</tbody>
@@ -403,12 +408,40 @@ def _render_portfolio_row(position: PortfolioPosition) -> str:
       <td><span class="portfolio-symbol">{escape(position.symbol)}</span><br><span class="portfolio-scope">{scope}</span></td>
       <td>{escape(_fmt_quantity(position.quantity))}</td>
       <td>{escape(_fmt_gbp(position.average_cost_gbp))}</td>
-      <td>{escape(_fmt_gbp(position.current_price_gbp))}</td>
+      <td>{escape(_fmt_native(position.current_price_native, position.native_currency))}</td>
+      <td>{escape(_fmt_native(position.market_value_native, position.native_currency))}</td>
       <td>{escape(_fmt_gbp(position.market_value_gbp))}</td>
+      <td>{escape(_fmt_fx(position))}</td>
       <td class="{pnl_class}">{escape(_fmt_signed_gbp(position.unrealized_pnl_gbp))}</td>
       <td class="{pnl_class}">{escape(_fmt_pct(position.unrealized_pnl_pct))}</td>
       <td class="{day_class}">{escape(_fmt_pct(position.day_change_pct))}</td>
       <td>{position.weight_pct:.2f}%</td>
+    </tr>"""
+
+
+def _render_sensitivity_panel(monitor: ETFMonitor) -> str:
+    rows = "\n".join(_render_sensitivity_row(asset) for asset in monitor.assets if asset.status != "missing")
+    return f"""<details class="sensitivity-panel">
+      <summary>相关性与Beta面板（滚动60日）</summary>
+      <div class="small-note" style="padding:0 14px 8px;">用于观察ETF是否正在转化为其他宏观代理变量。相关性范围为 -1 至 +1；Beta表示因子变化一个单位时ETF日收益的历史敏感度。10年期收益率Beta按每上行10bp计。</div>
+      <div class="portfolio-table-scroll">
+        <table class="sensitivity-table">
+          <thead><tr><th>ETF</th><th>主题</th><th>Nasdaq 100</th><th>DXY</th><th>10Y yield</th><th>Gold</th></tr></thead>
+          <tbody>{rows}</tbody>
+        </table>
+      </div>
+    </details>"""
+
+
+def _render_sensitivity_row(asset: ETFAssetMonitor) -> str:
+    sensitivity_map = {item.factor: item for item in asset.sensitivities}
+    return f"""<tr>
+      <td><strong>{escape(asset.symbol)}</strong></td>
+      <td>{escape(asset.theme)}</td>
+      <td>{escape(_fmt_sensitivity(sensitivity_map.get("qqq")))}</td>
+      <td>{escape(_fmt_sensitivity(sensitivity_map.get("dxy")))}</td>
+      <td>{escape(_fmt_sensitivity(sensitivity_map.get("tnx")))}</td>
+      <td>{escape(_fmt_sensitivity(sensitivity_map.get("gold")))}</td>
     </tr>"""
 
 
@@ -464,6 +497,7 @@ def _group_etf_assets(assets: list[ETFAssetMonitor]) -> list[tuple[str, str, lis
     definitions = [
         ("宽基与核心资产", "组合底仓与主要指数风险暴露", {"Global Equity", "S&P 500", "UK Large Cap", "Nasdaq 100"}),
         ("AI、科技与软件链", "AI基础设施、信息技术、云软件、网络安全与自动化", {"US Technology", "AI Infrastructure", "Artificial Intelligence", "Cloud Software", "Cybersecurity", "Robotics & Automation"}),
+        ("光通信与Photonics", "光模块、激光器、光学元件与AI数据中心互连产业链", {"Optical Technology & Photonics"}),
         ("半导体", "全球半导体周期与AI算力核心上游", {"Semiconductor"}),
         ("量子计算", "高beta前沿主题，适合单独观察热度与波动", {"Quantum Computing"}),
         ("韩国权益与存储链", "Samsung Electronics、SK hynix及韩国科技/工业周期暴露", {"South Korea Equity"}),
@@ -668,11 +702,27 @@ def _render_backtest_details(asset: ETFAssetMonitor) -> str:
         if rows
         else ""
     )
+    sample_rows = "".join(
+        f"<tr><td>{escape(item.as_of)}</td><td>{item.distance:.2f}</td>"
+        f"<td>{escape(_fmt_pct(item.forward_1m))}</td><td>{escape(_fmt_pct(item.forward_3m))}</td>"
+        f"<td>{escape(_fmt_pct(item.forward_6m))}</td><td>{escape(_fmt_pct(item.drawdown_3m))}</td></tr>"
+        for item in backtest.similar_samples
+    )
+    samples = (
+        f'<details class="threshold-details"><summary>查看walk-forward相似样本日期与路径</summary>'
+        f'<div>3M路径分布 P25 / 中位数 / P75：{escape(_fmt_pct(backtest.similar_forward_3m_p25))} / '
+        f'{escape(_fmt_pct(backtest.similar_forward_3m_p50))} / {escape(_fmt_pct(backtest.similar_forward_3m_p75))}</div>'
+        f'<div class="portfolio-table-scroll"><table><thead><tr><th>样本日期</th><th>距离</th><th>1M</th><th>3M</th><th>6M</th><th>3M回撤</th></tr></thead>'
+        f'<tbody>{sample_rows}</tbody></table></div></details>'
+        if sample_rows
+        else ""
+    )
     return (
         f"<div>当前相似市场环境：{backtest.similar_count}个历史样本，"
         f"之后1/3/6M {escape(similar_path)}，3M胜率 {escape(_fmt_rate(backtest.similar_hit_rate_3m))}，"
         f"3M回撤 {escape(_fmt_pct(backtest.similar_max_drawdown_3m))}。</div>"
         f"<div>{escape(threshold_summary)}</div>"
+        f"{samples}"
         f"{calibration}"
     )
 
@@ -895,6 +945,24 @@ def _fmt_price(value: float | None, currency: str) -> str:
     if currency == "EUR":
         return f"€{value:.2f}"
     return f"{value:.2f}"
+
+
+def _fmt_native(value: float | None, currency: str) -> str:
+    return _fmt_price(value, currency) if currency else ("N/A" if value is None else f"{value:,.2f}")
+
+
+def _fmt_fx(position) -> str:
+    if not position.fx_pair:
+        return "GBP"
+    if position.fx_rate is None:
+        return f"{position.fx_pair} N/A"
+    return f"{position.fx_pair} {position.fx_rate:.4f}"
+
+
+def _fmt_sensitivity(item) -> str:
+    if item is None or item.correlation is None or item.beta is None:
+        return "N/A"
+    return f"ρ {item.correlation:+.2f} / β {item.beta:+.2f}（{item.beta_unit}）"
 
 
 def _fmt_plain(value: float | None) -> str:

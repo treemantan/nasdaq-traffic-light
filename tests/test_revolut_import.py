@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
+from unittest.mock import patch
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "import_revolut_statement.py"
 SPEC = spec_from_file_location("import_revolut_statement", SCRIPT)
@@ -32,6 +33,23 @@ class RevolutImportTests(unittest.TestCase):
 
         self.assertEqual(positions["VUAG"]["quantity"], 3)
         self.assertEqual(positions["VUAG"]["cost_gbp"], 310)
+
+    def test_usd_position_keeps_native_value_and_adds_gbp_reference(self) -> None:
+        quotes = {
+            "GBPUSD=X": (1.25, 1.24, "USD"),
+            "GBPEUR=X": (1.18, 1.17, "EUR"),
+            "NFLX": (100.0, 90.0, "USD"),
+        }
+        with patch.object(MODULE, "_latest_quote", side_effect=lambda symbol: quotes[symbol]):
+            rows = MODULE._build_portfolio_rows({"NFLX": {"quantity": 2.0, "cost_gbp": 100.0}})
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["native_currency"], "USD")
+        self.assertEqual(rows[0]["current_price_native"], "100.0000")
+        self.assertEqual(rows[0]["market_value_native"], "200.0000")
+        self.assertEqual(rows[0]["estimated_market_value_gbp"], "160.00")
+        self.assertEqual(rows[0]["fx_pair"], "GBP/USD")
+        self.assertEqual(rows[0]["fx_rate"], "1.2500")
 
 
 if __name__ == "__main__":

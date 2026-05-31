@@ -62,6 +62,13 @@ class PortfolioPosition:
     unrealized_pnl_pct: float | None
     day_change_pct: float | None
     monitor_status: str
+    native_currency: str = ""
+    current_price_native: float | None = None
+    market_value_native: float | None = None
+    fx_pair: str = ""
+    fx_rate: float | None = None
+    fx_as_of: str = ""
+    price_source: str = ""
 
 
 @dataclass(frozen=True)
@@ -71,6 +78,25 @@ class PortfolioExposure:
     weight_pct: float
     direct_weight_pct: float
     etf_weight_pct: float
+
+
+@dataclass(frozen=True)
+class ETFSensitivity:
+    factor: str
+    label: str
+    correlation: float | None
+    beta: float | None
+    beta_unit: str
+
+
+@dataclass(frozen=True)
+class ETFSimilarSample:
+    as_of: str
+    distance: float
+    forward_1m: float
+    forward_3m: float
+    forward_6m: float
+    drawdown_3m: float
 
 
 @dataclass(frozen=True)
@@ -130,6 +156,10 @@ class ETFBacktestStats:
     similar_forward_6m: float | None = None
     similar_hit_rate_3m: float | None = None
     similar_max_drawdown_3m: float | None = None
+    similar_forward_3m_p25: float | None = None
+    similar_forward_3m_p50: float | None = None
+    similar_forward_3m_p75: float | None = None
+    similar_samples: tuple[ETFSimilarSample, ...] = ()
     threshold_calibrations: tuple[ETFThresholdCalibration, ...] = ()
     best_threshold: int | None = None
     best_threshold_label: str = "未发现稳定阈值优势"
@@ -181,6 +211,7 @@ class ETFAssetMonitor:
     top10_weight: float | None = None
     metadata_status: str = "待确认"
     metadata_note: str = "尚未完成 ticker 元数据审计。"
+    sensitivities: tuple[ETFSensitivity, ...] = ()
     trend_label: str = "趋势待确认"
     momentum_label: str = "动量待确认"
     valuation_label: str = "估值数据不足"
@@ -219,6 +250,7 @@ DEFAULT_ETF_SPECS = [
     ETFSpec("cnx1", "iShares Nasdaq 100 UCITS ETF", "CNX1.L", "Nasdaq 100", "iShares", ter=0.33),
     ETFSpec("iitu", "iShares S&P 500 Information Technology Sector ETF", "IITU.L", "US Technology", "iShares", ter=0.15),
     ETFSpec("ainf", "iShares AI Infrastructure UCITS ETF", "AINF.L", "AI Infrastructure", "iShares", ter=0.35),
+    ETFSpec("lazr", "L&G Optical Technology & Photonics ESG Exclusions UCITS ETF", "LAZR.L", "Optical Technology & Photonics", "L&G", currency="USD", ter=0.49),
     ETFSpec("wtai", "WisdomTree Artificial Intelligence ETF", "WTAI.L", "Artificial Intelligence", "WisdomTree", ter=0.40),
     ETFSpec("aiai", "L&G Artificial Intelligence UCITS ETF", "AIAI.L", "Artificial Intelligence", "L&G", ter=0.49),
     ETFSpec("semi", "iShares Global Semiconductors ETF", "SEMI.L", "Semiconductor", "iShares", ter=0.35),
@@ -426,9 +458,11 @@ def _fetch_etf_asset(
         entry_note=entry_note,
         risk_management_note=risk_note,
     )
+    market_histories = _fetch_market_env_histories()
     enriched = _replace_asset(
         enriched,
-        backtest=_backtest_entry_environment(spec, history, macro_metrics, _fetch_market_env_histories()),
+        sensitivities=_rolling_sensitivities(history, market_histories),
+        backtest=_backtest_entry_environment(spec, history, macro_metrics, market_histories),
     )
     _write_asset_cache(cache, enriched)
     return enriched
@@ -535,6 +569,75 @@ def _fetch_market_env_histories() -> dict[str, list[tuple[date, float]]]:
     return histories
 
 
+def _rolling_sensitivities(
+    asset_history: list[tuple[date, float]],
+    market_histories: dict[str, list[tuple[date, float]]],
+    window: int = 60,
+) -> tuple[ETFSensitivity, ...]:
+    definitions = (
+        ("qqq", "Nasdaq 100", "每1%变动"),
+        ("dxy", "美元指数DXY", "每1%变动"),
+        ("tnx", "美国10年期收益率", "每上行10bp"),
+        ("gold", "黄金", "每1%变动"),
+    )
+    sensitivities = []
+    for key, label, beta_unit in definitions:
+        correlation, beta = _rolling_sensitivity(asset_history, market_histories.get(key) or [], key, window)
+        sensitivities.append(ETFSensitivity(key, label, correlation, beta, beta_unit))
+    return tuple(sensitivities)
+
+
+def _rolling_sensitivity(
+    asset_history: list[tuple[date, float]],
+    factor_history: list[tuple[date, float]],
+    factor_key: str,
+    window: int,
+) -> tuple[float | None, float | None]:
+    asset = _daily_moves_by_date(asset_history, "return")
+    factor_mode = "yield_10bp" if factor_key == "tnx" else "return"
+    factor = _daily_moves_by_date(factor_history, factor_mode)
+    shared_dates = sorted(set(asset) & set(factor))[-window:]
+    if len(shared_dates) < 30:
+        return None, None
+    asset_moves = [asset[day] for day in shared_dates]
+    factor_moves = [factor[day] for day in shared_dates]
+    factor_variance = _variance(factor_moves)
+    if factor_variance in (None, 0):
+        return None, None
+    covariance = _covariance(asset_moves, factor_moves)
+    asset_std = math.sqrt(_variance(asset_moves) or 0)
+    factor_std = math.sqrt(factor_variance)
+    correlation = covariance / (asset_std * factor_std) if asset_std and factor_std else None
+    return correlation, covariance / factor_variance
+
+
+def _daily_moves_by_date(history: list[tuple[date, float]], mode: str) -> dict[date, float]:
+    moves: dict[date, float] = {}
+    for (previous_day, previous), (current_day, current) in zip(history, history[1:]):
+        if previous in (None, 0):
+            continue
+        if mode == "yield_10bp":
+            normalized_previous = previous / 10 if previous > 20 else previous
+            normalized_current = current / 10 if current > 20 else current
+            moves[current_day] = (normalized_current - normalized_previous) / 0.10
+        else:
+            moves[current_day] = (current / previous - 1) * 100
+    return moves
+
+
+def _covariance(left: list[float], right: list[float]) -> float:
+    left_avg = sum(left) / len(left)
+    right_avg = sum(right) / len(right)
+    return sum((a - left_avg) * (b - right_avg) for a, b in zip(left, right)) / len(left)
+
+
+def _variance(values: list[float]) -> float | None:
+    if not values:
+        return None
+    average = sum(values) / len(values)
+    return sum((value - average) ** 2 for value in values) / len(values)
+
+
 def _fetch_yahoo_valuation(symbol: str) -> dict[str, float | None]:
     encoded = urllib.parse.quote(symbol, safe="")
     modules = "summaryDetail,defaultKeyStatistics"
@@ -613,6 +716,10 @@ def _fetch_liquidity_profile(
     if aum_source:
         source_parts.append(aum_source)
     label, note = _liquidity_assessment(aum, avg_volume_20d, avg_traded_value_20d, None)
+    if spec.key == "lazr":
+        label = f"观察型标的 · {label}"
+        note += "；光通信主题基金规模较小，执行前需额外核对实时价差与盘口深度"
+        warnings.append("LAZR.L 为小规模光通信主题ETF，仅作为产业链观察代理；执行前需核对实时价差与盘口深度。")
     return {
         "aum": aum,
         "avg_volume_20d": avg_volume_20d,
@@ -888,6 +995,7 @@ def _write_asset_cache(cache: dict[str, Any], asset: ETFAssetMonitor) -> None:
         "top10_weight": asset.top10_weight,
         "metadata_status": asset.metadata_status,
         "metadata_note": asset.metadata_note,
+        "sensitivities": [item.__dict__ for item in asset.sensitivities],
         "trend_label": asset.trend_label,
         "momentum_label": asset.momentum_label,
         "sigma_label": asset.sigma_label,
@@ -964,6 +1072,17 @@ def _asset_from_cache(spec: ETFSpec, entry: dict[str, Any], fetched_at: datetime
         top10_weight=_safe_float(entry.get("top10_weight")),
         metadata_status=entry.get("metadata_status") or "待确认",
         metadata_note=entry.get("metadata_note") or "尚未完成 ticker 元数据审计。",
+        sensitivities=tuple(
+            ETFSensitivity(
+                str(item.get("factor") or ""),
+                str(item.get("label") or ""),
+                _safe_float(item.get("correlation")),
+                _safe_float(item.get("beta")),
+                str(item.get("beta_unit") or ""),
+            )
+            for item in (entry.get("sensitivities") or [])
+            if isinstance(item, dict)
+        ),
         sigma_label=entry.get("sigma_label") or "日波动待确认",
         trend_stretch_label=entry.get("trend_stretch_label") or "趋势拉伸待确认",
         trend_label=entry.get("trend_label") or "趋势待确认",
@@ -1031,6 +1150,7 @@ def _backtest_entry_environment(
         records.append(
             {
                 "score": score,
+                "as_of": history[index][0].isoformat(),
                 "crowding_score": crowding_score,
                 "forward_1m": future_1m,
                 "forward_3m": future_3m,
@@ -1075,6 +1195,10 @@ def _backtest_entry_environment(
             similar_forward_6m=similar_values["forward_6m"],
             similar_hit_rate_3m=similar_values["hit_rate_3m"],
             similar_max_drawdown_3m=similar_values["max_drawdown_3m"],
+            similar_forward_3m_p25=similar_values["forward_3m_p25"],
+            similar_forward_3m_p50=similar_values["forward_3m_p50"],
+            similar_forward_3m_p75=similar_values["forward_3m_p75"],
+            similar_samples=similar_values["samples"],
             threshold_calibrations=threshold_calibrations,
             best_threshold=best_threshold,
             best_threshold_label=best_threshold_label,
@@ -1122,6 +1246,10 @@ def _backtest_entry_environment(
         similar_forward_6m=similar_values["forward_6m"],
         similar_hit_rate_3m=similar_values["hit_rate_3m"],
         similar_max_drawdown_3m=similar_values["max_drawdown_3m"],
+        similar_forward_3m_p25=similar_values["forward_3m_p25"],
+        similar_forward_3m_p50=similar_values["forward_3m_p50"],
+        similar_forward_3m_p75=similar_values["forward_3m_p75"],
+        similar_samples=similar_values["samples"],
         threshold_calibrations=threshold_calibrations,
         best_threshold=best_threshold,
         best_threshold_label=best_threshold_label,
@@ -1351,7 +1479,7 @@ def _feature_distance(current: dict[str, float], past: Any) -> float | None:
     return math.sqrt(total / weight_sum)
 
 
-def _similar_stats(samples: list[dict[str, Any]]) -> dict[str, float | int | None]:
+def _similar_stats(samples: list[dict[str, Any]]) -> dict[str, Any]:
     if not samples:
         return {
             "count": 0,
@@ -1362,17 +1490,48 @@ def _similar_stats(samples: list[dict[str, Any]]) -> dict[str, float | int | Non
             "forward_6m": None,
             "hit_rate_3m": None,
             "max_drawdown_3m": None,
+            "forward_3m_p25": None,
+            "forward_3m_p50": None,
+            "forward_3m_p75": None,
+            "samples": (),
         }
+    forward_3m = [float(row["forward_3m"]) for row in samples]
     return {
         "count": len(samples),
         "avg_score": _avg([float(row["score"]) for row in samples]),
         "avg_distance": _avg([float(row["distance"]) for row in samples]),
         "forward_1m": _avg([float(row["forward_1m"]) for row in samples]),
-        "forward_3m": _avg([float(row["forward_3m"]) for row in samples]),
+        "forward_3m": _avg(forward_3m),
         "forward_6m": _avg([float(row["forward_6m"]) for row in samples]),
         "hit_rate_3m": _hit_rate([float(row["forward_3m"]) for row in samples]),
         "max_drawdown_3m": _avg([float(row["drawdown_3m"]) for row in samples]),
+        "forward_3m_p25": _percentile_value(forward_3m, 0.25),
+        "forward_3m_p50": _percentile_value(forward_3m, 0.50),
+        "forward_3m_p75": _percentile_value(forward_3m, 0.75),
+        "samples": tuple(
+            ETFSimilarSample(
+                as_of=str(row.get("as_of") or ""),
+                distance=float(row["distance"]),
+                forward_1m=float(row["forward_1m"]),
+                forward_3m=float(row["forward_3m"]),
+                forward_6m=float(row["forward_6m"]),
+                drawdown_3m=float(row["drawdown_3m"]),
+            )
+            for row in samples
+        ),
     }
+
+
+def _percentile_value(values: list[float], quantile: float) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    position = (len(ordered) - 1) * quantile
+    lower = math.floor(position)
+    upper = math.ceil(position)
+    if lower == upper:
+        return ordered[lower]
+    return ordered[lower] + (ordered[upper] - ordered[lower]) * (position - lower)
 
 
 def _threshold_calibrations(records: list[dict[str, Any]], crowding_ceiling: int) -> tuple[ETFThresholdCalibration, ...]:
@@ -1543,6 +1702,10 @@ def _backtest_to_cache(backtest: ETFBacktestStats | None) -> dict[str, Any] | No
         "similar_forward_6m": backtest.similar_forward_6m,
         "similar_hit_rate_3m": backtest.similar_hit_rate_3m,
         "similar_max_drawdown_3m": backtest.similar_max_drawdown_3m,
+        "similar_forward_3m_p25": backtest.similar_forward_3m_p25,
+        "similar_forward_3m_p50": backtest.similar_forward_3m_p50,
+        "similar_forward_3m_p75": backtest.similar_forward_3m_p75,
+        "similar_samples": [item.__dict__ for item in backtest.similar_samples],
         "threshold_calibrations": [_threshold_calibration_to_cache(item) for item in backtest.threshold_calibrations],
         "best_threshold": backtest.best_threshold,
         "best_threshold_label": backtest.best_threshold_label,
@@ -1579,6 +1742,21 @@ def _backtest_from_cache(entry: Any) -> ETFBacktestStats | None:
             similar_forward_6m=_safe_float(entry.get("similar_forward_6m")),
             similar_hit_rate_3m=_safe_float(entry.get("similar_hit_rate_3m")),
             similar_max_drawdown_3m=_safe_float(entry.get("similar_max_drawdown_3m")),
+            similar_forward_3m_p25=_safe_float(entry.get("similar_forward_3m_p25")),
+            similar_forward_3m_p50=_safe_float(entry.get("similar_forward_3m_p50")),
+            similar_forward_3m_p75=_safe_float(entry.get("similar_forward_3m_p75")),
+            similar_samples=tuple(
+                ETFSimilarSample(
+                    str(item.get("as_of") or ""),
+                    float(item.get("distance") or 0),
+                    float(item.get("forward_1m") or 0),
+                    float(item.get("forward_3m") or 0),
+                    float(item.get("forward_6m") or 0),
+                    float(item.get("drawdown_3m") or 0),
+                )
+                for item in (entry.get("similar_samples") or [])
+                if isinstance(item, dict)
+            ),
             threshold_calibrations=tuple(
                 item
                 for item in (_threshold_calibration_from_cache(raw) for raw in entry.get("threshold_calibrations") or [])
@@ -1654,7 +1832,7 @@ def _build_summary(assets: list[ETFAssetMonitor]) -> str:
     weak = [asset for asset in live_assets if asset.distance_sma200 is not None and asset.distance_sma200 < 0]
     strong = [asset for asset in live_assets if asset.distance_sma200 is not None and asset.distance_sma200 > 5]
     parts = [
-        f"UK ETF资产池覆盖{len(live_assets)}只主要可交易产品，用于观察趋势、估值重估与短线拥挤度。",
+        f"UK ETF资产池覆盖{len(live_assets)}只可跟踪产品（含观察型标的），用于观察趋势、估值重估与短线拥挤度。",
     ]
     if strong:
         parts.append("中长期趋势较强的资产包括：" + "、".join(asset.symbol for asset in strong[:4]) + "。")
@@ -1706,6 +1884,13 @@ def _load_portfolio_summary(
             unrealized_pnl_pct=_safe_float(row.get("unrealized_pnl_pct")),
             day_change_pct=_safe_float(row.get("day_change_pct")),
             monitor_status=str(row.get("monitor_status") or "unknown"),
+            native_currency=str(row.get("native_currency") or ""),
+            current_price_native=_safe_float(row.get("current_price_native")),
+            market_value_native=_safe_float(row.get("market_value_native")),
+            fx_pair=str(row.get("fx_pair") or ""),
+            fx_rate=_safe_float(row.get("fx_rate")),
+            fx_as_of=str(row.get("fx_as_of") or ""),
+            price_source=str(row.get("price_source") or ""),
         )
         for row in rows
         if str(row.get("symbol") or "").strip()
@@ -1739,7 +1924,19 @@ def _load_portfolio_summary(
         "主要主题暴露：" + "、".join(f"{theme} {weight:.1f}%" for theme, weight in top_themes) + "。",
         f"组合加权TER约{weighted_ter / total:.2f}%。",
     ]
+    fx_notes = _portfolio_fx_notes(portfolio_positions)
+    if fx_notes:
+        summary.append("GBP参考估值使用抓取时点FX：" + "；".join(fx_notes) + "。")
     return summary, warnings, portfolio_positions, portfolio_total
+
+
+def _portfolio_fx_notes(positions: list[PortfolioPosition]) -> list[str]:
+    notes = {}
+    for item in positions:
+        if not item.fx_pair or item.fx_rate in (None, 0):
+            continue
+        notes[item.fx_pair] = f"{item.fx_pair} {item.fx_rate:.4f}（Yahoo，{item.fx_as_of or '时间待确认'}）"
+    return [notes[key] for key in sorted(notes)]
 
 
 def _portfolio_exposure_summary(
