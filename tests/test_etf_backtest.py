@@ -5,9 +5,14 @@ from datetime import date, timedelta
 
 from market_report.etf_monitor import (
     ETFSpec,
+    _backtest_from_cache,
     _backtest_entry_environment,
+    _backtest_to_cache,
+    _cluster_similar_samples,
     _entry_similarity_features,
+    _historical_driver_notes,
     _rolling_sensitivities,
+    _similar_stats,
 )
 
 
@@ -34,6 +39,7 @@ class ETFBacktestTests(unittest.TestCase):
         self.assertLessEqual(stats.good_count, stats.sample_size)
         self.assertIsNotNone(stats.all_forward_3m)
         self.assertGreater(stats.similar_count, 0)
+        self.assertGreater(stats.similar_phase_count, 0)
         self.assertIsNotNone(stats.similar_forward_3m)
         self.assertIsNotNone(stats.similar_forward_3m_p50)
         self.assertGreater(len(stats.similar_samples), 0)
@@ -88,3 +94,117 @@ class ETFBacktestTests(unittest.TestCase):
         self.assertIsNotNone(qqq.correlation)
         self.assertGreater(qqq.correlation or 0, 0.99)
         self.assertAlmostEqual(qqq.beta or 0, 1.5, places=1)
+
+    def test_similarity_stats_cluster_adjacent_samples_into_independent_phases(self) -> None:
+        samples = [
+            {
+                "as_of": "2024-12-03",
+                "distance": 0.67,
+                "score": 70,
+                "forward_1m": -0.17,
+                "forward_3m": -3.48,
+                "forward_6m": -3.30,
+                "drawdown_3m": -6.13,
+                "features": {"crowding_score": 76, "rsi14": 72, "mkt_vix_level": 14},
+            },
+            {
+                "as_of": "2025-07-17",
+                "distance": 0.50,
+                "score": 78,
+                "forward_1m": 1.70,
+                "forward_3m": 6.85,
+                "forward_6m": 12.32,
+                "drawdown_3m": -2.11,
+                "features": {},
+            },
+            {
+                "as_of": "2025-07-24",
+                "distance": 0.59,
+                "score": 80,
+                "forward_1m": 1.84,
+                "forward_3m": 6.40,
+                "forward_6m": 9.71,
+                "drawdown_3m": -2.11,
+                "features": {},
+            },
+        ]
+
+        stats = _similar_stats(samples)
+
+        self.assertEqual(stats["count"], 3)
+        self.assertEqual(stats["phase_count"], 2)
+        self.assertAlmostEqual(stats["forward_3m"], (-3.48 + 6.85) / 2)
+        rows = stats["samples"]
+        self.assertTrue(rows[0].tail_case)
+        self.assertTrue(rows[0].phase_representative)
+        self.assertTrue(rows[1].phase_representative)
+        self.assertFalse(rows[2].phase_representative)
+
+    def test_tail_case_driver_notes_include_known_repricing_window(self) -> None:
+        notes = _historical_driver_notes({"as_of": "2024-12-03"})
+
+        self.assertTrue(any("Fed鹰派降息" in note for note in notes))
+        self.assertTrue(any("DeepSeek冲击" in note for note in notes))
+        self.assertTrue(any("关税不确定性" in note for note in notes))
+        self.assertIn("不代表当前环境会重复同一路径", notes[-1])
+
+    def test_similarity_phase_does_not_chain_across_long_period(self) -> None:
+        samples = [
+            {"as_of": "2025-01-01", "distance": 0.8},
+            {"as_of": "2025-01-22", "distance": 0.7},
+            {"as_of": "2025-02-12", "distance": 0.6},
+            {"as_of": "2025-03-12", "distance": 0.5},
+        ]
+
+        phases = _cluster_similar_samples(samples)
+
+        self.assertEqual(len(phases), 2)
+
+    def test_backtest_cache_preserves_phase_and_tail_metadata(self) -> None:
+        stats = _similar_stats(
+            [
+                {
+                    "as_of": "2024-12-03",
+                    "distance": 0.67,
+                    "score": 70,
+                    "forward_1m": -0.17,
+                    "forward_3m": -3.48,
+                    "forward_6m": -3.30,
+                    "drawdown_3m": -6.13,
+                    "features": {"crowding_score": 76},
+                }
+            ]
+        )
+        from market_report.etf_monitor import ETFBacktestStats
+
+        backtest = ETFBacktestStats(
+            threshold=60,
+            crowding_ceiling=70,
+            sample_size=1,
+            good_count=1,
+            coverage_pct=100,
+            good_forward_1m=-0.17,
+            all_forward_1m=-0.17,
+            good_forward_3m=-3.48,
+            all_forward_3m=-3.48,
+            good_forward_6m=-3.30,
+            all_forward_6m=-3.30,
+            good_hit_rate_3m=0,
+            all_hit_rate_3m=0,
+            good_max_drawdown_3m=-6.13,
+            all_max_drawdown_3m=-6.13,
+            reliability="样本偏少",
+            summary="test",
+            similar_count=stats["count"],
+            similar_phase_count=stats["phase_count"],
+            similar_samples=stats["samples"],
+        )
+
+        restored = _backtest_from_cache(_backtest_to_cache(backtest))
+
+        self.assertIsNotNone(restored)
+        assert restored is not None
+        self.assertEqual(restored.similar_phase_count, 1)
+        self.assertEqual(restored.similar_samples[0].phase_id, "P1")
+        self.assertTrue(restored.similar_samples[0].tail_case)
+        self.assertTrue(restored.similar_samples[0].driver_notes)

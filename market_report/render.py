@@ -164,6 +164,8 @@ def render_html_report(report: ScoredReport, title: str) -> str:
     .threshold-details {{ margin-top: 6px; color: var(--muted); }}
     .threshold-details summary {{ color: #9ca3af; }}
     .threshold-row {{ display: block; margin-top: 4px; }}
+    .tail-case {{ margin-top: 8px; padding: 8px; border-left: 2px solid #d97706; background: rgba(217, 119, 6, 0.08); }}
+    .tail-case ul {{ margin: 5px 0 0 18px; padding: 0; }}
     .tag {{ display: inline-block; border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; color: var(--subtle); background: rgba(255,255,255,.025); font-size: 12px; }}
     .tag-hot {{ color: #fca5a5; border-color: rgba(248,113,113,.45); }}
     .tag-cool {{ color: #86efac; border-color: rgba(134,239,172,.35); }}
@@ -774,27 +776,48 @@ def _render_backtest_details(asset: ETFAssetMonitor) -> str:
         if rows
         else ""
     )
+    phase_count = backtest.similar_phase_count or backtest.similar_count
     sample_rows = "".join(
-        f"<tr><td>{escape(item.as_of)}</td><td>{item.distance:.2f}</td>"
+        f"<tr><td>{escape(item.phase_id or '旧缓存')}</td><td>{'是' if item.phase_representative else ''}</td>"
+        f"<td>{escape(item.as_of)}</td><td>{item.distance:.2f}</td>"
         f"<td>{escape(_fmt_pct(item.forward_1m))}</td><td>{escape(_fmt_pct(item.forward_3m))}</td>"
         f"<td>{escape(_fmt_pct(item.forward_6m))}</td><td>{escape(_fmt_pct(item.drawdown_3m))}</td></tr>"
         for item in backtest.similar_samples
     )
+    tail_cases = "".join(
+        f'<div class="tail-case"><strong>尾部案例：{escape(item.as_of)} · {escape(item.phase_id)}</strong>'
+        f'<div>起点脆弱性：{escape(item.start_state)}</div>'
+        f'<div>之后1/3/6M：{escape(_fmt_pct(item.forward_1m))} / {escape(_fmt_pct(item.forward_3m))} / '
+        f'{escape(_fmt_pct(item.forward_6m))}；3M回撤 {escape(_fmt_pct(item.drawdown_3m))}</div>'
+        f'<ul>{"".join(f"<li>{escape(note)}</li>" for note in item.driver_notes)}</ul></div>'
+        for item in backtest.similar_samples
+        if item.phase_representative and item.tail_case
+    )
+    tail_panel = (
+        f'<details class="threshold-details"><summary>查看历史尾部案例与事件线索</summary>'
+        f'<div>以下案例用于识别脆弱起点与后续催化剂，不表示当前市场会机械重复历史路径。</div>'
+        f'{tail_cases}</details>'
+        if tail_cases
+        else ""
+    )
     samples = (
         f'<details class="threshold-details"><summary>查看walk-forward相似样本日期与路径</summary>'
-        f'<div>3M路径分布 P25 / 中位数 / P75：{escape(_fmt_pct(backtest.similar_forward_3m_p25))} / '
+        f'<div>原始相似样本 {backtest.similar_count} 个，按相邻行情窗口聚合为 {phase_count} 个独立历史阶段。'
+        f'统计值基于各阶段最相似的代表样本。</div>'
+        f'<div>独立阶段代表样本3M路径分布 P25 / 中位数 / P75：{escape(_fmt_pct(backtest.similar_forward_3m_p25))} / '
         f'{escape(_fmt_pct(backtest.similar_forward_3m_p50))} / {escape(_fmt_pct(backtest.similar_forward_3m_p75))}</div>'
-        f'<div class="portfolio-table-scroll"><table><thead><tr><th>样本日期</th><th>距离</th><th>1M</th><th>3M</th><th>6M</th><th>3M回撤</th></tr></thead>'
+        f'<div class="portfolio-table-scroll"><table><thead><tr><th>阶段</th><th>代表</th><th>样本日期</th><th>距离</th><th>1M</th><th>3M</th><th>6M</th><th>3M回撤</th></tr></thead>'
         f'<tbody>{sample_rows}</tbody></table></div></details>'
         if sample_rows
         else ""
     )
     return (
-        f"<div>当前相似市场环境：{backtest.similar_count}个历史样本，"
+        f"<div>当前相似市场环境：{backtest.similar_count}个历史样本，聚合为{phase_count}个独立历史阶段；"
         f"之后1/3/6M {escape(similar_path)}，3M胜率 {escape(_fmt_rate(backtest.similar_hit_rate_3m))}，"
         f"3M回撤 {escape(_fmt_pct(backtest.similar_max_drawdown_3m))}。</div>"
         f"<div>{escape(threshold_summary)}</div>"
         f"{samples}"
+        f"{tail_panel}"
         f"{calibration}"
     )
 
@@ -881,8 +904,9 @@ def _fmt_backtest(asset: ETFAssetMonitor) -> str:
             _fmt_pct(backtest.similar_forward_6m),
         ]
     )
+    phase_count = backtest.similar_phase_count or backtest.similar_count
     return (
-        f"当前相似市场环境：{backtest.similar_count}个历史样本，"
+        f"当前相似市场环境：{backtest.similar_count}个历史样本，聚合为{phase_count}个独立历史阶段；"
         f"之后1/3/6M {similar_path}，3M胜率 {_fmt_rate(backtest.similar_hit_rate_3m)}，"
         f"3M回撤 {_fmt_pct(backtest.similar_max_drawdown_3m)}。"
         f"阈值质检：{backtest.reliability}；{backtest.best_threshold_label}。"

@@ -10,7 +10,7 @@ import urllib.request
 from html import unescape
 from bisect import bisect_right
 from dataclasses import dataclass, field
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -97,6 +97,11 @@ class ETFSimilarSample:
     forward_3m: float
     forward_6m: float
     drawdown_3m: float
+    phase_id: str = ""
+    phase_representative: bool = False
+    tail_case: bool = False
+    start_state: str = ""
+    driver_notes: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -149,6 +154,7 @@ class ETFBacktestStats:
     reliability: str
     summary: str
     similar_count: int = 0
+    similar_phase_count: int = 0
     similar_avg_score: float | None = None
     similar_avg_distance: float | None = None
     similar_forward_1m: float | None = None
@@ -1276,6 +1282,7 @@ def _backtest_entry_environment(
             reliability="样本偏少",
             summary=f"过去可用周度样本中，分数≥{threshold}的信号较少，统计结论需谨慎。",
             similar_count=int(similar_values["count"]),
+            similar_phase_count=int(similar_values["phase_count"]),
             similar_avg_score=similar_values["avg_score"],
             similar_avg_distance=similar_values["avg_distance"],
             similar_forward_1m=similar_values["forward_1m"],
@@ -1327,6 +1334,7 @@ def _backtest_entry_environment(
         reliability=reliability,
         summary=summary,
         similar_count=int(similar_values["count"]),
+        similar_phase_count=int(similar_values["phase_count"]),
         similar_avg_score=similar_values["avg_score"],
         similar_avg_distance=similar_values["avg_distance"],
         similar_forward_1m=similar_values["forward_1m"],
@@ -1571,6 +1579,7 @@ def _similar_stats(samples: list[dict[str, Any]]) -> dict[str, Any]:
     if not samples:
         return {
             "count": 0,
+            "phase_count": 0,
             "avg_score": None,
             "avg_distance": None,
             "forward_1m": None,
@@ -1583,31 +1592,125 @@ def _similar_stats(samples: list[dict[str, Any]]) -> dict[str, Any]:
             "forward_3m_p75": None,
             "samples": (),
         }
-    forward_3m = [float(row["forward_3m"]) for row in samples]
+    phase_rows = _cluster_similar_samples(samples)
+    representatives = [item["representative"] for item in phase_rows]
+    phase_by_date = {
+        str(row.get("as_of") or ""): (phase["phase_id"], row is phase["representative"])
+        for phase in phase_rows
+        for row in phase["rows"]
+    }
+    forward_3m = [float(row["forward_3m"]) for row in representatives]
     return {
         "count": len(samples),
-        "avg_score": _avg([float(row["score"]) for row in samples]),
-        "avg_distance": _avg([float(row["distance"]) for row in samples]),
-        "forward_1m": _avg([float(row["forward_1m"]) for row in samples]),
+        "phase_count": len(representatives),
+        "avg_score": _avg([float(row["score"]) for row in representatives]),
+        "avg_distance": _avg([float(row["distance"]) for row in representatives]),
+        "forward_1m": _avg([float(row["forward_1m"]) for row in representatives]),
         "forward_3m": _avg(forward_3m),
-        "forward_6m": _avg([float(row["forward_6m"]) for row in samples]),
-        "hit_rate_3m": _hit_rate([float(row["forward_3m"]) for row in samples]),
-        "max_drawdown_3m": _avg([float(row["drawdown_3m"]) for row in samples]),
+        "forward_6m": _avg([float(row["forward_6m"]) for row in representatives]),
+        "hit_rate_3m": _hit_rate([float(row["forward_3m"]) for row in representatives]),
+        "max_drawdown_3m": _avg([float(row["drawdown_3m"]) for row in representatives]),
         "forward_3m_p25": _percentile_value(forward_3m, 0.25),
         "forward_3m_p50": _percentile_value(forward_3m, 0.50),
         "forward_3m_p75": _percentile_value(forward_3m, 0.75),
         "samples": tuple(
-            ETFSimilarSample(
+            _similar_sample_from_row(
+                row,
+                phase_by_date.get(str(row.get("as_of") or ""), ("", False)),
+            )
+            for row in samples
+        ),
+    }
+
+
+def _cluster_similar_samples(
+    samples: list[dict[str, Any]],
+    max_gap_days: int = 28,
+    max_span_days: int = 63,
+) -> list[dict[str, Any]]:
+    ordered = sorted(samples, key=lambda row: str(row.get("as_of") or ""))
+    phases: list[dict[str, Any]] = []
+    for row in ordered:
+        as_of = date.fromisoformat(str(row["as_of"]))
+        if (
+            not phases
+            or as_of - phases[-1]["last_date"] > timedelta(days=max_gap_days)
+            or as_of - phases[-1]["start_date"] > timedelta(days=max_span_days)
+        ):
+            phases.append({"rows": [row], "start_date": as_of, "last_date": as_of})
+        else:
+            phases[-1]["rows"].append(row)
+            phases[-1]["last_date"] = as_of
+    for index, phase in enumerate(phases, start=1):
+        phase["phase_id"] = f"P{index}"
+        phase["representative"] = min(phase["rows"], key=lambda row: float(row["distance"]))
+    return phases
+
+
+def _similar_sample_from_row(row: dict[str, Any], phase: tuple[str, bool]) -> ETFSimilarSample:
+    tail_case = _is_tail_case(row)
+    return ETFSimilarSample(
                 as_of=str(row.get("as_of") or ""),
                 distance=float(row["distance"]),
                 forward_1m=float(row["forward_1m"]),
                 forward_3m=float(row["forward_3m"]),
                 forward_6m=float(row["forward_6m"]),
                 drawdown_3m=float(row["drawdown_3m"]),
-            )
-            for row in samples
+        phase_id=phase[0],
+        phase_representative=phase[1],
+        tail_case=tail_case,
+        start_state=_tail_start_state(row) if tail_case else "",
+        driver_notes=_historical_driver_notes(row) if tail_case else (),
+    )
+
+
+def _is_tail_case(row: dict[str, Any]) -> bool:
+    return (
+        float(row.get("forward_3m") or 0) < 0
+        or float(row.get("drawdown_3m") or 0) <= -5
+        or all(float(row.get(key) or 0) < 0 for key in ("forward_1m", "forward_3m", "forward_6m"))
+    )
+
+
+def _tail_start_state(row: dict[str, Any]) -> str:
+    features = row.get("features") or {}
+    conditions = []
+    if float(features.get("crowding_score") or 0) >= 70:
+        conditions.append("拥挤度偏高")
+    if float(features.get("rsi14") or 0) >= 70:
+        conditions.append("RSI处于偏热区间")
+    if float(features.get("mkt_qqq_distance_sma200") or 0) >= 10:
+        conditions.append("Nasdaq 100相对长期均线拉伸")
+    if float(features.get("mkt_vix_level") or 100) < 18:
+        conditions.append("波动率尚未充分反映尾部风险")
+    return "；".join(conditions) if conditions else "起点表面平稳，但后续路径显示其对新增冲击较为敏感"
+
+
+def _historical_driver_notes(row: dict[str, Any]) -> tuple[str, ...]:
+    start = date.fromisoformat(str(row["as_of"]))
+    end = start + timedelta(days=180)
+    events = (
+        (
+            date(2024, 12, 18),
+            "2024-12-18",
+            "Fed鹰派降息：FOMC下调2025年降息幅度预期，长端收益率上行，高估值资产重新定价。",
         ),
-    }
+        (
+            date(2025, 1, 27),
+            "2025-01-27",
+            "DeepSeek冲击：市场重新评估AI模型效率、芯片需求与AI基础设施资本开支的估值假设。",
+        ),
+        (
+            date(2025, 3, 1),
+            "2025-03起",
+            "关税不确定性升温：通胀、供应链与增长预期受到扰动，风险偏好降温。",
+        ),
+    )
+    matched = [f"{label}：{note}" for event, label, note in events if start <= event <= end]
+    if not matched:
+        matched.append("该窗口未匹配到内置历史事件标签；需结合当期新闻和宏观数据进一步复核。")
+    matched.append("事件窗口重叠仅用于解释线索，不构成单一因果归因，也不代表当前环境会重复同一路径。")
+    return tuple(matched)
 
 
 def _percentile_value(values: list[float], quantile: float) -> float | None:
@@ -1783,6 +1886,7 @@ def _backtest_to_cache(backtest: ETFBacktestStats | None) -> dict[str, Any] | No
         "reliability": backtest.reliability,
         "summary": backtest.summary,
         "similar_count": backtest.similar_count,
+        "similar_phase_count": backtest.similar_phase_count,
         "similar_avg_score": backtest.similar_avg_score,
         "similar_avg_distance": backtest.similar_avg_distance,
         "similar_forward_1m": backtest.similar_forward_1m,
@@ -1823,6 +1927,7 @@ def _backtest_from_cache(entry: Any) -> ETFBacktestStats | None:
             reliability=str(entry.get("reliability") or "样本不足"),
             summary=str(entry.get("summary") or "历史回测样本不足。"),
             similar_count=int(entry.get("similar_count") or 0),
+            similar_phase_count=int(entry.get("similar_phase_count") or 0),
             similar_avg_score=_safe_float(entry.get("similar_avg_score")),
             similar_avg_distance=_safe_float(entry.get("similar_avg_distance")),
             similar_forward_1m=_safe_float(entry.get("similar_forward_1m")),
@@ -1835,12 +1940,17 @@ def _backtest_from_cache(entry: Any) -> ETFBacktestStats | None:
             similar_forward_3m_p75=_safe_float(entry.get("similar_forward_3m_p75")),
             similar_samples=tuple(
                 ETFSimilarSample(
-                    str(item.get("as_of") or ""),
-                    float(item.get("distance") or 0),
-                    float(item.get("forward_1m") or 0),
-                    float(item.get("forward_3m") or 0),
-                    float(item.get("forward_6m") or 0),
-                    float(item.get("drawdown_3m") or 0),
+                    as_of=str(item.get("as_of") or ""),
+                    distance=float(item.get("distance") or 0),
+                    forward_1m=float(item.get("forward_1m") or 0),
+                    forward_3m=float(item.get("forward_3m") or 0),
+                    forward_6m=float(item.get("forward_6m") or 0),
+                    drawdown_3m=float(item.get("drawdown_3m") or 0),
+                    phase_id=str(item.get("phase_id") or ""),
+                    phase_representative=bool(item.get("phase_representative")),
+                    tail_case=bool(item.get("tail_case")),
+                    start_state=str(item.get("start_state") or ""),
+                    driver_notes=tuple(str(note) for note in (item.get("driver_notes") or [])),
                 )
                 for item in (entry.get("similar_samples") or [])
                 if isinstance(item, dict)
