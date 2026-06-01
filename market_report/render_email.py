@@ -275,6 +275,7 @@ def _render_portfolio_email(monitor: ETFMonitor) -> str:
             <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">Native / GBP参考市值</th>
             <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">未实现盈亏</th>
             <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">日变化</th>
+            <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">距年内高点</th>
             <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">占比</th>
           </tr>
           {rows}
@@ -292,6 +293,7 @@ def _render_portfolio_email_row(position: PortfolioPosition) -> str:
       <td style="padding:7px;border-bottom:1px solid #263244;">{escape(_fmt_native(position.market_value_native, position.native_currency))}<br><span style="color:#9ca3af;">{escape(_fmt_gbp(position.market_value_gbp))} · {escape(_fmt_fx(position))}</span></td>
       <td style="padding:7px;border-bottom:1px solid #263244;color:{pnl_color};">{escape(_fmt_signed_gbp(position.unrealized_pnl_gbp))}<br>{escape(_fmt_pct(position.unrealized_pnl_pct))}</td>
       <td style="padding:7px;border-bottom:1px solid #263244;color:{day_color};">{escape(_fmt_pct(position.day_change_pct))}</td>
+      <td style="padding:7px;border-bottom:1px solid #263244;">{escape(_fmt_peak_watch(position))}</td>
       <td style="padding:7px;border-bottom:1px solid #263244;">{position.weight_pct:.2f}%</td>
     </tr>"""
 
@@ -455,7 +457,8 @@ def _fmt_backtest(asset: ETFAssetMonitor) -> str:
         ]
     )
     return (
-        f"相似市场环境：{backtest.similar_count}个样本，之后1/3/6M {similar_path}，"
+        f"相似市场环境：{backtest.similar_count}个样本，{backtest.similarity_confidence}，"
+        f"特征覆盖率{_fmt_rate(backtest.similar_avg_feature_coverage_pct)}；之后1/3/6M {similar_path}，"
         f"3M胜率{_fmt_rate(backtest.similar_hit_rate_3m)}，回撤{_fmt_pct(backtest.similar_max_drawdown_3m)}；"
         f"阈值质检：{backtest.reliability}，{backtest.best_threshold_label}"
     )
@@ -608,6 +611,12 @@ def _fmt_fx(position) -> str:
     if position.fx_rate is None:
         return f"{position.fx_pair} N/A"
     return f"{position.fx_pair} {position.fx_rate:.4f}"
+
+
+def _fmt_peak_watch(position: PortfolioPosition) -> str:
+    if position.drawdown_from_year_peak_pct is None:
+        return "N/A"
+    return f"{_fmt_pct(position.drawdown_from_year_peak_pct)} · {position.peak_watch or '回撤观察'}"
 
 
 def _fmt_gbp(value: float | None) -> str:

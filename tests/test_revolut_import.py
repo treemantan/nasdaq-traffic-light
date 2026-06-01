@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from datetime import date
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 from unittest.mock import patch
@@ -36,9 +37,14 @@ class RevolutImportTests(unittest.TestCase):
 
     def test_usd_position_keeps_native_value_and_adds_gbp_reference(self) -> None:
         quotes = {
-            "GBPUSD=X": (1.25, 1.24, "USD"),
-            "GBPEUR=X": (1.18, 1.17, "EUR"),
-            "NFLX": (100.0, 90.0, "USD"),
+            "GBPUSD=X": (1.25, 1.24, "USD", []),
+            "GBPEUR=X": (1.18, 1.17, "EUR", []),
+            "NFLX": (
+                100.0,
+                90.0,
+                "USD",
+                [(date(2026, 1, 2), 120.0), (date(2026, 5, 29), 100.0)],
+            ),
         }
         with patch.object(MODULE, "_latest_quote", side_effect=lambda symbol: quotes[symbol]):
             rows = MODULE._build_portfolio_rows({"NFLX": {"quantity": 2.0, "cost_gbp": 100.0}})
@@ -50,6 +56,22 @@ class RevolutImportTests(unittest.TestCase):
         self.assertEqual(rows[0]["estimated_market_value_gbp"], "160.00")
         self.assertEqual(rows[0]["fx_pair"], "GBP/USD")
         self.assertEqual(rows[0]["fx_rate"], "1.2500")
+        self.assertEqual(rows[0]["drawdown_from_year_peak_pct"], "-16.6667")
+        self.assertIn("红色观察", rows[0]["peak_watch"])
+
+    def test_peak_watch_uses_current_calendar_year(self) -> None:
+        peak, peak_date, drawdown = MODULE._year_peak_snapshot(
+            [
+                (date(2025, 12, 31), 200.0),
+                (date(2026, 1, 2), 100.0),
+                (date(2026, 5, 29), 96.0),
+            ]
+        )
+
+        self.assertEqual(peak, 100.0)
+        self.assertEqual(peak_date, date(2026, 1, 2))
+        self.assertAlmostEqual(drawdown or 0, -4.0)
+        self.assertIn("常态", MODULE._peak_watch_label(drawdown))
 
 
 if __name__ == "__main__":

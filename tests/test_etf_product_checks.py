@@ -61,6 +61,17 @@ class ETFProductCheckTests(unittest.TestCase):
         self.assertIsNone(total)
         self.assertTrue(any("组合加权TER约0.18%" in item for item in summary))
 
+    def test_portfolio_summary_flags_large_drawdown_from_year_peak(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "portfolio.csv"
+            path.write_text(
+                "symbol,weight_pct,drawdown_from_year_peak_pct\nA.L,100,-12.5\n",
+                encoding="utf-8",
+            )
+            _, warnings, _, _ = _load_portfolio_summary([self._asset("A.L", ())], path)
+
+        self.assertTrue(any("红色回撤观察" in item and "A.L -12.50%" in item for item in warnings))
+
     def test_portfolio_exposure_combines_direct_and_etf_top_holdings(self) -> None:
         asset = self._asset("A.L", (ETFHolding("NVDA", "NVIDIA", 10), ETFHolding("AVGO", "Broadcom", 5)))
         positions = [

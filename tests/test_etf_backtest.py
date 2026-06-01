@@ -8,10 +8,13 @@ from market_report.etf_monitor import (
     _backtest_from_cache,
     _backtest_entry_environment,
     _backtest_to_cache,
+    _adaptive_feature_scales,
     _cluster_similar_samples,
     _entry_similarity_features,
     _historical_driver_notes,
     _rolling_sensitivities,
+    _similar_samples,
+    _similarity_confidence,
     _similar_stats,
 )
 
@@ -191,6 +194,46 @@ class ETFBacktestTests(unittest.TestCase):
         phases = _cluster_similar_samples(samples)
 
         self.assertEqual(len(phases), 2)
+
+    def test_adaptive_scales_are_bounded_around_protective_defaults(self) -> None:
+        records = [
+            {"features": {"score": float(index * 10), "momentum_1m": float(index)}}
+            for index in range(30)
+        ]
+
+        scales = _adaptive_feature_scales(records)
+
+        self.assertGreaterEqual(scales["score"], 7.5)
+        self.assertLessEqual(scales["score"], 30)
+        self.assertGreaterEqual(scales["momentum_1m"], 4)
+        self.assertLessEqual(scales["momentum_1m"], 16)
+
+    def test_similarity_candidates_with_low_feature_coverage_are_excluded(self) -> None:
+        current = {"score": 70.0, "rsi14": 60.0, "momentum_1m": 4.0, "momentum_3m": 6.0}
+        records = [
+            {
+                "as_of": "2025-01-01",
+                "score": 70,
+                "distance": 0,
+                "features": {"score": 70.0},
+            },
+            {
+                "as_of": "2025-02-01",
+                "score": 70,
+                "distance": 0,
+                "features": dict(current),
+            },
+        ]
+
+        samples = _similar_samples(records, current)
+
+        self.assertEqual([item["as_of"] for item in samples], ["2025-02-01"])
+        self.assertAlmostEqual(samples[0]["feature_coverage_pct"], 100)
+
+    def test_similarity_confidence_requires_close_well_covered_independent_phases(self) -> None:
+        self.assertEqual(_similarity_confidence(5, 0.80, 92), "历史可比性较高")
+        self.assertEqual(_similarity_confidence(5, 1.30, 92), "历史可比性偏低")
+        self.assertEqual(_similarity_confidence(2, 0.60, 100), "历史可比性偏低")
 
     def test_backtest_cache_preserves_phase_and_tail_metadata(self) -> None:
         stats = _similar_stats(

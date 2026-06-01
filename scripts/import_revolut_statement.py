@@ -4,7 +4,7 @@ import argparse
 import csv
 import sys
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -83,7 +83,7 @@ def _build_portfolio_rows(positions: dict[str, dict[str, float]]) -> list[dict[s
         quantity = position["quantity"]
         monitor_symbol = monitor_symbols.get(ticker)
         yahoo_symbol = monitor_symbol or UK_SYMBOL_OVERRIDES.get(ticker) or ticker
-        price, previous_price, native_currency = _latest_quote(yahoo_symbol)
+        price, previous_price, native_currency, history = _latest_quote(yahoo_symbol)
         price_source = f"Yahoo:{yahoo_symbol}"
         fx_pair = ""
         fx_rate = 1.0 if native_currency == "GBP" else None
@@ -102,6 +102,8 @@ def _build_portfolio_rows(positions: dict[str, dict[str, float]]) -> list[dict[s
         unrealized = market_value - position["cost_gbp"]
         unrealized_pct = unrealized / position["cost_gbp"] * 100 if position["cost_gbp"] else None
         day_change_pct = (price / previous_price - 1) * 100 if price is not None and previous_price not in (None, 0) else None
+        peak_price, peak_date, drawdown_from_peak_pct = _year_peak_snapshot(history)
+        peak_watch = _peak_watch_label(drawdown_from_peak_pct)
         valued.append(
             {
                 "symbol": monitor_symbol or ticker,
@@ -115,6 +117,10 @@ def _build_portfolio_rows(positions: dict[str, dict[str, float]]) -> list[dict[s
                 "unrealized_pnl": unrealized,
                 "unrealized_pnl_pct": unrealized_pct,
                 "day_change_pct": day_change_pct,
+                "year_peak_price_native": peak_price,
+                "year_peak_date": peak_date.isoformat() if peak_date else "",
+                "drawdown_from_year_peak_pct": drawdown_from_peak_pct,
+                "peak_watch": peak_watch,
                 "fx_pair": fx_pair,
                 "fx_rate": fx_rate,
                 "fx_as_of": fx_as_of,
@@ -140,6 +146,10 @@ def _build_portfolio_rows(positions: dict[str, dict[str, float]]) -> list[dict[s
                 "unrealized_pnl_gbp": _fmt_number(item["unrealized_pnl"]),
                 "unrealized_pnl_pct": _fmt_number(item["unrealized_pnl_pct"]),
                 "day_change_pct": _fmt_number(item["day_change_pct"]),
+                "year_peak_price_native": _fmt_number(item["year_peak_price_native"]),
+                "year_peak_date": str(item["year_peak_date"]),
+                "drawdown_from_year_peak_pct": _fmt_number(item["drawdown_from_year_peak_pct"]),
+                "peak_watch": str(item["peak_watch"]),
                 "fx_pair": str(item["fx_pair"]),
                 "fx_rate": _fmt_number(item["fx_rate"]),
                 "fx_as_of": str(item["fx_as_of"]),
@@ -150,16 +160,39 @@ def _build_portfolio_rows(positions: dict[str, dict[str, float]]) -> list[dict[s
     return rows
 
 
-def _latest_quote(symbol: str) -> tuple[float | None, float | None, str]:
+def _latest_quote(symbol: str) -> tuple[float | None, float | None, str, list[tuple[date, float]]]:
     try:
         price_data = _fetch_yahoo_price_data(symbol)
         history = price_data.history
         if history:
             currency = _normalize_currency(price_data.meta.get("currency")) or ""
-            return history[-1][1], history[-2][1] if len(history) > 1 else None, currency
+            return history[-1][1], history[-2][1] if len(history) > 1 else None, currency, history
     except Exception:
         pass
-    return None, None, ""
+    return None, None, "", []
+
+
+def _year_peak_snapshot(history: list[tuple[date, float]]) -> tuple[float | None, date | None, float | None]:
+    if not history:
+        return None, None, None
+    latest_date, latest_price = history[-1]
+    year_start = date(latest_date.year, 1, 1)
+    current_year = [(day, price) for day, price in history if day >= year_start]
+    if not current_year:
+        return None, None, None
+    peak_date, peak_price = max(current_year, key=lambda item: item[1])
+    drawdown = (latest_price / peak_price - 1) * 100 if peak_price else None
+    return peak_price, peak_date, drawdown
+
+
+def _peak_watch_label(drawdown_pct: float | None) -> str:
+    if drawdown_pct is None:
+        return "数据不足"
+    if drawdown_pct <= -10:
+        return "红色观察：较年内高点回撤超过10%，需复核趋势、估值与仓位风险"
+    if drawdown_pct <= -5:
+        return "黄色观察：较年内高点回撤超过5%，需观察回撤性质与支撑位"
+    return "常态：距年内高点回撤仍在5%以内"
 
 
 def _parse_money(raw: object) -> float | None:

@@ -120,7 +120,7 @@ def render_html_report(report: ScoredReport, title: str) -> str:
     .portfolio-exposure {{ border: 1px solid var(--line); border-radius: 6px; padding: 9px; background: rgba(255,255,255,.025); }}
     .portfolio-exposure strong {{ display: block; font-size: 18px; }}
     .portfolio-table-scroll {{ max-width: 100%; overflow-x: auto; overflow-y: hidden; }}
-    .portfolio-table {{ min-width: 1340px; }}
+    .portfolio-table {{ min-width: 1620px; }}
     .portfolio-table td, .portfolio-table th {{ white-space: nowrap; }}
     .portfolio-symbol {{ font-weight: 760; }}
     .portfolio-scope {{ color: var(--muted); font-size: 12px; }}
@@ -441,7 +441,7 @@ def _render_portfolio_panel(monitor: ETFMonitor) -> str:
           <thead>
             <tr>
               <th>资产</th><th>数量</th><th>平均成本GBP</th><th>当前价格Native</th><th>Native市值</th><th>GBP参考市值</th>
-              <th>FX参考</th><th>未实现盈亏GBP</th><th>未实现盈亏%</th><th>日变化</th><th>组合占比</th>
+              <th>FX参考</th><th>未实现盈亏GBP</th><th>未实现盈亏%</th><th>日变化</th><th>距年内高点</th><th>组合占比</th>
             </tr>
           </thead>
           <tbody>{rows}</tbody>
@@ -467,6 +467,7 @@ def _render_portfolio_row(position: PortfolioPosition) -> str:
       <td class="{pnl_class}">{escape(_fmt_signed_gbp(position.unrealized_pnl_gbp))}</td>
       <td class="{pnl_class}">{escape(_fmt_pct(position.unrealized_pnl_pct))}</td>
       <td class="{day_class}">{escape(_fmt_pct(position.day_change_pct))}</td>
+      <td>{escape(_fmt_peak_watch(position))}</td>
       <td>{position.weight_pct:.2f}%</td>
     </tr>"""
 
@@ -780,7 +781,7 @@ def _render_backtest_details(asset: ETFAssetMonitor) -> str:
     tail_summary = _fmt_tail_phase_summary(backtest)
     sample_rows = "".join(
         f"<tr><td>{escape(item.phase_id or '旧缓存')}</td><td>{'是' if item.phase_representative else ''}</td>"
-        f"<td>{escape(item.as_of)}</td><td>{item.distance:.2f}</td>"
+        f"<td>{escape(item.as_of)}</td><td>{item.distance:.2f}</td><td>{escape(_fmt_rate(item.feature_coverage_pct))}</td>"
         f"<td>{escape(_fmt_pct(item.forward_1m))}</td><td>{escape(_fmt_pct(item.forward_3m))}</td>"
         f"<td>{escape(_fmt_pct(item.forward_6m))}</td><td>{escape(_fmt_pct(item.drawdown_3m))}</td></tr>"
         for item in backtest.similar_samples
@@ -807,7 +808,7 @@ def _render_backtest_details(asset: ETFAssetMonitor) -> str:
         f'统计值基于各阶段最相似的代表样本。</div>'
         f'<div>独立阶段代表样本3M路径分布 P25 / 中位数 / P75：{escape(_fmt_pct(backtest.similar_forward_3m_p25))} / '
         f'{escape(_fmt_pct(backtest.similar_forward_3m_p50))} / {escape(_fmt_pct(backtest.similar_forward_3m_p75))}</div>'
-        f'<div class="portfolio-table-scroll"><table><thead><tr><th>阶段</th><th>代表</th><th>样本日期</th><th>距离</th><th>1M</th><th>3M</th><th>6M</th><th>3M回撤</th></tr></thead>'
+        f'<div class="portfolio-table-scroll"><table><thead><tr><th>阶段</th><th>代表</th><th>样本日期</th><th>距离</th><th>特征覆盖</th><th>1M</th><th>3M</th><th>6M</th><th>3M回撤</th></tr></thead>'
         f'<tbody>{sample_rows}</tbody></table></div></details>'
         if sample_rows
         else ""
@@ -816,6 +817,8 @@ def _render_backtest_details(asset: ETFAssetMonitor) -> str:
         f"<div>当前相似市场环境：{backtest.similar_count}个历史样本，聚合为{phase_count}个独立历史阶段；"
         f"之后1/3/6M {escape(similar_path)}，3M胜率 {escape(_fmt_rate(backtest.similar_hit_rate_3m))}，"
         f"3M回撤 {escape(_fmt_pct(backtest.similar_max_drawdown_3m))}。</div>"
+        f"<div>相似度可信度：{escape(backtest.similarity_confidence)}；代表样本平均特征覆盖率 "
+        f"{escape(_fmt_rate(backtest.similar_avg_feature_coverage_pct))}。</div>"
         f"<div>{escape(tail_summary)}</div>"
         f"<div>{escape(threshold_summary)}</div>"
         f"{samples}"
@@ -910,7 +913,9 @@ def _fmt_backtest(asset: ETFAssetMonitor) -> str:
     return (
         f"当前相似市场环境：{backtest.similar_count}个历史样本，聚合为{phase_count}个独立历史阶段；"
         f"之后1/3/6M {similar_path}，3M胜率 {_fmt_rate(backtest.similar_hit_rate_3m)}，"
-        f"3M回撤 {_fmt_pct(backtest.similar_max_drawdown_3m)}。{_fmt_tail_phase_summary(backtest)}"
+        f"3M回撤 {_fmt_pct(backtest.similar_max_drawdown_3m)}。"
+        f"相似度可信度：{backtest.similarity_confidence}，特征覆盖率{_fmt_rate(backtest.similar_avg_feature_coverage_pct)}。"
+        f"{_fmt_tail_phase_summary(backtest)}"
         f"阈值质检：{backtest.reliability}；{backtest.best_threshold_label}。"
     )
 
@@ -1073,6 +1078,14 @@ def _fmt_fx(position) -> str:
     if position.fx_rate is None:
         return f"{position.fx_pair} N/A"
     return f"{position.fx_pair} {position.fx_rate:.4f}"
+
+
+def _fmt_peak_watch(position: PortfolioPosition) -> str:
+    if position.drawdown_from_year_peak_pct is None:
+        return "N/A"
+    peak = _fmt_native(position.year_peak_price_native, position.native_currency)
+    label = position.peak_watch or "回撤观察"
+    return f"{_fmt_pct(position.drawdown_from_year_peak_pct)} · 峰值 {peak}（{position.year_peak_date or '日期待确认'}） · {label}"
 
 
 def _fmt_sensitivity(item) -> str:

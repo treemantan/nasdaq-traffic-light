@@ -4,6 +4,7 @@ import csv
 import json
 import math
 import re
+import statistics
 import time
 import urllib.parse
 import urllib.request
@@ -69,6 +70,10 @@ class PortfolioPosition:
     fx_rate: float | None = None
     fx_as_of: str = ""
     price_source: str = ""
+    year_peak_price_native: float | None = None
+    year_peak_date: str = ""
+    drawdown_from_year_peak_pct: float | None = None
+    peak_watch: str = ""
 
 
 @dataclass(frozen=True)
@@ -102,6 +107,7 @@ class ETFSimilarSample:
     tail_case: bool = False
     start_state: str = ""
     driver_notes: tuple[str, ...] = ()
+    feature_coverage_pct: float | None = None
 
 
 @dataclass(frozen=True)
@@ -158,6 +164,8 @@ class ETFBacktestStats:
     similar_tail_phase_count: int = 0
     similar_tail_phase_rate: float | None = None
     similar_closest_tail_distance: float | None = None
+    similar_avg_feature_coverage_pct: float | None = None
+    similarity_confidence: str = "历史可比性待确认"
     similar_avg_score: float | None = None
     similar_avg_distance: float | None = None
     similar_forward_1m: float | None = None
@@ -1289,6 +1297,8 @@ def _backtest_entry_environment(
             similar_tail_phase_count=int(similar_values["tail_phase_count"]),
             similar_tail_phase_rate=similar_values["tail_phase_rate"],
             similar_closest_tail_distance=similar_values["closest_tail_distance"],
+            similar_avg_feature_coverage_pct=similar_values["avg_feature_coverage_pct"],
+            similarity_confidence=str(similar_values["similarity_confidence"]),
             similar_avg_score=similar_values["avg_score"],
             similar_avg_distance=similar_values["avg_distance"],
             similar_forward_1m=similar_values["forward_1m"],
@@ -1344,6 +1354,8 @@ def _backtest_entry_environment(
         similar_tail_phase_count=int(similar_values["tail_phase_count"]),
         similar_tail_phase_rate=similar_values["tail_phase_rate"],
         similar_closest_tail_distance=similar_values["closest_tail_distance"],
+        similar_avg_feature_coverage_pct=similar_values["avg_feature_coverage_pct"],
+        similarity_confidence=str(similar_values["similarity_confidence"]),
         similar_avg_score=similar_values["avg_score"],
         similar_avg_distance=similar_values["avg_distance"],
         similar_forward_1m=similar_values["forward_1m"],
@@ -1495,80 +1507,116 @@ def _similar_samples(
 ) -> list[dict[str, Any]]:
     if not current_features:
         return []
+    scales = _adaptive_feature_scales(records)
     scored: list[dict[str, Any]] = []
     for row in records:
         features = row.get("features")
-        distance = _feature_distance(current_features, features)
+        distance, coverage = _feature_distance_details(current_features, features, scales)
         if distance is None:
+            continue
+        if coverage < 65:
             continue
         item = dict(row)
         item["distance"] = distance
+        item["feature_coverage_pct"] = coverage
         scored.append(item)
     scored.sort(key=lambda row: row["distance"])
     return scored[:top_n]
 
 
 def _feature_distance(current: dict[str, float], past: Any) -> float | None:
+    distance, _ = _feature_distance_details(current, past, FEATURE_SCALES)
+    return distance
+
+
+FEATURE_SCALES = {
+    "score": 15.0,
+    "rsi14": 15.0,
+    "momentum_1m": 8.0,
+    "momentum_3m": 15.0,
+    "distance_sma50": 8.0,
+    "distance_sma200": 18.0,
+    "trend_sigma_200d": 1.5,
+    "daily_volatility": 2.0,
+    "crowding_score": 18.0,
+    "mkt_spy_1m": 6.0,
+    "mkt_spy_3m": 12.0,
+    "mkt_spy_distance_sma200": 12.0,
+    "mkt_qqq_1m": 8.0,
+    "mkt_qqq_3m": 15.0,
+    "mkt_qqq_distance_sma200": 15.0,
+    "mkt_vix_level": 12.0,
+    "mkt_vix_5d": 18.0,
+    "mkt_vix_1m": 30.0,
+    "mkt_dxy_1m": 3.0,
+    "mkt_dxy_3m": 5.0,
+    "mkt_10y_level": 8.0,
+    "mkt_10y_1m": 8.0,
+    "mkt_gold_1m": 6.0,
+    "mkt_gold_3m": 10.0,
+    "mkt_oil_1m": 8.0,
+    "mkt_oil_3m": 14.0,
+}
+
+FEATURE_WEIGHTS = {
+    "score": 1.2,
+    "rsi14": 1.0,
+    "momentum_1m": 1.0,
+    "momentum_3m": 0.8,
+    "distance_sma50": 0.8,
+    "distance_sma200": 1.1,
+    "trend_sigma_200d": 1.1,
+    "daily_volatility": 0.7,
+    "crowding_score": 1.0,
+    "mkt_spy_1m": 1.1,
+    "mkt_spy_3m": 0.8,
+    "mkt_spy_distance_sma200": 0.8,
+    "mkt_qqq_1m": 1.2,
+    "mkt_qqq_3m": 0.9,
+    "mkt_qqq_distance_sma200": 0.9,
+    "mkt_vix_level": 1.2,
+    "mkt_vix_5d": 1.3,
+    "mkt_vix_1m": 1.0,
+    "mkt_dxy_1m": 1.0,
+    "mkt_dxy_3m": 0.8,
+    "mkt_10y_level": 1.0,
+    "mkt_10y_1m": 1.0,
+    "mkt_gold_1m": 0.6,
+    "mkt_gold_3m": 0.5,
+    "mkt_oil_1m": 0.5,
+    "mkt_oil_3m": 0.4,
+}
+
+
+def _adaptive_feature_scales(records: list[dict[str, Any]]) -> dict[str, float]:
+    scales = dict(FEATURE_SCALES)
+    for key, fallback in FEATURE_SCALES.items():
+        values = [
+            value
+            for row in records
+            if isinstance(row.get("features"), dict)
+            for value in [_safe_float(row["features"].get(key))]
+            if value is not None
+        ]
+        if len(values) < 20:
+            continue
+        median = statistics.median(values)
+        mad = statistics.median(abs(value - median) for value in values) * 1.4826
+        if mad > 0:
+            scales[key] = min(max(mad, fallback * 0.5), fallback * 2)
+    return scales
+
+
+def _feature_distance_details(
+    current: dict[str, float],
+    past: Any,
+    scales: dict[str, float],
+) -> tuple[float | None, float]:
     if not isinstance(past, dict):
-        return None
-    scales = {
-        "score": 15.0,
-        "rsi14": 15.0,
-        "momentum_1m": 8.0,
-        "momentum_3m": 15.0,
-        "distance_sma50": 8.0,
-        "distance_sma200": 18.0,
-        "trend_sigma_200d": 1.5,
-        "daily_volatility": 2.0,
-        "crowding_score": 18.0,
-        "mkt_spy_1m": 6.0,
-        "mkt_spy_3m": 12.0,
-        "mkt_spy_distance_sma200": 12.0,
-        "mkt_qqq_1m": 8.0,
-        "mkt_qqq_3m": 15.0,
-        "mkt_qqq_distance_sma200": 15.0,
-        "mkt_vix_level": 12.0,
-        "mkt_vix_5d": 18.0,
-        "mkt_vix_1m": 30.0,
-        "mkt_dxy_1m": 3.0,
-        "mkt_dxy_3m": 5.0,
-        "mkt_10y_level": 8.0,
-        "mkt_10y_1m": 8.0,
-        "mkt_gold_1m": 6.0,
-        "mkt_gold_3m": 10.0,
-        "mkt_oil_1m": 8.0,
-        "mkt_oil_3m": 14.0,
-    }
-    weights = {
-        "score": 1.2,
-        "rsi14": 1.0,
-        "momentum_1m": 1.0,
-        "momentum_3m": 0.8,
-        "distance_sma50": 0.8,
-        "distance_sma200": 1.1,
-        "trend_sigma_200d": 1.1,
-        "daily_volatility": 0.7,
-        "crowding_score": 1.0,
-        "mkt_spy_1m": 1.1,
-        "mkt_spy_3m": 0.8,
-        "mkt_spy_distance_sma200": 0.8,
-        "mkt_qqq_1m": 1.2,
-        "mkt_qqq_3m": 0.9,
-        "mkt_qqq_distance_sma200": 0.9,
-        "mkt_vix_level": 1.2,
-        "mkt_vix_5d": 1.3,
-        "mkt_vix_1m": 1.0,
-        "mkt_dxy_1m": 1.0,
-        "mkt_dxy_3m": 0.8,
-        "mkt_10y_level": 1.0,
-        "mkt_10y_1m": 1.0,
-        "mkt_gold_1m": 0.6,
-        "mkt_gold_3m": 0.5,
-        "mkt_oil_1m": 0.5,
-        "mkt_oil_3m": 0.4,
-    }
+        return None, 0
     total = 0.0
     weight_sum = 0.0
+    possible_weight = sum(FEATURE_WEIGHTS.get(key, 1.0) for key in scales if key in current)
     for key, scale in scales.items():
         if key not in current or key not in past:
             continue
@@ -1576,12 +1624,13 @@ def _feature_distance(current: dict[str, float], past: Any) -> float | None:
         past_value = _safe_float(past.get(key))
         if current_value is None or past_value is None:
             continue
-        weight = weights.get(key, 1.0)
+        weight = FEATURE_WEIGHTS.get(key, 1.0)
         total += weight * ((current_value - past_value) / scale) ** 2
         weight_sum += weight
     if weight_sum <= 0:
-        return None
-    return math.sqrt(total / weight_sum)
+        return None, 0
+    coverage = weight_sum / possible_weight * 100 if possible_weight else 0
+    return math.sqrt(total / weight_sum), coverage
 
 
 def _similar_stats(samples: list[dict[str, Any]]) -> dict[str, Any]:
@@ -1592,6 +1641,8 @@ def _similar_stats(samples: list[dict[str, Any]]) -> dict[str, Any]:
             "tail_phase_count": 0,
             "tail_phase_rate": None,
             "closest_tail_distance": None,
+            "avg_feature_coverage_pct": None,
+            "similarity_confidence": "历史可比性不足",
             "avg_score": None,
             "avg_distance": None,
             "forward_1m": None,
@@ -1613,6 +1664,8 @@ def _similar_stats(samples: list[dict[str, Any]]) -> dict[str, Any]:
         for row in phase["rows"]
     }
     forward_3m = [float(row["forward_3m"]) for row in representatives]
+    avg_coverage = _avg([float(row.get("feature_coverage_pct") or 0) for row in representatives])
+    avg_distance = _avg([float(row["distance"]) for row in representatives])
     return {
         "count": len(samples),
         "phase_count": len(representatives),
@@ -1620,7 +1673,9 @@ def _similar_stats(samples: list[dict[str, Any]]) -> dict[str, Any]:
         "tail_phase_rate": len(tail_representatives) / len(representatives) * 100 if representatives else None,
         "closest_tail_distance": min((float(row["distance"]) for row in tail_representatives), default=None),
         "avg_score": _avg([float(row["score"]) for row in representatives]),
-        "avg_distance": _avg([float(row["distance"]) for row in representatives]),
+        "avg_distance": avg_distance,
+        "avg_feature_coverage_pct": avg_coverage,
+        "similarity_confidence": _similarity_confidence(len(representatives), avg_distance, avg_coverage),
         "forward_1m": _avg([float(row["forward_1m"]) for row in representatives]),
         "forward_3m": _avg(forward_3m),
         "forward_6m": _avg([float(row["forward_6m"]) for row in representatives]),
@@ -1677,7 +1732,18 @@ def _similar_sample_from_row(row: dict[str, Any], phase: tuple[str, bool]) -> ET
         tail_case=tail_case,
         start_state=_tail_start_state(row) if tail_case else "",
         driver_notes=_historical_driver_notes(row) if tail_case else (),
+        feature_coverage_pct=_safe_float(row.get("feature_coverage_pct")),
     )
+
+
+def _similarity_confidence(phase_count: int, avg_distance: float | None, avg_coverage: float | None) -> str:
+    if phase_count < 3 or avg_distance is None or avg_coverage is None:
+        return "历史可比性偏低"
+    if avg_coverage < 75 or avg_distance > 1.25:
+        return "历史可比性偏低"
+    if phase_count >= 5 and avg_coverage >= 90 and avg_distance <= 0.85:
+        return "历史可比性较高"
+    return "历史可比性中等"
 
 
 def _is_tail_case(row: dict[str, Any]) -> bool:
@@ -1906,6 +1972,8 @@ def _backtest_to_cache(backtest: ETFBacktestStats | None) -> dict[str, Any] | No
         "similar_tail_phase_count": backtest.similar_tail_phase_count,
         "similar_tail_phase_rate": backtest.similar_tail_phase_rate,
         "similar_closest_tail_distance": backtest.similar_closest_tail_distance,
+        "similar_avg_feature_coverage_pct": backtest.similar_avg_feature_coverage_pct,
+        "similarity_confidence": backtest.similarity_confidence,
         "similar_avg_score": backtest.similar_avg_score,
         "similar_avg_distance": backtest.similar_avg_distance,
         "similar_forward_1m": backtest.similar_forward_1m,
@@ -1950,6 +2018,8 @@ def _backtest_from_cache(entry: Any) -> ETFBacktestStats | None:
             similar_tail_phase_count=int(entry.get("similar_tail_phase_count") or 0),
             similar_tail_phase_rate=_safe_float(entry.get("similar_tail_phase_rate")),
             similar_closest_tail_distance=_safe_float(entry.get("similar_closest_tail_distance")),
+            similar_avg_feature_coverage_pct=_safe_float(entry.get("similar_avg_feature_coverage_pct")),
+            similarity_confidence=str(entry.get("similarity_confidence") or "历史可比性待确认"),
             similar_avg_score=_safe_float(entry.get("similar_avg_score")),
             similar_avg_distance=_safe_float(entry.get("similar_avg_distance")),
             similar_forward_1m=_safe_float(entry.get("similar_forward_1m")),
@@ -1973,6 +2043,7 @@ def _backtest_from_cache(entry: Any) -> ETFBacktestStats | None:
                     tail_case=bool(item.get("tail_case")),
                     start_state=str(item.get("start_state") or ""),
                     driver_notes=tuple(str(note) for note in (item.get("driver_notes") or [])),
+                    feature_coverage_pct=_safe_float(item.get("feature_coverage_pct")),
                 )
                 for item in (entry.get("similar_samples") or [])
                 if isinstance(item, dict)
@@ -2111,11 +2182,29 @@ def _load_portfolio_summary(
             fx_rate=_safe_float(row.get("fx_rate")),
             fx_as_of=str(row.get("fx_as_of") or ""),
             price_source=str(row.get("price_source") or ""),
+            year_peak_price_native=_safe_float(row.get("year_peak_price_native")),
+            year_peak_date=str(row.get("year_peak_date") or ""),
+            drawdown_from_year_peak_pct=_safe_float(row.get("drawdown_from_year_peak_pct")),
+            peak_watch=str(row.get("peak_watch") or ""),
         )
         for row in rows
         if str(row.get("symbol") or "").strip()
     ]
     portfolio_total = sum(item.market_value_gbp or 0 for item in portfolio_positions) or None
+    red_peak_watches = [
+        f"{item.symbol} {_fmt_signed_pct(item.drawdown_from_year_peak_pct)}"
+        for item in portfolio_positions
+        if item.drawdown_from_year_peak_pct is not None and item.drawdown_from_year_peak_pct <= -10
+    ]
+    yellow_peak_watches = [
+        f"{item.symbol} {_fmt_signed_pct(item.drawdown_from_year_peak_pct)}"
+        for item in portfolio_positions
+        if item.drawdown_from_year_peak_pct is not None and -10 < item.drawdown_from_year_peak_pct <= -5
+    ]
+    if red_peak_watches:
+        warnings.append("红色回撤观察：以下持仓较年内高点回撤超过10%，需复核趋势、估值与仓位风险：" + "、".join(red_peak_watches) + "。")
+    if yellow_peak_watches:
+        warnings.append("黄色回撤观察：以下持仓较年内高点回撤超过5%，需观察回撤性质与支撑位：" + "、".join(yellow_peak_watches) + "。")
     positions = []
     uncovered = []
     for row in rows:
@@ -2157,6 +2246,12 @@ def _portfolio_fx_notes(positions: list[PortfolioPosition]) -> list[str]:
             continue
         notes[item.fx_pair] = f"{item.fx_pair} {item.fx_rate:.4f}（Yahoo，{item.fx_as_of or '时间待确认'}）"
     return [notes[key] for key in sorted(notes)]
+
+
+def _fmt_signed_pct(value: float | None) -> str:
+    if value is None:
+        return "N/A"
+    return f"{value:+.2f}%"
 
 
 def _portfolio_exposure_summary(
