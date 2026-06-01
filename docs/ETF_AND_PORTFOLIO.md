@@ -32,10 +32,10 @@
 运行：
 
 ```powershell
-python scripts/import_revolut_statement.py "trading-account-statement_*.csv"
+python scripts/import_revolut_statement.py "*.csv"
 ```
 
-导入器按 `BUY`、`SELL` 和 `STOCK SPLIT` 重建数量与历史 GBP 成本，并抓取 Yahoo 最新价格。美元和欧元资产使用抓取时点的 GBP/USD 或 GBP/EUR 汇率转换为 GBP 参考市值。
+导入器会读取 CSV 表头确认是否为 Revolut trading statement，因此可以识别标准文件名和 iPhone 生成的 UUID 文件名。导入器按 `BUY`、`SELL` 和 `STOCK SPLIT` 重建数量与历史 GBP 成本，并抓取 Yahoo 最新价格。美元和欧元资产使用抓取时点的 GBP/USD 或 GBP/EUR 汇率转换为 GBP 参考市值。
 
 组合面板显示：
 
