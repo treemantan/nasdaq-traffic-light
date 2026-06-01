@@ -74,6 +74,11 @@ class PortfolioPosition:
     year_peak_date: str = ""
     drawdown_from_year_peak_pct: float | None = None
     peak_watch: str = ""
+    sma200_native: float | None = None
+    distance_sma200_pct: float | None = None
+    daily_volatility_pct: float | None = None
+    pullback_sigma_1m: float | None = None
+    drawdown_regime: str = ""
 
 
 @dataclass(frozen=True)
@@ -2186,6 +2191,11 @@ def _load_portfolio_summary(
             year_peak_date=str(row.get("year_peak_date") or ""),
             drawdown_from_year_peak_pct=_safe_float(row.get("drawdown_from_year_peak_pct")),
             peak_watch=str(row.get("peak_watch") or ""),
+            sma200_native=_safe_float(row.get("sma200_native")),
+            distance_sma200_pct=_safe_float(row.get("distance_sma200_pct")),
+            daily_volatility_pct=_safe_float(row.get("daily_volatility_pct")),
+            pullback_sigma_1m=_safe_float(row.get("pullback_sigma_1m")),
+            drawdown_regime=str(row.get("drawdown_regime") or ""),
         )
         for row in rows
         if str(row.get("symbol") or "").strip()
@@ -2205,6 +2215,17 @@ def _load_portfolio_summary(
         warnings.append("红色回撤观察：以下持仓较年内高点回撤超过10%，需复核趋势、估值与仓位风险：" + "、".join(red_peak_watches) + "。")
     if yellow_peak_watches:
         warnings.append("黄色回撤观察：以下持仓较年内高点回撤超过5%，需观察回撤性质与支撑位：" + "、".join(yellow_peak_watches) + "。")
+    trend_breaks = [
+        item.symbol
+        for item in portfolio_positions
+        if "趋势破坏风险" in item.drawdown_regime
+    ]
+    if trend_breaks:
+        warnings.append(
+            "趋势破坏风险复核：以下持仓已出现较深回撤，并伴随SMA200或波动结构转弱："
+            + "、".join(trend_breaks)
+            + "。"
+        )
     positions = []
     uncovered = []
     for row in rows:

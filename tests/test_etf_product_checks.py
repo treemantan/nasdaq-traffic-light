@@ -16,7 +16,8 @@ from market_report.etf_monitor import (
     _parse_compact_number,
     _portfolio_exposure_summary,
 )
-from market_report.render import _max_holdings_overlap
+from market_report.news_monitor import NewsEvent, NewsMonitor
+from market_report.render import _max_holdings_overlap, _portfolio_news_matches
 
 
 class ETFProductCheckTests(unittest.TestCase):
@@ -99,6 +100,21 @@ class ETFProductCheckTests(unittest.TestCase):
         self.assertEqual(exposure_map["005930"].weight_pct, 10)
         self.assertEqual(exposure_map["000660"].weight_pct, 4.8)
         self.assertTrue(any("HBM / 存储链" in item for item in notes))
+
+    def test_portfolio_news_review_matches_direct_ticker_only(self) -> None:
+        positions = [PortfolioPosition("NVDA", 10, None, None, None, None, None, None, None, "outside-monitor-pool")]
+        monitor = NewsMonitor(
+            fetched_at="2026-06-01T00:00:00Z",
+            status="ok",
+            summary="demo",
+            warnings=(),
+            events=(
+                NewsEvent("NVIDIA update", "demo", "2026-06-01", "https://example.com/nvda", (), ("NVDA",), "neutral", "medium", "medium", "news"),
+                NewsEvent("Apple update", "demo", "2026-06-01", "https://example.com/aapl", (), ("AAPL",), "neutral", "medium", "medium", "news"),
+            ),
+        )
+
+        self.assertEqual([event.title for event in _portfolio_news_matches(positions, monitor)], ["NVIDIA update"])
 
     @staticmethod
     def _asset(symbol: str, holdings: tuple[ETFHolding, ...], ter: float = 0.10) -> ETFAssetMonitor:

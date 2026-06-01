@@ -25,7 +25,7 @@ def render_email_report(report: ScoredReport) -> str:
     data_rows = "".join(_render_data_row(item.metric) for item in report.metrics.values())
     iron_condor = _render_iron_condor(report.iron_condor)
     news_monitor = _render_news_monitor(report.news_monitor)
-    etf_monitor = _render_etf_monitor(report.etf_monitor)
+    etf_monitor = _render_etf_monitor(report.etf_monitor, report.news_monitor)
     accent = report.light_color
 
     return f"""<!doctype html>
@@ -226,12 +226,12 @@ def _render_news_monitor(monitor: NewsMonitor | None) -> str:
     </tr>"""
 
 
-def _render_etf_monitor(monitor: ETFMonitor | None) -> str:
+def _render_etf_monitor(monitor: ETFMonitor | None, news_monitor: NewsMonitor | None = None) -> str:
     if monitor is None:
         return ""
     grouped_rows = "".join(_render_etf_email_group(group) for group in _group_etf_assets(monitor.assets))
     changes = _render_email_notes("今日ETF变动摘要", monitor.change_summary)
-    portfolio = _render_portfolio_email(monitor)
+    portfolio = _render_portfolio_email(monitor, news_monitor)
     return f"""<tr>
       <td style="padding:0 24px 18px;">
         <div style="font-size:19px;font-weight:700;color:#f3f4f6;margin:8px 0 8px;">UK ETF估值、趋势与拥挤度监控器</div>
@@ -244,7 +244,7 @@ def _render_etf_monitor(monitor: ETFMonitor | None) -> str:
     </tr>"""
 
 
-def _render_portfolio_email(monitor: ETFMonitor) -> str:
+def _render_portfolio_email(monitor: ETFMonitor, news_monitor: NewsMonitor | None = None) -> str:
     if not monitor.portfolio_positions:
         return _render_email_notes("实际组合视角", monitor.portfolio_summary + monitor.portfolio_warnings)
     rows = "".join(_render_portfolio_email_row(position) for position in monitor.portfolio_positions)
@@ -266,6 +266,7 @@ def _render_portfolio_email(monitor: ETFMonitor) -> str:
         if exposures
         else ""
     )
+    event_panel = _render_portfolio_event_review_email(monitor.portfolio_positions, news_monitor)
     return f"""
         <div style="font-size:15px;font-weight:700;color:#f3f4f6;margin:14px 0 4px;">实际组合持仓（Revolut statement 估算）</div>
         <div style="font-size:12px;color:#9ca3af;margin-bottom:6px;">持仓估算市值 {_fmt_gbp(monitor.portfolio_total_value_gbp)}。基于导出的 statement 与 Yahoo 最近价格估算，不等同于券商实时账户净值。</div>
@@ -281,7 +282,33 @@ def _render_portfolio_email(monitor: ETFMonitor) -> str:
           {rows}
         </table>
         {exposure_panel}
+        {event_panel}
         <ul style="color:#9ca3af;padding-left:18px;margin:5px 0 10px;font-size:12px;">{notes}</ul>"""
+
+
+def _render_portfolio_event_review_email(
+    positions: list[PortfolioPosition], news_monitor: NewsMonitor | None
+) -> str:
+    events = _portfolio_news_matches(positions, news_monitor)
+    if not events:
+        return '<div style="font-size:12px;color:#9ca3af;margin:6px 0;">基本面事件复核：暂未匹配到直接持仓 ticker 的重要新闻；ETF 仍需结合底层持仓与新闻面板复核。</div>'
+    rows = "".join(
+        f'<li><a href="{escape(event.url)}" style="color:#bfdbfe;">{escape(event.title)}</a>'
+        f' <span style="color:#9ca3af;">· {escape("、".join(event.tickers))} · {escape(event.impact)}</span></li>'
+        for event in events
+    )
+    return f'<div style="font-size:12px;color:#d1d5db;margin:6px 0;"><strong>基本面事件复核（直接 ticker 匹配）</strong><ul style="padding-left:18px;">{rows}</ul></div>'
+
+
+def _portfolio_news_matches(positions: list[PortfolioPosition], news_monitor: NewsMonitor | None):
+    if news_monitor is None:
+        return []
+    symbols = {position.symbol.upper().split(".")[0] for position in positions}
+    return [
+        event
+        for event in news_monitor.events
+        if symbols.intersection(ticker.upper().split(".")[0] for ticker in event.tickers)
+    ][:5]
 
 
 def _render_portfolio_email_row(position: PortfolioPosition) -> str:
@@ -616,7 +643,9 @@ def _fmt_fx(position) -> str:
 def _fmt_peak_watch(position: PortfolioPosition) -> str:
     if position.drawdown_from_year_peak_pct is None:
         return "N/A"
-    return f"{_fmt_pct(position.drawdown_from_year_peak_pct)} · {position.peak_watch or '回撤观察'}"
+    sma = f" · 距SMA200 {_fmt_pct(position.distance_sma200_pct)}" if position.distance_sma200_pct is not None else ""
+    sigma = f" · 约{_fmt_plain(position.pullback_sigma_1m)}σ(1M)" if position.pullback_sigma_1m is not None else ""
+    return f"{_fmt_pct(position.drawdown_from_year_peak_pct)}{sma}{sigma} · {position.drawdown_regime or position.peak_watch or '回撤观察'}"
 
 
 def _fmt_gbp(value: float | None) -> str:

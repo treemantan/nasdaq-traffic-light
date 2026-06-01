@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import math
 import sys
 from collections import defaultdict
 from datetime import date, datetime, timezone
@@ -9,7 +10,16 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from market_report.etf_monitor import DEFAULT_ETF_SPECS, _fetch_yahoo_price_data, _normalize_currency, _safe_float
+from market_report.etf_monitor import (
+    DEFAULT_ETF_SPECS,
+    _daily_returns,
+    _distance_to_sma,
+    _fetch_yahoo_price_data,
+    _normalize_currency,
+    _robust_trend_volatility,
+    _safe_float,
+    _sma,
+)
 
 
 UK_SYMBOL_OVERRIDES = {"IGTM": "IGTM.L", "ISF": "ISF.L"}
@@ -104,6 +114,9 @@ def _build_portfolio_rows(positions: dict[str, dict[str, float]]) -> list[dict[s
         day_change_pct = (price / previous_price - 1) * 100 if price is not None and previous_price not in (None, 0) else None
         peak_price, peak_date, drawdown_from_peak_pct = _year_peak_snapshot(history)
         peak_watch = _peak_watch_label(drawdown_from_peak_pct)
+        sma200, distance_sma200_pct, daily_volatility_pct, pullback_sigma_1m, drawdown_regime = (
+            _portfolio_drawdown_snapshot(history, drawdown_from_peak_pct)
+        )
         valued.append(
             {
                 "symbol": monitor_symbol or ticker,
@@ -121,6 +134,11 @@ def _build_portfolio_rows(positions: dict[str, dict[str, float]]) -> list[dict[s
                 "year_peak_date": peak_date.isoformat() if peak_date else "",
                 "drawdown_from_year_peak_pct": drawdown_from_peak_pct,
                 "peak_watch": peak_watch,
+                "sma200_native": sma200,
+                "distance_sma200_pct": distance_sma200_pct,
+                "daily_volatility_pct": daily_volatility_pct,
+                "pullback_sigma_1m": pullback_sigma_1m,
+                "drawdown_regime": drawdown_regime,
                 "fx_pair": fx_pair,
                 "fx_rate": fx_rate,
                 "fx_as_of": fx_as_of,
@@ -150,6 +168,11 @@ def _build_portfolio_rows(positions: dict[str, dict[str, float]]) -> list[dict[s
                 "year_peak_date": str(item["year_peak_date"]),
                 "drawdown_from_year_peak_pct": _fmt_number(item["drawdown_from_year_peak_pct"]),
                 "peak_watch": str(item["peak_watch"]),
+                "sma200_native": _fmt_number(item["sma200_native"]),
+                "distance_sma200_pct": _fmt_number(item["distance_sma200_pct"]),
+                "daily_volatility_pct": _fmt_number(item["daily_volatility_pct"]),
+                "pullback_sigma_1m": _fmt_number(item["pullback_sigma_1m"]),
+                "drawdown_regime": str(item["drawdown_regime"]),
                 "fx_pair": str(item["fx_pair"]),
                 "fx_rate": _fmt_number(item["fx_rate"]),
                 "fx_as_of": str(item["fx_as_of"]),
@@ -201,6 +224,48 @@ def _parse_money(raw: object) -> float | None:
         return None
     parts = text.replace(",", "").split()
     return _safe_float(parts[-1])
+
+
+def _portfolio_drawdown_snapshot(
+    history: list[tuple[date, float]], drawdown_pct: float | None
+) -> tuple[float | None, float | None, float | None, float | None, str]:
+    values = [price for _, price in history]
+    latest_price = values[-1] if values else None
+    sma200 = _sma(values, 200)
+    distance_sma200_pct = _distance_to_sma(latest_price, sma200)
+    daily_volatility_pct = _robust_trend_volatility(_daily_returns(values))
+    pullback_sigma_1m = (
+        abs(drawdown_pct) / (daily_volatility_pct * math.sqrt(21))
+        if drawdown_pct is not None and daily_volatility_pct not in (None, 0)
+        else None
+    )
+    return (
+        sma200,
+        distance_sma200_pct,
+        daily_volatility_pct,
+        pullback_sigma_1m,
+        _drawdown_regime_label(drawdown_pct, distance_sma200_pct, pullback_sigma_1m),
+    )
+
+
+def _drawdown_regime_label(
+    drawdown_pct: float | None,
+    distance_sma200_pct: float | None,
+    pullback_sigma_1m: float | None,
+) -> str:
+    if drawdown_pct is None:
+        return "数据不足：暂无法判断回撤性质"
+    if drawdown_pct > -5:
+        return "常态波动：距年内高点回撤仍在5%以内"
+    if distance_sma200_pct is not None and distance_sma200_pct >= 0 and (
+        pullback_sigma_1m is None or pullback_sigma_1m < 2
+    ):
+        return "正常回调观察：仍位于SMA200上方，回撤尚未显著偏离近期波动区间"
+    if (distance_sma200_pct is not None and distance_sma200_pct <= -3) or (
+        drawdown_pct <= -10 and pullback_sigma_1m is not None and pullback_sigma_1m >= 2
+    ):
+        return "趋势破坏风险：回撤较深且中期趋势或波动结构已转弱"
+    return "需要复核：回撤超过常态区间，需结合SMA200、波动率与基本面事件判断"
 
 
 def _fmt_number(value: float | None) -> str:

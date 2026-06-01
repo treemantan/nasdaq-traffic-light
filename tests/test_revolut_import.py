@@ -74,5 +74,25 @@ class RevolutImportTests(unittest.TestCase):
         self.assertIn("常态", MODULE._peak_watch_label(drawdown))
 
 
+    def test_drawdown_regime_distinguishes_normal_pullback_from_trend_break(self) -> None:
+        normal = MODULE._drawdown_regime_label(-8.0, 4.0, 1.2)
+        broken = MODULE._drawdown_regime_label(-12.0, -4.0, 2.4)
+
+        self.assertIn("正常回调观察", normal)
+        self.assertIn("趋势破坏风险", broken)
+
+    def test_portfolio_drawdown_snapshot_uses_sma200_and_robust_volatility(self) -> None:
+        history = [
+            (date(2025, 1, 1), 100 + index * 0.2 + (index % 5 - 2))
+            for index in range(220)
+        ]
+        snapshot = MODULE._portfolio_drawdown_snapshot(history, -6.0)
+
+        self.assertIsNotNone(snapshot[0])
+        self.assertIsNotNone(snapshot[1])
+        self.assertIsNotNone(snapshot[2])
+        self.assertIsNotNone(snapshot[3])
+
+
 if __name__ == "__main__":
     unittest.main()
