@@ -32,7 +32,7 @@ output/market-report-YYYY-MM-DD.json
 - [数据源、缓存与回退机制](docs/DATA_SOURCES.md)
 - [组合行情缓存与降级机制](docs/PORTFOLIO_QUOTE_CACHE.md)
 
-Codex 右侧预览暂不支持 HTML 锚点和折叠区。点击上面的标准 Markdown 链接，会在顶部打开对应文档标签页；GitHub 中也使用同一组链接。
+Codex 右侧预览暂不支持 HTML 锚点和折叠区。点击文档导航列表中的链接，会在顶部打开对应文档标签页；GitHub 中也使用同一组链接。
 
 ## 关于持仓回撤观察
 
