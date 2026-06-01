@@ -52,6 +52,36 @@ class RevolutImportTests(unittest.TestCase):
         self.assertEqual(positions["VUAG"]["quantity"], 2)
         self.assertEqual(positions["VUAG"]["cost_gbp"], 200)
 
+    def test_dividends_and_known_cost_sales_are_included_in_return_attribution(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            statement = Path(directory) / "statement.csv"
+            statement.write_text(
+                "Date,Ticker,Type,Quantity,Price per share,Total Amount,Currency,FX Rate\n"
+                "2026-01-01T00:00:00Z,KO,BUY - MARKET,10,GBP 5,GBP 50,GBP,1.0000\n"
+                "2026-02-01T00:00:00Z,KO,SELL - MARKET,4,GBP 7,GBP 28,GBP,1.0000\n"
+                "2026-03-01T00:00:00Z,KO,DIVIDEND,,,GBP 2.50,GBP,1.0000\n",
+                encoding="utf-8",
+            )
+            positions = _reconstruct_positions([statement])
+
+        self.assertEqual(positions["KO"]["quantity"], 6)
+        self.assertEqual(positions["KO"]["cost_gbp"], 30)
+        self.assertEqual(positions["KO"]["realized_pnl_gbp"], 8)
+        self.assertEqual(positions["KO"]["dividend_income_gbp"], 2.5)
+
+    def test_sale_without_visible_purchase_is_not_treated_as_profit(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            statement = Path(directory) / "statement.csv"
+            statement.write_text(
+                "Date,Ticker,Type,Quantity,Price per share,Total Amount,Currency,FX Rate\n"
+                "2026-01-01T00:00:00Z,GOOGL,SELL - MARKET,2,GBP 100,GBP 200,GBP,1.0000\n",
+                encoding="utf-8",
+            )
+            positions = _reconstruct_positions([statement])
+
+        self.assertEqual(positions["GOOGL"]["realized_pnl_gbp"], 0)
+        self.assertEqual(positions["GOOGL"]["unmatched_sell_proceeds_gbp"], 200)
+
     def test_uuid_named_iphone_export_is_recognized_by_header(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             statement = Path(directory) / "9B4221B1-92C0-4957-B42B-320C617C4FE8.csv"
@@ -86,6 +116,27 @@ class RevolutImportTests(unittest.TestCase):
         self.assertEqual(rows[0]["fx_rate"], "1.2500")
         self.assertEqual(rows[0]["drawdown_from_year_peak_pct"], "-16.6667")
         self.assertIn("红色观察", rows[0]["peak_watch"])
+
+    def test_portfolio_rows_include_account_level_return_attribution(self) -> None:
+        quotes = {
+            "GBPUSD=X": (1.25, 1.24, "USD", []),
+            "GBPEUR=X": (1.18, 1.17, "EUR", []),
+            "KO": (10.0, 9.5, "GBP", [(date(2026, 1, 2), 10.0)]),
+        }
+        position = {
+            "quantity": 2.0,
+            "cost_gbp": 15.0,
+            "realized_pnl_gbp": 3.0,
+            "dividend_income_gbp": 1.5,
+            "unmatched_sell_proceeds_gbp": 0.0,
+        }
+        with patch.object(MODULE, "_latest_quote", side_effect=lambda symbol: quotes[symbol]):
+            rows = MODULE._build_portfolio_rows({"KO": position})
+
+        self.assertEqual(rows[0]["account_unrealized_pnl_gbp"], "5.0000")
+        self.assertEqual(rows[0]["account_realized_pnl_gbp"], "3.0000")
+        self.assertEqual(rows[0]["account_dividend_income_gbp"], "1.5000")
+        self.assertEqual(rows[0]["account_total_return_gbp"], "9.5000")
 
     def test_peak_watch_uses_current_calendar_year(self) -> None:
         peak, peak_date, drawdown = MODULE._year_peak_snapshot(

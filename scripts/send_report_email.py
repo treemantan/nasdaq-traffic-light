@@ -210,6 +210,7 @@ def _report_from_payload(payload: dict):
         ETFMonitor,
         ETFThresholdCalibration,
         PortfolioExposure,
+        PortfolioPerformance,
         PortfolioPosition,
     )
     from market_report.scoring import (
@@ -247,6 +248,14 @@ def _report_from_payload(payload: dict):
                     if isinstance(item, dict)
                 ],
                 "portfolio_exposures": lambda raw: [
+                    _dataclass_from_dict(PortfolioExposure, item)
+                    for item in (raw or [])
+                    if isinstance(item, dict)
+                ],
+                "portfolio_performance": lambda raw: (
+                    _dataclass_from_dict(PortfolioPerformance, raw) if isinstance(raw, dict) else None
+                ),
+                "portfolio_mag7_exposures": lambda raw: [
                     _dataclass_from_dict(PortfolioExposure, item)
                     for item in (raw or [])
                     if isinstance(item, dict)

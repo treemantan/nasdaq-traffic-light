@@ -25,13 +25,18 @@ class SendCloudReportEmailTests(unittest.TestCase):
                 "portfolio_summary": ["summary"],
                 "portfolio_warnings": ["warning"],
                 "portfolio_total_value_gbp": 100.0,
+                "portfolio_performance": {"total_return_gbp": 10.0},
                 "portfolio_exposures": [{"name": "AI"}],
                 "portfolio_exposure_notes": ["note"],
+                "portfolio_mag7_exposures": [{"name": "NVDA"}],
+                "portfolio_mag7_notes": ["mag7"],
             }
         }
         sanitized = module._without_portfolio(payload)
         self.assertEqual(sanitized["etf_monitor"]["portfolio_positions"], [])
         self.assertIsNone(sanitized["etf_monitor"]["portfolio_total_value_gbp"])
+        self.assertIsNone(sanitized["etf_monitor"]["portfolio_performance"])
+        self.assertEqual(sanitized["etf_monitor"]["portfolio_mag7_exposures"], [])
         self.assertEqual(payload["etf_monitor"]["portfolio_positions"], [{"symbol": "VUAG"}])
 
     def test_full_portfolio_run_sends_public_and_private_editions(self) -> None:

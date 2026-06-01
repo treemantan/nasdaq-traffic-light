@@ -427,6 +427,22 @@ def _render_portfolio_panel(monitor: ETFMonitor, news_monitor: NewsMonitor | Non
         if exposures
         else ""
     )
+    mag7_exposures = "".join(
+        f"""<div class="portfolio-exposure">
+          <span class="muted">{escape(item.label)} · {escape(item.symbol)}</span>
+          <strong>{item.weight_pct:.2f}%</strong>
+          <span class="portfolio-scope">直接 {item.direct_weight_pct:.2f}% · ETF间接 {item.etf_weight_pct:.2f}%</span>
+        </div>"""
+        for item in monitor.portfolio_mag7_exposures
+    )
+    mag7_panel = (
+        f'<div class="portfolio-notes"><strong>MAG7暴露穿透（可识别下限）</strong></div>'
+        f'<div class="portfolio-exposure-grid">{mag7_exposures}</div>'
+        f'<div class="portfolio-notes"><ul>{"".join(f"<li>{escape(item)}</li>" for item in monitor.portfolio_mag7_notes)}</ul></div>'
+        if mag7_exposures
+        else ""
+    )
+    performance_panel = _render_portfolio_performance(monitor)
     event_panel = _render_portfolio_event_review(monitor.portfolio_positions, news_monitor)
     total = _fmt_gbp(monitor.portfolio_total_value_gbp)
     return f"""<div class="portfolio-panel">
@@ -442,16 +458,39 @@ def _render_portfolio_panel(monitor: ETFMonitor, news_monitor: NewsMonitor | Non
           <thead>
             <tr>
               <th>资产</th><th>数量</th><th>平均成本GBP</th><th>当前价格Native</th><th>Native市值</th><th>GBP参考市值</th>
-              <th>FX参考</th><th>未实现盈亏GBP</th><th>未实现盈亏%</th><th>日变化</th><th>距年内高点</th><th>组合占比</th>
+              <th>FX参考</th><th>收益拆分GBP</th><th>未实现盈亏%</th><th>日变化</th><th>距年内高点</th><th>组合占比</th>
             </tr>
           </thead>
           <tbody>{rows}</tbody>
         </table>
       </div>
+      {performance_panel}
       {exposure_panel}
+      {mag7_panel}
       {event_panel}
       <div class="portfolio-notes"><ul>{note_html}</ul></div>
     </div>"""
+
+
+def _render_portfolio_performance(monitor: ETFMonitor) -> str:
+    performance = monitor.portfolio_performance
+    if performance is None:
+        return ""
+    cards = (
+        ("可识别总收益", performance.total_return_gbp),
+        ("未实现盈亏", performance.unrealized_pnl_gbp),
+        ("已实现交易盈亏", performance.realized_pnl_gbp),
+        ("股息收入", performance.dividend_income_gbp),
+    )
+    rendered = "".join(
+        f'<div class="portfolio-exposure"><span class="muted">{escape(label)}</span>'
+        f'<strong class="{_pnl_class(value)}">{escape(_fmt_signed_gbp(value))}</strong></div>'
+        for label, value in cards
+    )
+    return (
+        '<div class="portfolio-notes"><strong>收益归因（statement 导出窗口内，可识别口径）</strong></div>'
+        f'<div class="portfolio-exposure-grid">{rendered}</div>'
+    )
 
 
 def _render_portfolio_event_review(
@@ -497,7 +536,8 @@ def _render_portfolio_row(position: PortfolioPosition) -> str:
       <td>{escape(_fmt_native(position.market_value_native, position.native_currency))}</td>
       <td>{escape(_fmt_gbp(position.market_value_gbp))}</td>
       <td>{escape(_fmt_fx(position))}</td>
-      <td class="{pnl_class}">{escape(_fmt_signed_gbp(position.unrealized_pnl_gbp))}</td>
+      <td class="{pnl_class}">未实现 {escape(_fmt_signed_gbp(position.unrealized_pnl_gbp))}<br>
+        <span class="portfolio-scope">已实现 {escape(_fmt_signed_gbp(position.realized_pnl_gbp))} · 股息 {escape(_fmt_signed_gbp(position.dividend_income_gbp))} · 合计 {escape(_fmt_signed_gbp(position.total_return_gbp))}</span></td>
       <td class="{pnl_class}">{escape(_fmt_pct(position.unrealized_pnl_pct))}</td>
       <td class="{day_class}">{escape(_fmt_pct(position.day_change_pct))}</td>
       <td>{escape(_fmt_peak_watch(position))}</td>

@@ -266,10 +266,28 @@ def _render_portfolio_email(monitor: ETFMonitor, news_monitor: NewsMonitor | Non
         if exposures
         else ""
     )
+    mag7_exposures = "".join(
+        f"""<td valign="top" style="padding:8px;border:1px solid #263244;">
+          <span style="font-size:12px;color:#9ca3af;">{escape(item.label)} · {escape(item.symbol)}</span><br>
+          <strong style="font-size:17px;color:#f3f4f6;">{item.weight_pct:.2f}%</strong><br>
+          <span style="font-size:11px;color:#9ca3af;">直接 {item.direct_weight_pct:.2f}% · ETF间接 {item.etf_weight_pct:.2f}%</span>
+        </td>"""
+        for item in monitor.portfolio_mag7_exposures
+    )
+    mag7_panel = (
+        '<div style="font-size:12px;font-weight:700;color:#f3f4f6;margin:8px 0 4px;">MAG7暴露穿透（可识别下限）</div>'
+        f'<table width="100%" cellspacing="0" cellpadding="0" style="margin-bottom:6px;"><tr>{mag7_exposures}</tr></table>'
+        f'<ul style="color:#9ca3af;padding-left:18px;margin:5px 0 10px;font-size:12px;">'
+        f'{"".join(f"<li>{escape(item)}</li>" for item in monitor.portfolio_mag7_notes)}</ul>'
+        if mag7_exposures
+        else ""
+    )
+    performance_panel = _render_portfolio_performance_email(monitor)
     event_panel = _render_portfolio_event_review_email(monitor.portfolio_positions, news_monitor)
     return f"""
         <div style="font-size:15px;font-weight:700;color:#f3f4f6;margin:14px 0 4px;">实际组合持仓（Revolut statement 估算）</div>
         <div style="font-size:12px;color:#9ca3af;margin-bottom:6px;">持仓估算市值 {_fmt_gbp(monitor.portfolio_total_value_gbp)}。基于导出的 statement 与 Yahoo 最近价格估算，不等同于券商实时账户净值。</div>
+        {performance_panel}
         <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;font-size:12px;color:#d1d5db;margin-bottom:6px;">
           <tr>
             <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">资产</th>
@@ -282,8 +300,23 @@ def _render_portfolio_email(monitor: ETFMonitor, news_monitor: NewsMonitor | Non
           {rows}
         </table>
         {exposure_panel}
+        {mag7_panel}
         {event_panel}
         <ul style="color:#9ca3af;padding-left:18px;margin:5px 0 10px;font-size:12px;">{notes}</ul>"""
+
+
+def _render_portfolio_performance_email(monitor: ETFMonitor) -> str:
+    performance = monitor.portfolio_performance
+    if performance is None:
+        return ""
+    return (
+        '<div style="font-size:12px;color:#d1d5db;margin:6px 0;">'
+        '<strong>收益归因（statement 导出窗口内，可识别口径）</strong><br>'
+        f'可识别总收益 {_fmt_signed_gbp(performance.total_return_gbp)} · '
+        f'未实现盈亏 {_fmt_signed_gbp(performance.unrealized_pnl_gbp)} · '
+        f'已实现交易盈亏 {_fmt_signed_gbp(performance.realized_pnl_gbp)} · '
+        f'股息收入 {_fmt_signed_gbp(performance.dividend_income_gbp)}</div>'
+    )
 
 
 def _render_portfolio_event_review_email(
@@ -318,7 +351,7 @@ def _render_portfolio_email_row(position: PortfolioPosition) -> str:
     return f"""<tr>
       <td style="padding:7px;border-bottom:1px solid #263244;"><strong>{escape(position.symbol)}</strong><br><span style="color:#9ca3af;">{scope}<br>{escape(position.price_source or "行情来源待确认")}</span></td>
       <td style="padding:7px;border-bottom:1px solid #263244;">{escape(_fmt_native(position.market_value_native, position.native_currency))}<br><span style="color:#9ca3af;">{escape(_fmt_gbp(position.market_value_gbp))} · {escape(_fmt_fx(position))}</span></td>
-      <td style="padding:7px;border-bottom:1px solid #263244;color:{pnl_color};">{escape(_fmt_signed_gbp(position.unrealized_pnl_gbp))}<br>{escape(_fmt_pct(position.unrealized_pnl_pct))}</td>
+      <td style="padding:7px;border-bottom:1px solid #263244;color:{pnl_color};">未实现 {escape(_fmt_signed_gbp(position.unrealized_pnl_gbp))}<br>{escape(_fmt_pct(position.unrealized_pnl_pct))}<br><span style="color:#9ca3af;">已实现 {escape(_fmt_signed_gbp(position.realized_pnl_gbp))} · 股息 {escape(_fmt_signed_gbp(position.dividend_income_gbp))} · 合计 {escape(_fmt_signed_gbp(position.total_return_gbp))}</span></td>
       <td style="padding:7px;border-bottom:1px solid #263244;color:{day_color};">{escape(_fmt_pct(position.day_change_pct))}</td>
       <td style="padding:7px;border-bottom:1px solid #263244;">{escape(_fmt_peak_watch(position))}</td>
       <td style="padding:7px;border-bottom:1px solid #263244;">{position.weight_pct:.2f}%</td>

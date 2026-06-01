@@ -92,8 +92,11 @@ def _without_portfolio(payload: dict) -> dict:
         monitor["portfolio_summary"] = []
         monitor["portfolio_warnings"] = []
         monitor["portfolio_total_value_gbp"] = None
+        monitor["portfolio_performance"] = None
         monitor["portfolio_exposures"] = []
         monitor["portfolio_exposure_notes"] = []
+        monitor["portfolio_mag7_exposures"] = []
+        monitor["portfolio_mag7_notes"] = []
     return sanitized
 
 

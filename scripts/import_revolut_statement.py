@@ -79,7 +79,15 @@ def main() -> int:
 
 
 def _reconstruct_positions(paths: list[Path]) -> dict[str, dict[str, float]]:
-    positions: dict[str, dict[str, float]] = defaultdict(lambda: {"quantity": 0.0, "cost_gbp": 0.0})
+    positions: dict[str, dict[str, float]] = defaultdict(
+        lambda: {
+            "quantity": 0.0,
+            "cost_gbp": 0.0,
+            "realized_pnl_gbp": 0.0,
+            "dividend_income_gbp": 0.0,
+            "unmatched_sell_proceeds_gbp": 0.0,
+        }
+    )
     rows, duplicate_count = _unique_transaction_rows(paths)
     if duplicate_count:
         print(f"Removed {duplicate_count} duplicate transaction row(s) across overlapping statements.")
@@ -87,7 +95,12 @@ def _reconstruct_positions(paths: list[Path]) -> dict[str, dict[str, float]]:
         ticker = str(row.get("Ticker") or "").strip().upper()
         transaction_type = str(row.get("Type") or "").strip().upper()
         quantity = _safe_float(row.get("Quantity"))
-        if not ticker or quantity is None:
+        if not ticker:
+            continue
+        if transaction_type == "DIVIDEND":
+            positions[ticker]["dividend_income_gbp"] += _parse_money(row.get("Total Amount")) or 0
+            continue
+        if quantity is None:
             continue
         if transaction_type.startswith("BUY"):
             price = _parse_money(row.get("Price per share"))
@@ -96,11 +109,20 @@ def _reconstruct_positions(paths: list[Path]) -> dict[str, dict[str, float]]:
         elif transaction_type.startswith("SELL"):
             current_quantity = positions[ticker]["quantity"]
             average_cost = positions[ticker]["cost_gbp"] / current_quantity if current_quantity else 0
-            positions[ticker]["quantity"] -= quantity
-            positions[ticker]["cost_gbp"] -= average_cost * quantity
+            price = _parse_money(row.get("Price per share"))
+            proceeds = _parse_money(row.get("Total Amount"))
+            matched_quantity = min(quantity, max(current_quantity, 0))
+            matched_proceeds = matched_quantity * (price or 0)
+            unmatched_quantity = max(quantity - matched_quantity, 0)
+            positions[ticker]["realized_pnl_gbp"] += matched_proceeds - average_cost * matched_quantity
+            positions[ticker]["unmatched_sell_proceeds_gbp"] += (
+                unmatched_quantity * (price or 0) if price is not None else (proceeds or 0)
+            )
+            positions[ticker]["quantity"] -= matched_quantity
+            positions[ticker]["cost_gbp"] -= average_cost * matched_quantity
         elif transaction_type == "STOCK SPLIT":
             positions[ticker]["quantity"] += quantity
-    return {ticker: item for ticker, item in positions.items() if item["quantity"] > 1e-8}
+    return positions
 
 
 def _unique_transaction_rows(paths: list[Path]) -> tuple[list[dict[str, str]], int]:
@@ -144,6 +166,8 @@ def _build_portfolio_rows(positions: dict[str, dict[str, float]]) -> list[dict[s
     valued = []
     for ticker, position in positions.items():
         quantity = position["quantity"]
+        if quantity <= 1e-8:
+            continue
         monitor_symbol = monitor_symbols.get(ticker)
         yahoo_symbol = monitor_symbol or UK_SYMBOL_OVERRIDES.get(ticker) or ticker
         price, previous_price, native_currency, history = _latest_quote(yahoo_symbol)
@@ -164,6 +188,9 @@ def _build_portfolio_rows(positions: dict[str, dict[str, float]]) -> list[dict[s
         market_value = quantity * price_gbp if price_gbp is not None else 0.0
         unrealized = market_value - position["cost_gbp"]
         unrealized_pct = unrealized / position["cost_gbp"] * 100 if position["cost_gbp"] else None
+        realized_pnl = position.get("realized_pnl_gbp", 0.0)
+        dividend_income = position.get("dividend_income_gbp", 0.0)
+        total_return = unrealized + realized_pnl + dividend_income
         day_change_pct = (price / previous_price - 1) * 100 if price is not None and previous_price not in (None, 0) else None
         peak_price, peak_date, drawdown_from_peak_pct = _year_peak_snapshot(history)
         (
@@ -194,6 +221,9 @@ def _build_portfolio_rows(positions: dict[str, dict[str, float]]) -> list[dict[s
                 "market_value": market_value,
                 "unrealized_pnl": unrealized,
                 "unrealized_pnl_pct": unrealized_pct,
+                "realized_pnl": realized_pnl,
+                "dividend_income": dividend_income,
+                "total_return": total_return,
                 "day_change_pct": day_change_pct,
                 "year_peak_price_native": peak_price,
                 "year_peak_date": peak_date.isoformat() if peak_date else "",
@@ -214,6 +244,11 @@ def _build_portfolio_rows(positions: dict[str, dict[str, float]]) -> list[dict[s
             }
         )
     total = sum(item["market_value"] for item in valued)
+    account_realized_pnl = sum(item.get("realized_pnl_gbp", 0.0) for item in positions.values())
+    account_dividend_income = sum(item.get("dividend_income_gbp", 0.0) for item in positions.values())
+    unmatched_sell_proceeds = sum(item.get("unmatched_sell_proceeds_gbp", 0.0) for item in positions.values())
+    account_unrealized_pnl = sum(item["unrealized_pnl"] for item in valued)
+    account_total_return = account_unrealized_pnl + account_realized_pnl + account_dividend_income
     rows = []
     for item in sorted(valued, key=lambda value: value["market_value"], reverse=True):
         weight = item["market_value"] / total * 100 if total else 0.0
@@ -230,6 +265,14 @@ def _build_portfolio_rows(positions: dict[str, dict[str, float]]) -> list[dict[s
                 "estimated_market_value_gbp": f"{item['market_value']:.2f}",
                 "unrealized_pnl_gbp": _fmt_number(item["unrealized_pnl"]),
                 "unrealized_pnl_pct": _fmt_number(item["unrealized_pnl_pct"]),
+                "realized_pnl_gbp": _fmt_number(item["realized_pnl"]),
+                "dividend_income_gbp": _fmt_number(item["dividend_income"]),
+                "total_return_gbp": _fmt_number(item["total_return"]),
+                "account_unrealized_pnl_gbp": _fmt_number(account_unrealized_pnl),
+                "account_realized_pnl_gbp": _fmt_number(account_realized_pnl),
+                "account_dividend_income_gbp": _fmt_number(account_dividend_income),
+                "account_total_return_gbp": _fmt_number(account_total_return),
+                "unmatched_sell_proceeds_gbp": _fmt_number(unmatched_sell_proceeds),
                 "day_change_pct": _fmt_number(item["day_change_pct"]),
                 "year_peak_price_native": _fmt_number(item["year_peak_price_native"]),
                 "year_peak_date": str(item["year_peak_date"]),

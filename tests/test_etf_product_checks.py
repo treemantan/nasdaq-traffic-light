@@ -15,6 +15,7 @@ from market_report.etf_monitor import (
     _parse_ishares_portfolio_valuation,
     _parse_compact_number,
     _portfolio_exposure_summary,
+    _portfolio_mag7_summary,
 )
 from market_report.news_monitor import NewsEvent, NewsMonitor
 from market_report.render import _max_holdings_overlap, _portfolio_news_matches
@@ -111,6 +112,26 @@ class ETFProductCheckTests(unittest.TestCase):
         self.assertEqual(exposure_map["005930"].weight_pct, 10)
         self.assertEqual(exposure_map["000660"].weight_pct, 4.8)
         self.assertTrue(any("HBM / 存储链" in item for item in notes))
+
+    def test_portfolio_mag7_summary_combines_direct_and_etf_lookthrough(self) -> None:
+        asset = self._asset(
+            "A.L",
+            (
+                ETFHolding("MSFT", "Microsoft Corp", 8),
+                ETFHolding("AAPL", "Apple Inc", 6),
+            ),
+        )
+        positions = [
+            PortfolioPosition("A.L", 50, None, None, None, None, None, None, None, "covered"),
+            PortfolioPosition("NVDA", 7, None, None, None, None, None, None, None, "outside-monitor-pool"),
+        ]
+        exposures, notes = _portfolio_mag7_summary([asset], positions)
+        exposure_map = {item.symbol: item for item in exposures}
+
+        self.assertEqual(exposure_map["MSFT"].weight_pct, 4)
+        self.assertEqual(exposure_map["AAPL"].weight_pct, 3)
+        self.assertEqual(exposure_map["NVDA"].weight_pct, 7)
+        self.assertTrue(any("MAG7可识别暴露下限 14.0%" in item for item in notes))
 
     def test_portfolio_news_review_matches_direct_ticker_only(self) -> None:
         positions = [PortfolioPosition("NVDA", 10, None, None, None, None, None, None, None, "outside-monitor-pool")]

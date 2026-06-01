@@ -63,6 +63,14 @@ class PortfolioPosition:
     unrealized_pnl_pct: float | None
     day_change_pct: float | None
     monitor_status: str
+    realized_pnl_gbp: float | None = None
+    dividend_income_gbp: float | None = None
+    total_return_gbp: float | None = None
+    account_unrealized_pnl_gbp: float | None = None
+    account_realized_pnl_gbp: float | None = None
+    account_dividend_income_gbp: float | None = None
+    account_total_return_gbp: float | None = None
+    unmatched_sell_proceeds_gbp: float | None = None
     native_currency: str = ""
     current_price_native: float | None = None
     market_value_native: float | None = None
@@ -90,6 +98,15 @@ class PortfolioExposure:
     weight_pct: float
     direct_weight_pct: float
     etf_weight_pct: float
+
+
+@dataclass(frozen=True)
+class PortfolioPerformance:
+    unrealized_pnl_gbp: float = 0
+    realized_pnl_gbp: float = 0
+    dividend_income_gbp: float = 0
+    total_return_gbp: float = 0
+    unmatched_sell_proceeds_gbp: float = 0
 
 
 @dataclass(frozen=True)
@@ -264,8 +281,11 @@ class ETFMonitor:
     portfolio_warnings: list[str] = field(default_factory=list)
     portfolio_positions: list[PortfolioPosition] = field(default_factory=list)
     portfolio_total_value_gbp: float | None = None
+    portfolio_performance: PortfolioPerformance | None = None
     portfolio_exposures: list[PortfolioExposure] = field(default_factory=list)
     portfolio_exposure_notes: list[str] = field(default_factory=list)
+    portfolio_mag7_exposures: list[PortfolioExposure] = field(default_factory=list)
+    portfolio_mag7_notes: list[str] = field(default_factory=list)
 
 
 DEFAULT_ETF_SPECS = [
@@ -346,7 +366,9 @@ def fetch_etf_monitor(specs: list[ETFSpec] | None = None, macro_metrics: dict[st
         warnings.extend(asset.warnings)
     _save_cache(cache)
     portfolio_summary, portfolio_warnings, portfolio_positions, portfolio_total = _load_portfolio_summary(assets)
+    portfolio_performance = _portfolio_performance_summary(portfolio_positions)
     portfolio_exposures, portfolio_exposure_notes = _portfolio_exposure_summary(assets, portfolio_positions)
+    portfolio_mag7_exposures, portfolio_mag7_notes = _portfolio_mag7_summary(assets, portfolio_positions)
     return ETFMonitor(
         summary=_build_summary(assets),
         assets=assets,
@@ -356,8 +378,11 @@ def fetch_etf_monitor(specs: list[ETFSpec] | None = None, macro_metrics: dict[st
         portfolio_warnings=portfolio_warnings,
         portfolio_positions=portfolio_positions,
         portfolio_total_value_gbp=portfolio_total,
+        portfolio_performance=portfolio_performance,
         portfolio_exposures=portfolio_exposures,
         portfolio_exposure_notes=portfolio_exposure_notes,
+        portfolio_mag7_exposures=portfolio_mag7_exposures,
+        portfolio_mag7_notes=portfolio_mag7_notes,
     )
 
 
@@ -2182,6 +2207,14 @@ def _load_portfolio_summary(
             unrealized_pnl_pct=_safe_float(row.get("unrealized_pnl_pct")),
             day_change_pct=_safe_float(row.get("day_change_pct")),
             monitor_status=str(row.get("monitor_status") or "unknown"),
+            realized_pnl_gbp=_safe_float(row.get("realized_pnl_gbp")),
+            dividend_income_gbp=_safe_float(row.get("dividend_income_gbp")),
+            total_return_gbp=_safe_float(row.get("total_return_gbp")),
+            account_unrealized_pnl_gbp=_safe_float(row.get("account_unrealized_pnl_gbp")),
+            account_realized_pnl_gbp=_safe_float(row.get("account_realized_pnl_gbp")),
+            account_dividend_income_gbp=_safe_float(row.get("account_dividend_income_gbp")),
+            account_total_return_gbp=_safe_float(row.get("account_total_return_gbp")),
+            unmatched_sell_proceeds_gbp=_safe_float(row.get("unmatched_sell_proceeds_gbp")),
             native_currency=str(row.get("native_currency") or ""),
             current_price_native=_safe_float(row.get("current_price_native")),
             market_value_native=_safe_float(row.get("market_value_native")),
@@ -2205,6 +2238,7 @@ def _load_portfolio_summary(
         if str(row.get("symbol") or "").strip()
     ]
     portfolio_total = sum(item.market_value_gbp or 0 for item in portfolio_positions) or None
+    portfolio_performance = _portfolio_performance_summary(portfolio_positions)
     cached_quotes = [
         item.symbol for item in portfolio_positions if "cache:" in item.price_source.lower()
     ]
@@ -2250,6 +2284,11 @@ def _load_portfolio_summary(
             + "、".join(trend_breaks)
             + "。"
         )
+    if portfolio_performance and portfolio_performance.unmatched_sell_proceeds_gbp > 0:
+        warnings.append(
+            f"已实现交易盈亏仅统计成本基础可识别的卖出。导出窗口内另有 "
+            f"£{portfolio_performance.unmatched_sell_proceeds_gbp:,.2f} 卖出收入缺少对应买入成本，未计入总收益。"
+        )
     positions = []
     uncovered = []
     for row in rows:
@@ -2278,6 +2317,13 @@ def _load_portfolio_summary(
         "主要主题暴露：" + "、".join(f"{theme} {weight:.1f}%" for theme, weight in top_themes) + "。",
         f"组合加权TER约{weighted_ter / total:.2f}%。",
     ]
+    if portfolio_performance:
+        summary.append(
+            f"可识别总收益 {_fmt_signed_gbp(portfolio_performance.total_return_gbp)}："
+            f"未实现盈亏 {_fmt_signed_gbp(portfolio_performance.unrealized_pnl_gbp)}，"
+            f"已实现交易盈亏 {_fmt_signed_gbp(portfolio_performance.realized_pnl_gbp)}，"
+            f"股息收入 {_fmt_signed_gbp(portfolio_performance.dividend_income_gbp)}。"
+        )
     fx_notes = _portfolio_fx_notes(portfolio_positions)
     if fx_notes:
         summary.append("GBP参考估值使用抓取时点FX：" + "；".join(fx_notes) + "。")
@@ -2293,10 +2339,36 @@ def _portfolio_fx_notes(positions: list[PortfolioPosition]) -> list[str]:
     return [notes[key] for key in sorted(notes)]
 
 
+def _portfolio_performance_summary(positions: list[PortfolioPosition]) -> PortfolioPerformance | None:
+    if not positions:
+        return None
+    first = positions[0]
+    return PortfolioPerformance(
+        unrealized_pnl_gbp=first.account_unrealized_pnl_gbp
+        or sum(item.unrealized_pnl_gbp or 0 for item in positions),
+        realized_pnl_gbp=first.account_realized_pnl_gbp
+        if first.account_realized_pnl_gbp is not None
+        else sum(item.realized_pnl_gbp or 0 for item in positions),
+        dividend_income_gbp=first.account_dividend_income_gbp
+        if first.account_dividend_income_gbp is not None
+        else sum(item.dividend_income_gbp or 0 for item in positions),
+        total_return_gbp=first.account_total_return_gbp
+        if first.account_total_return_gbp is not None
+        else sum(item.total_return_gbp or 0 for item in positions),
+        unmatched_sell_proceeds_gbp=first.unmatched_sell_proceeds_gbp or 0,
+    )
+
+
 def _fmt_signed_pct(value: float | None) -> str:
     if value is None:
         return "N/A"
     return f"{value:+.2f}%"
+
+
+def _fmt_signed_gbp(value: float | None) -> str:
+    if value is None:
+        return "N/A"
+    return f"{value:+,.2f} GBP"
 
 
 def _portfolio_exposure_summary(
@@ -2368,6 +2440,70 @@ def _portfolio_exposure_summary(
     notes.append("组合穿透基于直接持仓与ETF前十大持仓近似计算，属于可识别下限，不等同于完整基金穿透。")
     hbm_total = sum(item.weight_pct for item in exposures if item.symbol in {"005930", "000660"})
     notes.append(f"Samsung Electronics 与 SK hynix 的 HBM / 存储链可识别暴露下限 {hbm_total:.1f}%。")
+    return exposures, notes
+
+
+def _portfolio_mag7_summary(
+    assets: list[ETFAssetMonitor], positions: list[PortfolioPosition]
+) -> tuple[list[PortfolioExposure], list[str]]:
+    focus = {
+        "AAPL": ("Apple", ("AAPL", "APPLE")),
+        "MSFT": ("Microsoft", ("MSFT", "MICROSOFT")),
+        "AMZN": ("Amazon", ("AMZN", "AMAZON")),
+        "GOOGL": ("Alphabet", ("GOOGL", "GOOG", "ALPHABET")),
+        "META": ("Meta Platforms", ("META", "META PLATFORMS")),
+        "NVDA": ("NVIDIA", ("NVDA", "NVIDIA")),
+        "TSLA": ("Tesla", ("TSLA", "TESLA")),
+    }
+    exposures, notes = _portfolio_focus_exposures(assets, positions, focus)
+    if not exposures:
+        return [], []
+    total = sum(item.weight_pct for item in exposures)
+    direct = sum(item.direct_weight_pct for item in exposures)
+    indirect = sum(item.etf_weight_pct for item in exposures)
+    return exposures, [
+        f"MAG7可识别暴露下限 {total:.1f}%：直接持仓 {direct:.1f}%，ETF前十大持仓间接暴露 {indirect:.1f}%。",
+        "MAG7穿透基于直接持仓与可获得的ETF前十大持仓，未覆盖部分可能继续包含大型科技公司。",
+    ] + notes
+
+
+def _portfolio_focus_exposures(
+    assets: list[ETFAssetMonitor],
+    positions: list[PortfolioPosition],
+    focus: dict[str, tuple[str, tuple[str, ...]]],
+) -> tuple[list[PortfolioExposure], list[str]]:
+    asset_map = {asset.symbol.upper(): asset for asset in assets}
+    direct = {symbol: 0.0 for symbol in focus}
+    indirect = {symbol: 0.0 for symbol in focus}
+    covered_etf_weight = 0.0
+    lookthrough_weight = 0.0
+    for position in positions:
+        symbol = position.symbol.upper()
+        direct_symbol = _focus_exposure_symbol(symbol, symbol, focus)
+        if direct_symbol:
+            direct[direct_symbol] += position.weight_pct
+        asset = asset_map.get(symbol)
+        if asset is None:
+            continue
+        covered_etf_weight += position.weight_pct
+        if not asset.holdings:
+            continue
+        lookthrough_weight += position.weight_pct
+        for holding in asset.holdings:
+            holding_symbol = _focus_exposure_symbol(holding.symbol, holding.name, focus)
+            if holding_symbol:
+                indirect[holding_symbol] += position.weight_pct * holding.weight / 100
+    exposures = [
+        PortfolioExposure(symbol, label, direct[symbol] + indirect[symbol], direct[symbol], indirect[symbol])
+        for symbol, (label, _aliases) in focus.items()
+        if direct[symbol] + indirect[symbol] > 0
+    ]
+    exposures.sort(key=lambda item: item.weight_pct, reverse=True)
+    notes = []
+    if covered_etf_weight > lookthrough_weight:
+        notes.append(
+            f"当前已识别ETF权重 {covered_etf_weight:.1f}%，其中 {lookthrough_weight:.1f}% 可获得前十大持仓。"
+        )
     return exposures, notes
 
 
