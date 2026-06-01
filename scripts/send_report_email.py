@@ -220,6 +220,7 @@ def _report_from_payload(payload: dict):
         ScoredReport,
     )
     from market_report.news_monitor import NewsEvent, NewsMonitor
+    from market_report.mag7_capital_network import AggregateCapitalDisclosure, CapitalRelation, Mag7CapitalNetwork
 
     metrics = {
         key: _dataclass_from_dict(
@@ -284,6 +285,29 @@ def _report_from_payload(payload: dict):
                 "warnings": lambda raw: tuple(raw or ()),
             },
         )
+    mag7_capital_network = None
+    if isinstance(payload.get("mag7_capital_network"), dict):
+        mag7_capital_network = _dataclass_from_dict(
+            Mag7CapitalNetwork,
+            payload["mag7_capital_network"],
+            converters={
+                "relations": lambda raw: tuple(
+                    _dataclass_from_dict(
+                        CapitalRelation,
+                        item,
+                        converters={"themes": lambda themes: tuple(themes or ())},
+                    )
+                    for item in (raw or [])
+                    if isinstance(item, dict)
+                ),
+                "aggregate_disclosures": lambda raw: tuple(
+                    _dataclass_from_dict(AggregateCapitalDisclosure, item)
+                    for item in (raw or [])
+                    if isinstance(item, dict)
+                ),
+                "warnings": lambda raw: tuple(raw or ()),
+            },
+        )
 
     return _dataclass_from_dict(
         ScoredReport,
@@ -294,6 +318,7 @@ def _report_from_payload(payload: dict):
             "iron_condor": lambda raw: _dataclass_from_dict(IronCondorAssessment, raw or {}),
             "etf_monitor": lambda _raw: etf_monitor,
             "news_monitor": lambda _raw: news_monitor,
+            "mag7_capital_network": lambda _raw: mag7_capital_network,
         },
     )
 

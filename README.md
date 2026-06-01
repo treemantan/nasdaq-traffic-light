@@ -9,6 +9,7 @@
 - Iron Condor 环境过滤器，仅评估区间型卖波动环境，不提供交易指令
 - UK 可交易 ETF 的估值、趋势、拥挤度、流动性、相关性和 beta 面板
 - Revolut statement 组合导入、GBP 参考估值、AI/HBM 持仓穿透和回撤风险复核
+- MAG7 企业资本关系图谱，区分具名股权投资、附条件投资权利、战略合作与聚合披露
 - 本地、Windows Task Scheduler、GitHub Actions、OneDrive Graph 导入和邮件发送
 
 ## 快速开始
@@ -31,6 +32,7 @@ output/market-report-YYYY-MM-DD.json
 - [方法论：评分、相似环境、walk-forward 与 MAD 自适应校准](docs/METHODOLOGY.md)
 - [数据源、缓存与回退机制](docs/DATA_SOURCES.md)
 - [组合行情缓存与降级机制](docs/PORTFOLIO_QUOTE_CACHE.md)
+- [MAG7 企业资本关系图谱与后续地缘政治辅助分](docs/MAG7_CAPITAL_NETWORK.md)
 
 点击下方链接可打开对应文档。Codex 本地预览可能会调用系统默认 Markdown 应用；GitHub 中可直接跳转。
 

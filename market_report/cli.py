@@ -10,6 +10,7 @@ from .config import load_config
 from .data_sources import fetch_market_snapshot
 from .emailer import send_report_email
 from .etf_monitor import fetch_etf_monitor
+from .mag7_capital_network import build_mag7_capital_network
 from .memory import load_previous_regime, save_current_regime
 from .news_monitor import fetch_news_monitor
 from .render import render_html_report
@@ -27,6 +28,7 @@ def main() -> int:
     snapshot = fetch_market_snapshot()
     etf_monitor = fetch_etf_monitor(macro_metrics=snapshot.metrics)
     news_monitor = fetch_news_monitor()
+    mag7_capital_network = build_mag7_capital_network()
     previous_regime = load_previous_regime(config.output_dir)
     scored = score_snapshot(
         snapshot,
@@ -35,6 +37,7 @@ def main() -> int:
         report_timezone=config.report_timezone,
         etf_monitor=etf_monitor,
         news_monitor=news_monitor,
+        mag7_capital_network=mag7_capital_network,
     )
 
     output_path = Path(args.output) if args.output else config.output_dir / f"market-report-{scored.report_date}.html"

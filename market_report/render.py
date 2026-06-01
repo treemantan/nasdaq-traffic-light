@@ -5,6 +5,7 @@ from html import escape
 
 from .data_sources import MarketMetric
 from .etf_monitor import ETFAssetMonitor, ETFMonitor, PortfolioPosition
+from .mag7_capital_network import AggregateCapitalDisclosure, CapitalRelation, Mag7CapitalNetwork
 from .news_monitor import NewsEvent, NewsMonitor
 from .scoring import IronCondorAssessment, ScoredMetric, ScoredReport
 from .time_utils import format_timestamp
@@ -29,6 +30,7 @@ def render_html_report(report: ScoredReport, title: str) -> str:
     health_notes = _render_health_notes(report)
     iron_condor = _render_iron_condor(report.iron_condor)
     news_monitor = _render_news_monitor(report.news_monitor)
+    mag7_capital_network = _render_mag7_capital_network(report.mag7_capital_network)
     etf_monitor = _render_etf_monitor(report.etf_monitor, report.news_monitor)
 
     return f"""<!doctype html>
@@ -109,6 +111,13 @@ def render_html_report(report: ScoredReport, title: str) -> str:
     .news-item a {{ color: #bfdbfe; text-decoration: none; }}
     .news-meta {{ color: var(--muted); font-size: 12px; margin-top: 5px; }}
     .news-tags {{ display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }}
+    .capital-network {{ margin-bottom: 14px; }}
+    .capital-grid {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 12px; }}
+    .capital-item {{ border: 1px solid var(--line); border-radius: 6px; padding: 10px; background: rgba(255,255,255,.025); }}
+    .capital-item a {{ color: #bfdbfe; text-decoration: none; }}
+    .capital-value {{ color: #f3f4f6; font-weight: 700; margin-top: 4px; }}
+    .capital-note {{ color: var(--subtle); font-size: 13px; margin-top: 5px; }}
+    .capital-subhead {{ color: var(--text); font-size: 15px; font-weight: 700; margin-top: 14px; }}
     .etf-summary {{ color: var(--subtle); margin-bottom: 12px; }}
     .portfolio-panel {{ margin: 12px 0; border: 1px solid var(--line); border-radius: 8px; background: rgba(255,255,255,.02); overflow: hidden; }}
     .portfolio-head {{ display: grid; grid-template-columns: 1fr auto; gap: 14px; padding: 14px; background: rgba(255,255,255,.025); }}
@@ -205,6 +214,7 @@ def render_html_report(report: ScoredReport, title: str) -> str:
       .portfolio-head {{ grid-template-columns: 1fr; }}
       .portfolio-total {{ text-align: left; }}
       .portfolio-exposure-grid {{ grid-template-columns: 1fr; }}
+      .capital-grid {{ grid-template-columns: 1fr; }}
       .table-scroll {{ display: none; }}
       .etf-cards {{ display: block; }}
     }}
@@ -258,6 +268,7 @@ def render_html_report(report: ScoredReport, title: str) -> str:
 
     {iron_condor}
     {news_monitor}
+    {mag7_capital_network}
     {etf_monitor}
 
     <section class="grid">{groups}</section>
@@ -383,6 +394,50 @@ def _render_assessment_list(items: list[str]) -> str:
     if not items:
         return "<li>暂无明显信号。</li>"
     return "".join(f"<li>{escape(item)}</li>" for item in items)
+
+
+def _render_mag7_capital_network(network: Mag7CapitalNetwork | None) -> str:
+    if network is None:
+        return ""
+    relations = "\n".join(_render_capital_relation(item) for item in network.relations)
+    aggregates = "\n".join(_render_aggregate_capital_disclosure(item) for item in network.aggregate_disclosures)
+    warnings = "".join(f"<li>{escape(item)}</li>" for item in network.warnings)
+    aggregate_panel = (
+        f'<div class="capital-subhead">聚合披露：底层名单不可见</div><div class="capital-grid">{aggregates}</div>'
+        if aggregates
+        else ""
+    )
+    return f"""<section class="panel capital-network">
+      <h2>MAG7企业资本关系图谱</h2>
+      <div class="summary">{escape(network.summary)}</div>
+      <div class="small-note">以下记录来自公司公告或监管披露，按关系类型区分股权投资、投资权利、云合作与聚合披露。该板块与“你的组合 MAG7 暴露”是两个不同视角。</div>
+      <div class="capital-grid">{relations}</div>
+      {aggregate_panel}
+      <div class="capital-subhead">使用边界</div>
+      <ul class="small-note">{warnings}</ul>
+    </section>"""
+
+
+def _render_capital_relation(item: CapitalRelation) -> str:
+    themes = "".join(f'<span class="tag">{escape(theme)}</span>' for theme in item.themes)
+    return f"""<article class="capital-item">
+      <a href="{escape(item.source_url)}"><strong>{escape(item.investor)} · {escape(item.investor_ticker)}</strong> → {escape(item.target)} · {escape(item.target_ticker)}</a>
+      <div class="news-meta">{escape(item.relation_type)} · 披露日期 {escape(item.disclosed_at)} · 置信度 {escape(item.confidence)}</div>
+      <div class="capital-value">{escape(item.disclosed_value)}</div>
+      <div class="capital-note">{escape(item.note)}</div>
+      <div class="news-tags">{themes}</div>
+      <div class="news-meta">来源：{escape(item.source)}</div>
+    </article>"""
+
+
+def _render_aggregate_capital_disclosure(item: AggregateCapitalDisclosure) -> str:
+    return f"""<article class="capital-item">
+      <a href="{escape(item.source_url)}"><strong>{escape(item.investor)} · {escape(item.investor_ticker)}</strong></a>
+      <div class="news-meta">{escape(item.category)} · 披露日期 {escape(item.disclosed_at)}</div>
+      <div class="capital-value">{escape(item.disclosed_value)}</div>
+      <div class="capital-note">{escape(item.note)}</div>
+      <div class="news-meta">来源：{escape(item.source)}</div>
+    </article>"""
 
 
 def _render_etf_monitor(monitor: ETFMonitor | None, news_monitor: NewsMonitor | None = None) -> str:
