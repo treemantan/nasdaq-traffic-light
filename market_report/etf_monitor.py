@@ -78,6 +78,8 @@ class PortfolioPosition:
     distance_sma200_pct: float | None = None
     daily_volatility_pct: float | None = None
     pullback_sigma_1m: float | None = None
+    yellow_drawdown_threshold_pct: float = 5
+    red_drawdown_threshold_pct: float = 10
     drawdown_regime: str = ""
 
 
@@ -2195,6 +2197,8 @@ def _load_portfolio_summary(
             distance_sma200_pct=_safe_float(row.get("distance_sma200_pct")),
             daily_volatility_pct=_safe_float(row.get("daily_volatility_pct")),
             pullback_sigma_1m=_safe_float(row.get("pullback_sigma_1m")),
+            yellow_drawdown_threshold_pct=_safe_float(row.get("yellow_drawdown_threshold_pct")) or 5,
+            red_drawdown_threshold_pct=_safe_float(row.get("red_drawdown_threshold_pct")) or 10,
             drawdown_regime=str(row.get("drawdown_regime") or ""),
         )
         for row in rows
@@ -2220,19 +2224,21 @@ def _load_portfolio_summary(
             + "。原币市值、日变化、距年内高点、SMA200 与未实现盈亏暂不可用。"
         )
     red_peak_watches = [
-        f"{item.symbol} {_fmt_signed_pct(item.drawdown_from_year_peak_pct)}"
+        f"{item.symbol} {_fmt_signed_pct(item.drawdown_from_year_peak_pct)}（阈值 -{item.red_drawdown_threshold_pct:.1f}%）"
         for item in portfolio_positions
-        if item.drawdown_from_year_peak_pct is not None and item.drawdown_from_year_peak_pct <= -10
+        if item.drawdown_from_year_peak_pct is not None
+        and item.drawdown_from_year_peak_pct <= -item.red_drawdown_threshold_pct
     ]
     yellow_peak_watches = [
-        f"{item.symbol} {_fmt_signed_pct(item.drawdown_from_year_peak_pct)}"
+        f"{item.symbol} {_fmt_signed_pct(item.drawdown_from_year_peak_pct)}（阈值 -{item.yellow_drawdown_threshold_pct:.1f}%）"
         for item in portfolio_positions
-        if item.drawdown_from_year_peak_pct is not None and -10 < item.drawdown_from_year_peak_pct <= -5
+        if item.drawdown_from_year_peak_pct is not None
+        and -item.red_drawdown_threshold_pct < item.drawdown_from_year_peak_pct <= -item.yellow_drawdown_threshold_pct
     ]
     if red_peak_watches:
-        warnings.append("红色回撤观察：以下持仓较年内高点回撤超过10%，需复核趋势、估值与仓位风险：" + "、".join(red_peak_watches) + "。")
+        warnings.append("红色回撤观察：以下持仓较年内高点回撤超过自身波动率自适应阈值，需复核趋势、估值与仓位风险：" + "、".join(red_peak_watches) + "。")
     if yellow_peak_watches:
-        warnings.append("黄色回撤观察：以下持仓较年内高点回撤超过5%，需观察回撤性质与支撑位：" + "、".join(yellow_peak_watches) + "。")
+        warnings.append("黄色回撤观察：以下持仓较年内高点回撤超过自身波动率自适应阈值，需观察回撤性质与支撑位：" + "、".join(yellow_peak_watches) + "。")
     trend_breaks = [
         item.symbol
         for item in portfolio_positions

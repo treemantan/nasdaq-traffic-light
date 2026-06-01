@@ -25,7 +25,7 @@ from market_report.etf_monitor import (
 
 
 UK_SYMBOL_OVERRIDES = {"IGTM": "IGTM.L", "ISF": "ISF.L"}
-REVOLUT_STATEMENT_COLUMNS = {
+REVOLUT_TRANSACTION_FIELDS = (
     "Date",
     "Ticker",
     "Type",
@@ -34,7 +34,8 @@ REVOLUT_STATEMENT_COLUMNS = {
     "Total Amount",
     "Currency",
     "FX Rate",
-}
+)
+REVOLUT_STATEMENT_COLUMNS = set(REVOLUT_TRANSACTION_FIELDS)
 PORTFOLIO_QUOTE_CACHE_PATH = Path("output") / "cache" / "portfolio_quote_cache.json"
 PORTFOLIO_QUOTE_CACHE_MAX_AGE = timedelta(days=7)
 _PORTFOLIO_QUOTE_CACHE: dict[str, dict[str, object]] | None = None
@@ -79,26 +80,46 @@ def main() -> int:
 
 def _reconstruct_positions(paths: list[Path]) -> dict[str, dict[str, float]]:
     positions: dict[str, dict[str, float]] = defaultdict(lambda: {"quantity": 0.0, "cost_gbp": 0.0})
+    rows, duplicate_count = _unique_transaction_rows(paths)
+    if duplicate_count:
+        print(f"Removed {duplicate_count} duplicate transaction row(s) across overlapping statements.")
+    for row in rows:
+        ticker = str(row.get("Ticker") or "").strip().upper()
+        transaction_type = str(row.get("Type") or "").strip().upper()
+        quantity = _safe_float(row.get("Quantity"))
+        if not ticker or quantity is None:
+            continue
+        if transaction_type.startswith("BUY"):
+            price = _parse_money(row.get("Price per share"))
+            positions[ticker]["quantity"] += quantity
+            positions[ticker]["cost_gbp"] += quantity * (price or 0)
+        elif transaction_type.startswith("SELL"):
+            current_quantity = positions[ticker]["quantity"]
+            average_cost = positions[ticker]["cost_gbp"] / current_quantity if current_quantity else 0
+            positions[ticker]["quantity"] -= quantity
+            positions[ticker]["cost_gbp"] -= average_cost * quantity
+        elif transaction_type == "STOCK SPLIT":
+            positions[ticker]["quantity"] += quantity
+    return {ticker: item for ticker, item in positions.items() if item["quantity"] > 1e-8}
+
+
+def _unique_transaction_rows(paths: list[Path]) -> tuple[list[dict[str, str]], int]:
+    rows_by_fingerprint: dict[tuple[str, ...], dict[str, str]] = {}
+    duplicate_count = 0
     for path in paths:
         with path.open("r", encoding="utf-8-sig", newline="") as handle:
             for row in csv.DictReader(handle):
-                ticker = str(row.get("Ticker") or "").strip().upper()
-                transaction_type = str(row.get("Type") or "").strip().upper()
-                quantity = _safe_float(row.get("Quantity"))
-                if not ticker or quantity is None:
+                fingerprint = tuple(_normalize_statement_cell(row.get(field)) for field in REVOLUT_TRANSACTION_FIELDS)
+                if fingerprint in rows_by_fingerprint:
+                    duplicate_count += 1
                     continue
-                if transaction_type.startswith("BUY"):
-                    price = _parse_money(row.get("Price per share"))
-                    positions[ticker]["quantity"] += quantity
-                    positions[ticker]["cost_gbp"] += quantity * (price or 0)
-                elif transaction_type.startswith("SELL"):
-                    current_quantity = positions[ticker]["quantity"]
-                    average_cost = positions[ticker]["cost_gbp"] / current_quantity if current_quantity else 0
-                    positions[ticker]["quantity"] -= quantity
-                    positions[ticker]["cost_gbp"] -= average_cost * quantity
-                elif transaction_type == "STOCK SPLIT":
-                    positions[ticker]["quantity"] += quantity
-    return {ticker: item for ticker, item in positions.items() if item["quantity"] > 1e-8}
+                rows_by_fingerprint[fingerprint] = row
+    rows = sorted(rows_by_fingerprint.values(), key=lambda row: _normalize_statement_cell(row.get("Date")))
+    return rows, duplicate_count
+
+
+def _normalize_statement_cell(value: object) -> str:
+    return " ".join(str(value or "").strip().split())
 
 
 def _is_revolut_statement(path: Path) -> bool:
@@ -145,9 +166,21 @@ def _build_portfolio_rows(positions: dict[str, dict[str, float]]) -> list[dict[s
         unrealized_pct = unrealized / position["cost_gbp"] * 100 if position["cost_gbp"] else None
         day_change_pct = (price / previous_price - 1) * 100 if price is not None and previous_price not in (None, 0) else None
         peak_price, peak_date, drawdown_from_peak_pct = _year_peak_snapshot(history)
-        peak_watch = _peak_watch_label(drawdown_from_peak_pct)
-        sma200, distance_sma200_pct, daily_volatility_pct, pullback_sigma_1m, drawdown_regime = (
+        (
+            sma200,
+            distance_sma200_pct,
+            daily_volatility_pct,
+            pullback_sigma_1m,
+            yellow_drawdown_threshold_pct,
+            red_drawdown_threshold_pct,
+            drawdown_regime,
+        ) = (
             _portfolio_drawdown_snapshot(history, drawdown_from_peak_pct)
+        )
+        peak_watch = _peak_watch_label(
+            drawdown_from_peak_pct,
+            yellow_drawdown_threshold_pct,
+            red_drawdown_threshold_pct,
         )
         valued.append(
             {
@@ -170,6 +203,8 @@ def _build_portfolio_rows(positions: dict[str, dict[str, float]]) -> list[dict[s
                 "distance_sma200_pct": distance_sma200_pct,
                 "daily_volatility_pct": daily_volatility_pct,
                 "pullback_sigma_1m": pullback_sigma_1m,
+                "yellow_drawdown_threshold_pct": yellow_drawdown_threshold_pct,
+                "red_drawdown_threshold_pct": red_drawdown_threshold_pct,
                 "drawdown_regime": drawdown_regime,
                 "fx_pair": fx_pair,
                 "fx_rate": fx_rate,
@@ -204,6 +239,8 @@ def _build_portfolio_rows(positions: dict[str, dict[str, float]]) -> list[dict[s
                 "distance_sma200_pct": _fmt_number(item["distance_sma200_pct"]),
                 "daily_volatility_pct": _fmt_number(item["daily_volatility_pct"]),
                 "pullback_sigma_1m": _fmt_number(item["pullback_sigma_1m"]),
+                "yellow_drawdown_threshold_pct": _fmt_number(item["yellow_drawdown_threshold_pct"]),
+                "red_drawdown_threshold_pct": _fmt_number(item["red_drawdown_threshold_pct"]),
                 "drawdown_regime": str(item["drawdown_regime"]),
                 "fx_pair": str(item["fx_pair"]),
                 "fx_rate": _fmt_number(item["fx_rate"]),
@@ -352,14 +389,14 @@ def _year_peak_snapshot(history: list[tuple[date, float]]) -> tuple[float | None
     return peak_price, peak_date, drawdown
 
 
-def _peak_watch_label(drawdown_pct: float | None) -> str:
+def _peak_watch_label(drawdown_pct: float | None, yellow_threshold: float = 5, red_threshold: float = 10) -> str:
     if drawdown_pct is None:
         return "数据不足"
-    if drawdown_pct <= -10:
-        return "红色观察：较年内高点回撤超过10%，需复核趋势、估值与仓位风险"
-    if drawdown_pct <= -5:
-        return "黄色观察：较年内高点回撤超过5%，需观察回撤性质与支撑位"
-    return "常态：距年内高点回撤仍在5%以内"
+    if drawdown_pct <= -red_threshold:
+        return f"红色观察：较年内高点回撤超过自适应阈值{red_threshold:.1f}%，需复核趋势、估值与仓位风险"
+    if drawdown_pct <= -yellow_threshold:
+        return f"黄色观察：较年内高点回撤超过自适应阈值{yellow_threshold:.1f}%，需观察回撤性质与支撑位"
+    return f"常态：距年内高点回撤仍在自适应阈值{yellow_threshold:.1f}%以内"
 
 
 def _parse_money(raw: object) -> float | None:
@@ -372,7 +409,7 @@ def _parse_money(raw: object) -> float | None:
 
 def _portfolio_drawdown_snapshot(
     history: list[tuple[date, float]], drawdown_pct: float | None
-) -> tuple[float | None, float | None, float | None, float | None, str]:
+) -> tuple[float | None, float | None, float | None, float | None, float, float, str]:
     values = [price for _, price in history]
     latest_price = values[-1] if values else None
     sma200 = _sma(values, 200)
@@ -383,30 +420,46 @@ def _portfolio_drawdown_snapshot(
         if drawdown_pct is not None and daily_volatility_pct not in (None, 0)
         else None
     )
+    yellow_threshold, red_threshold = _adaptive_drawdown_thresholds(daily_volatility_pct)
     return (
         sma200,
         distance_sma200_pct,
         daily_volatility_pct,
         pullback_sigma_1m,
-        _drawdown_regime_label(drawdown_pct, distance_sma200_pct, pullback_sigma_1m),
+        yellow_threshold,
+        red_threshold,
+        _drawdown_regime_label(
+            drawdown_pct,
+            distance_sma200_pct,
+            pullback_sigma_1m,
+            yellow_threshold,
+            red_threshold,
+        ),
     )
+
+
+def _adaptive_drawdown_thresholds(daily_volatility_pct: float | None) -> tuple[float, float]:
+    monthly_volatility = daily_volatility_pct * math.sqrt(21) if daily_volatility_pct is not None else 0
+    return max(5.0, monthly_volatility), max(10.0, monthly_volatility * 2)
 
 
 def _drawdown_regime_label(
     drawdown_pct: float | None,
     distance_sma200_pct: float | None,
     pullback_sigma_1m: float | None,
+    yellow_threshold: float = 5,
+    red_threshold: float = 10,
 ) -> str:
     if drawdown_pct is None:
         return "数据不足：暂无法判断回撤性质"
-    if drawdown_pct > -5:
-        return "常态波动：距年内高点回撤仍在5%以内"
+    if drawdown_pct > -yellow_threshold and (distance_sma200_pct is None or distance_sma200_pct > -3):
+        return f"常态波动：距年内高点回撤仍在自适应阈值{yellow_threshold:.1f}%以内"
     if distance_sma200_pct is not None and distance_sma200_pct >= 0 and (
         pullback_sigma_1m is None or pullback_sigma_1m < 2
     ):
         return "正常回调观察：仍位于SMA200上方，回撤尚未显著偏离近期波动区间"
     if (distance_sma200_pct is not None and distance_sma200_pct <= -3) or (
-        drawdown_pct <= -10 and pullback_sigma_1m is not None and pullback_sigma_1m >= 2
+        drawdown_pct <= -red_threshold and pullback_sigma_1m is not None and pullback_sigma_1m >= 2
     ):
         return "趋势破坏风险：回撤较深且中期趋势或波动结构已转弱"
     return "需要复核：回撤超过常态区间，需结合SMA200、波动率与基本面事件判断"

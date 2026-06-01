@@ -35,7 +35,9 @@
 python scripts/import_revolut_statement.py "*.csv"
 ```
 
-导入器会读取 CSV 表头确认是否为 Revolut trading statement，因此可以识别标准文件名和 iPhone 生成的 UUID 文件名。导入器按 `BUY`、`SELL` 和 `STOCK SPLIT` 重建数量与历史 GBP 成本，并抓取 Yahoo 最新价格。美元和欧元资产使用抓取时点的 GBP/USD 或 GBP/EUR 汇率转换为 GBP 参考市值。
+导入器会读取 CSV 表头确认是否为 Revolut trading statement，因此可以识别标准文件名和 iPhone 生成的 UUID 文件名。多个导出可以保留在 OneDrive inbox 中：系统使用 `Date`、`Ticker`、`Type`、`Quantity`、`Price per share`、`Total Amount`、`Currency` 和 `FX Rate` 建立交易指纹，移除重叠 statement 中的重复行，再按时间顺序重建持仓。无需人工清理旧文件。
+
+导入器按 `BUY`、`SELL` 和 `STOCK SPLIT` 重建数量与历史 GBP 成本，并抓取 Yahoo 最新价格。美元和欧元资产使用抓取时点的 GBP/USD 或 GBP/EUR 汇率转换为 GBP 参考市值。
 
 组合面板显示：
 
@@ -46,10 +48,10 @@ python scripts/import_revolut_statement.py "*.csv"
 
 ## 回撤性质判断
 
-距年内高点回撤仍保留两层直观预警：
+距年内高点回撤使用两层自适应预警：
 
-- 超过 `5%`：黄色观察
-- 超过 `10%`：红色观察
+- 黄色阈值：`max(5%, 1 × 稳健月度波动率)`
+- 红色阈值：`max(10%, 2 × 稳健月度波动率)`
 
 为了区分正常回调与趋势破坏，系统额外计算：
 
@@ -58,10 +60,12 @@ python scripts/import_revolut_statement.py "*.csv"
 - `回撤约多少 σ(1M)`：年内峰值回撤除以 `稳健日波动率 × sqrt(21)`
 - 可直接匹配到持仓 ticker 的新闻事件
 
+其中稳健月度波动率约等于 `稳健日波动率 × sqrt(21)`。`5%` 和 `10%` 仅作为最低观察门槛：低波动宽基不会因为阈值过低而频繁报警，高波动主题 ETF 也不会因为统一阈值而被过度标记。价格明显跌破 SMA200 时，系统仍会提高趋势破坏风险等级。
+
 解释层：
 
-- `常态波动`：回撤不超过 5%
-- `正常回调观察`：回撤超过 5%，但仍在 SMA200 上方，且没有显著超出一个月正常波动区间
+- `常态波动`：回撤不超过自身自适应黄色阈值
+- `正常回调观察`：回撤超过黄色阈值，但仍在 SMA200 上方，且没有显著超出一个月正常波动区间
 - `需要复核`：回撤已经离开常态区间，但技术证据尚未充分指向趋势破坏
 - `趋势破坏风险`：价格明显跌破 SMA200，或较深回撤同时达到较高波动倍数
 

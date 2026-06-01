@@ -36,6 +36,22 @@ class RevolutImportTests(unittest.TestCase):
         self.assertEqual(positions["VUAG"]["quantity"], 3)
         self.assertEqual(positions["VUAG"]["cost_gbp"], 310)
 
+    def test_overlapping_statement_rows_are_deduplicated_before_position_rebuild(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            first = Path(directory) / "old.csv"
+            second = Path(directory) / "new.csv"
+            transaction = (
+                "2026-05-01T10:00:00Z,VUAG,BUY - MARKET,2,GBP 100,GBP 200,GBP,1.0000\n"
+            )
+            header = "Date,Ticker,Type,Quantity,Price per share,Total Amount,Currency,FX Rate\n"
+            first.write_text(header + transaction, encoding="utf-8")
+            second.write_text(header + transaction, encoding="utf-8")
+
+            positions = _reconstruct_positions([first, second])
+
+        self.assertEqual(positions["VUAG"]["quantity"], 2)
+        self.assertEqual(positions["VUAG"]["cost_gbp"], 200)
+
     def test_uuid_named_iphone_export_is_recognized_by_header(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             statement = Path(directory) / "9B4221B1-92C0-4957-B42B-320C617C4FE8.csv"
@@ -104,6 +120,14 @@ class RevolutImportTests(unittest.TestCase):
         self.assertIsNotNone(snapshot[1])
         self.assertIsNotNone(snapshot[2])
         self.assertIsNotNone(snapshot[3])
+
+    def test_adaptive_drawdown_thresholds_scale_with_robust_monthly_volatility(self) -> None:
+        low_volatility = MODULE._adaptive_drawdown_thresholds(0.5)
+        high_volatility = MODULE._adaptive_drawdown_thresholds(3.0)
+
+        self.assertEqual(low_volatility, (5.0, 10.0))
+        self.assertGreater(high_volatility[0], 5)
+        self.assertGreater(high_volatility[1], 10)
 
     def test_latest_quote_uses_recent_persistent_cache_after_live_failure(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -88,6 +88,8 @@ run_onedrive_portfolio_report.bat
 logs/portfolio-report-status.txt
 ```
 
+OneDrive inbox 可以保留历史导出，无需每次手工清理。导入器会基于完整交易字段移除重叠 statement 中的重复行，再按时间顺序重建持仓。保留旧文件也便于后续审计和回溯测试。
+
 ## OneDrive Graph 云端导入
 
 GitHub Actions 可以在本地电脑关机时通过 Microsoft Graph 下载 CSV：

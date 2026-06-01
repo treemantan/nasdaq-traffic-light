@@ -120,7 +120,7 @@ try {
         Write-Log "Using only the latest export from each account folder to avoid double counting overlapping statement windows."
     }
     else {
-        Write-Log "Keep only one latest export per investment account in the statement directory to avoid double counting overlapping exports." "WARN"
+        Write-Log "Overlapping statement exports are allowed. The importer deduplicates identical transaction rows before rebuilding positions."
     }
 
     $importArgs = @("scripts\import_revolut_statement.py") + @($uniqueStatements | ForEach-Object { $_.FullName })
