@@ -490,7 +490,7 @@ def _render_portfolio_row(position: PortfolioPosition) -> str:
     day_class = _pnl_class(position.day_change_pct)
     scope = "ETF观察池" if position.monitor_status == "covered" else "待穿透分析"
     return f"""<tr>
-      <td><span class="portfolio-symbol">{escape(position.symbol)}</span><br><span class="portfolio-scope">{scope}</span></td>
+      <td><span class="portfolio-symbol">{escape(position.symbol)}</span><br><span class="portfolio-scope">{scope}<br>{escape(position.price_source or "行情来源待确认")}</span></td>
       <td>{escape(_fmt_quantity(position.quantity))}</td>
       <td>{escape(_fmt_gbp(position.average_cost_gbp))}</td>
       <td>{escape(_fmt_native(position.current_price_native, position.native_currency))}</td>

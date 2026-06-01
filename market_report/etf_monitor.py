@@ -570,7 +570,7 @@ def _fetch_yahoo_history(symbol: str) -> list[tuple[date, float]]:
     return _fetch_yahoo_price_data(symbol).history
 
 
-def _fetch_yahoo_price_data(symbol: str) -> ETFPriceData:
+def _fetch_yahoo_price_data(symbol: str, timeout: int = 15, attempts: int = 3) -> ETFPriceData:
     encoded = urllib.parse.quote(symbol, safe="")
     urls = [
         f"https://query2.finance.yahoo.com/v8/finance/chart/{encoded}?range=5y&interval=1d",
@@ -579,7 +579,7 @@ def _fetch_yahoo_price_data(symbol: str) -> ETFPriceData:
     errors: list[str] = []
     for url in urls:
         try:
-            payload = _read_json(url, timeout=15)
+            payload = _read_json(url, timeout=timeout, attempts=attempts)
             break
         except Exception as exc:
             errors.append(f"{url}: {exc}")
@@ -2201,6 +2201,24 @@ def _load_portfolio_summary(
         if str(row.get("symbol") or "").strip()
     ]
     portfolio_total = sum(item.market_value_gbp or 0 for item in portfolio_positions) or None
+    cached_quotes = [
+        item.symbol for item in portfolio_positions if "cache:" in item.price_source.lower()
+    ]
+    statement_fallbacks = [
+        item.symbol for item in portfolio_positions if "statement-average-cost fallback" in item.price_source.lower()
+    ]
+    if cached_quotes:
+        warnings.append(
+            "组合行情使用最近有效缓存，当前值可用于参考，但不应视为实时账户行情："
+            + "、".join(cached_quotes)
+            + "。"
+        )
+    if statement_fallbacks:
+        warnings.append(
+            "组合行情抓取失败，以下持仓暂以 statement 平均成本降级估值："
+            + "、".join(statement_fallbacks)
+            + "。原币市值、日变化、距年内高点、SMA200 与未实现盈亏暂不可用。"
+        )
     red_peak_watches = [
         f"{item.symbol} {_fmt_signed_pct(item.drawdown_from_year_peak_pct)}"
         for item in portfolio_positions

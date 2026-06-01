@@ -5,6 +5,7 @@ import unittest
 from datetime import date
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "import_revolut_statement.py"
@@ -34,6 +35,17 @@ class RevolutImportTests(unittest.TestCase):
 
         self.assertEqual(positions["VUAG"]["quantity"], 3)
         self.assertEqual(positions["VUAG"]["cost_gbp"], 310)
+
+    def test_uuid_named_iphone_export_is_recognized_by_header(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            statement = Path(directory) / "9B4221B1-92C0-4957-B42B-320C617C4FE8.csv"
+            statement.write_text(
+                "Date,Ticker,Type,Quantity,Price per share,Total Amount,Currency,FX Rate\n"
+                "2026-06-01T00:00:00Z,VUAG,BUY - MARKET,1,GBP 100,GBP 100,GBP,1.0000\n",
+                encoding="utf-8",
+            )
+
+            self.assertTrue(MODULE._is_revolut_statement(statement))
 
     def test_usd_position_keeps_native_value_and_adds_gbp_reference(self) -> None:
         quotes = {
@@ -92,6 +104,29 @@ class RevolutImportTests(unittest.TestCase):
         self.assertIsNotNone(snapshot[1])
         self.assertIsNotNone(snapshot[2])
         self.assertIsNotNone(snapshot[3])
+
+    def test_latest_quote_uses_recent_persistent_cache_after_live_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            cache_path = Path(directory) / "portfolio_quote_cache.json"
+            history = [(date(2026, 5, 28), 98.0), (date(2026, 5, 29), 100.0)]
+            price_data = SimpleNamespace(history=history, meta={"currency": "USD"})
+            with patch.object(MODULE, "PORTFOLIO_QUOTE_CACHE_PATH", cache_path), patch.object(
+                MODULE, "_fetch_yahoo_price_data", return_value=price_data
+            ):
+                MODULE._PORTFOLIO_QUOTE_CACHE = None
+                MODULE._PORTFOLIO_QUOTE_CACHE_DIRTY = False
+                first = MODULE._latest_quote("NFLX")
+                MODULE._save_portfolio_quote_cache()
+
+            with patch.object(MODULE, "PORTFOLIO_QUOTE_CACHE_PATH", cache_path), patch.object(
+                MODULE, "_fetch_yahoo_price_data", side_effect=RuntimeError("temporary outage")
+            ):
+                MODULE._PORTFOLIO_QUOTE_CACHE = None
+                MODULE._PORTFOLIO_QUOTE_CACHE_DIRTY = False
+                second = MODULE._latest_quote("NFLX")
+
+        self.assertEqual(first, second)
+        self.assertEqual(MODULE._QUOTE_SOURCES["NFLX"], "Yahoo cache:NFLX")
 
 
 if __name__ == "__main__":

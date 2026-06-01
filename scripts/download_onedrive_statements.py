@@ -16,7 +16,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 
 GRAPH_ROOT = "https://graph.microsoft.com/v1.0"
 DEFAULT_FOLDER = "Trading/Revolut Transaction Statement"
-DEFAULT_PATTERN = "trading-account-statement_*.csv"
+DEFAULT_PATTERN = "*.csv"
 
 
 class _PreauthenticatedDownloadRedirectHandler(HTTPRedirectHandler):

@@ -73,6 +73,17 @@ class ETFProductCheckTests(unittest.TestCase):
 
         self.assertTrue(any("红色回撤观察" in item and "A.L -12.50%" in item for item in warnings))
 
+    def test_portfolio_summary_discloses_statement_cost_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "portfolio.csv"
+            path.write_text(
+                "symbol,weight_pct,price_source\nA.L,100,statement-average-cost fallback\n",
+                encoding="utf-8",
+            )
+            _, warnings, _, _ = _load_portfolio_summary([self._asset("A.L", ())], path)
+
+        self.assertTrue(any("statement 平均成本降级估值" in item and "A.L" in item for item in warnings))
+
     def test_portfolio_exposure_combines_direct_and_etf_top_holdings(self) -> None:
         asset = self._asset("A.L", (ETFHolding("NVDA", "NVIDIA", 10), ETFHolding("AVGO", "Broadcom", 5)))
         positions = [

@@ -316,7 +316,7 @@ def _render_portfolio_email_row(position: PortfolioPosition) -> str:
     day_color = _pnl_color(position.day_change_pct)
     scope = "ETF观察池" if position.monitor_status == "covered" else "待穿透"
     return f"""<tr>
-      <td style="padding:7px;border-bottom:1px solid #263244;"><strong>{escape(position.symbol)}</strong><br><span style="color:#9ca3af;">{scope}</span></td>
+      <td style="padding:7px;border-bottom:1px solid #263244;"><strong>{escape(position.symbol)}</strong><br><span style="color:#9ca3af;">{scope}<br>{escape(position.price_source or "行情来源待确认")}</span></td>
       <td style="padding:7px;border-bottom:1px solid #263244;">{escape(_fmt_native(position.market_value_native, position.native_currency))}<br><span style="color:#9ca3af;">{escape(_fmt_gbp(position.market_value_gbp))} · {escape(_fmt_fx(position))}</span></td>
       <td style="padding:7px;border-bottom:1px solid #263244;color:{pnl_color};">{escape(_fmt_signed_gbp(position.unrealized_pnl_gbp))}<br>{escape(_fmt_pct(position.unrealized_pnl_pct))}</td>
       <td style="padding:7px;border-bottom:1px solid #263244;color:{day_color};">{escape(_fmt_pct(position.day_change_pct))}</td>

@@ -16,6 +16,9 @@ SPEC.loader.exec_module(MODULE)
 
 
 class OneDriveCloudImportTests(unittest.TestCase):
+    def test_default_pattern_accepts_uuid_named_iphone_csv_exports(self) -> None:
+        self.assertEqual(MODULE.DEFAULT_PATTERN, "*.csv")
+
     def test_delegated_mode_uses_me_drive(self) -> None:
         config = MODULE.GraphConfig(
             client_id="client",

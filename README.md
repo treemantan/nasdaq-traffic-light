@@ -30,6 +30,7 @@ output/market-report-YYYY-MM-DD.json
 - [UK ETF 观察池、估值与组合导入](docs/ETF_AND_PORTFOLIO.md)
 - [方法论：评分、相似环境、walk-forward 与 MAD 自适应校准](docs/METHODOLOGY.md)
 - [数据源、缓存与回退机制](docs/DATA_SOURCES.md)
+- [组合行情缓存与降级机制](docs/PORTFOLIO_QUOTE_CACHE.md)
 
 ## 关于持仓回撤观察
 

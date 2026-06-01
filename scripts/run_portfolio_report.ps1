@@ -1,7 +1,7 @@
 param(
     [string]$ProjectDir = "",
     [string]$StatementDir = "",
-    [string]$StatementPattern = "trading-account-statement_*.csv",
+    [string]$StatementPattern = "*.csv",
     [string]$ConfigPath = "config.example.json",
     [string]$LogDir = "logs",
     [switch]$UseLatestPerAccountFolder
@@ -104,7 +104,7 @@ try {
     }
 
     if ($statementFiles.Count -eq 0) {
-        throw "No Revolut statement CSV found. Save the latest trading-account-statement_*.csv export into the configured inbox."
+        throw "No Revolut statement CSV found. Save the latest Revolut CSV export into the configured inbox."
     }
 
     $uniqueStatements = @(
