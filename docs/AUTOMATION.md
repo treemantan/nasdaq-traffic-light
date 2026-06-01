@@ -88,6 +88,15 @@ run_onedrive_portfolio_report.bat
 logs/portfolio-report-status.txt
 ```
 
+本地 runner 按日期追加日志：
+
+```text
+logs/portfolio-report-YYYY-MM-DD.log
+logs/market-report-YYYY-MM-DD.log
+```
+
+同一天可以运行多次。每次启动都会写入独立的 `RUN START` / `RUN END` 分隔块和唯一 `run_id`；结束块包含 `SUCCESS`、`FAILED` 或 `SKIPPED_BUSY`、耗时和最新 HTML 路径。组合导入会把自身 `run_id` 传给内部报告 runner 作为 `ParentRunId`，便于追踪一次双击触发的完整链路。需要排查单次运行时，在日志中搜索对应 `run_id` 即可。
+
 OneDrive inbox 可以保留历史导出，无需每次手工清理。导入器会基于完整交易字段移除重叠 statement 中的重复行，再按时间顺序重建持仓。保留旧文件也便于后续审计和回溯测试。
 
 ## OneDrive Graph 云端导入

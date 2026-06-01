@@ -20,9 +20,30 @@ function Write-Log {
         [string]$Message,
         [string]$Level = "INFO"
     )
-    $line = "{0} [{1}] {2}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $Level, $Message
+    $line = "{0} [{1}] [run_id={2}] {3}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $Level, $script:RunId, $Message
     Add-Content -Path $script:LogFile -Value $line -Encoding UTF8
     Write-Host $line
+}
+
+function Write-RunBoundary {
+    param(
+        [string]$Boundary,
+        [string]$Status = "",
+        [string]$ReportPath = ""
+    )
+    $separator = "=" * 96
+    $duration = [math]::Round(((Get-Date) - $script:RunStartedAt).TotalSeconds, 1)
+    $lines = @("", $separator, ("RUN {0} | {1} | run_id={2}" -f $Boundary, (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $script:RunId))
+    if ($Boundary -eq "START") {
+        $lines += "Mode: local-portfolio | StatementPattern: $StatementPattern"
+    }
+    else {
+        $lines += "Status: $Status | DurationSeconds: $duration"
+        if ($ReportPath) { $lines += "Report: $ReportPath" }
+    }
+    $lines += $separator
+    Add-Content -Path $script:LogFile -Value $lines -Encoding UTF8
+    foreach ($line in $lines) { Write-Host $line }
 }
 
 function Invoke-LoggedProcess {
@@ -67,7 +88,12 @@ Set-Location $ProjectDir
 $fullLogDir = Join-Path $ProjectDir $LogDir
 New-Item -ItemType Directory -Force -Path $fullLogDir | Out-Null
 $script:LogFile = Join-Path $fullLogDir ("portfolio-report-{0}.log" -f (Get-Date -Format "yyyy-MM-dd"))
+$script:RunStartedAt = Get-Date
+$script:RunId = "{0}-local-portfolio" -f $script:RunStartedAt.ToString("yyyyMMdd-HHmmss-fff")
+$script:RunStatus = "FAILED"
+$script:LatestReportPath = ""
 
+Write-RunBoundary "START"
 Write-Log "Starting local portfolio import and report generation."
 Write-Log "ProjectDir=$ProjectDir"
 if ($StatementDir) {
@@ -136,6 +162,7 @@ try {
         "-File", $runner,
         "-ProjectDir", $ProjectDir,
         "-ConfigPath", $ConfigPath,
+        "-ParentRunId", $script:RunId,
         "-DryRun"
     )
     $reportExitCode = Invoke-LoggedProcess -FileName "powershell.exe" -Arguments $reportArgs
@@ -147,8 +174,10 @@ try {
         Sort-Object LastWriteTime -Descending |
         Select-Object -First 1
     if ($latestReport) {
+        $script:LatestReportPath = $latestReport.FullName
         Write-Log ("Latest HTML report: {0}" -f $latestReport.FullName)
     }
+    $script:RunStatus = "SUCCESS"
     Write-Log "Local portfolio report completed successfully."
     exit 0
 }
@@ -156,4 +185,7 @@ catch {
     Write-Log $_.Exception.Message "ERROR"
     Write-Log "Local portfolio report failed." "ERROR"
     exit 1
+}
+finally {
+    Write-RunBoundary "END" $script:RunStatus $script:LatestReportPath
 }

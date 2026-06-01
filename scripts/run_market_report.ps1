@@ -3,6 +3,7 @@ param(
     [string]$ConfigPath = "config.email.json",
     [string]$LogDir = "logs",
     [string]$SecurePasswordPath = "secrets\smtp_password.secure.xml",
+    [string]$ParentRunId = "",
     [switch]$DryRun
 )
 
@@ -16,9 +17,30 @@ function Write-Log {
         [string]$Message,
         [string]$Level = "INFO"
     )
-    $line = "{0} [{1}] {2}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $Level, $Message
+    $line = "{0} [{1}] [run_id={2}] {3}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $Level, $script:RunId, $Message
     Add-Content -Path $script:LogFile -Value $line -Encoding UTF8
     Write-Host $line
+}
+
+function Write-RunBoundary {
+    param(
+        [string]$Boundary,
+        [string]$Status = "",
+        [string]$ReportPath = ""
+    )
+    $separator = "=" * 96
+    $duration = [math]::Round(((Get-Date) - $script:RunStartedAt).TotalSeconds, 1)
+    $lines = @("", $separator, ("RUN {0} | {1} | run_id={2}" -f $Boundary, (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $script:RunId))
+    if ($Boundary -eq "START") {
+        $lines += "Mode: market-report | DryRun: $([bool]$DryRun) | ParentRunId: $($script:ParentRunIdLabel)"
+    }
+    else {
+        $lines += "Status: $Status | DurationSeconds: $duration"
+        if ($ReportPath) { $lines += "Report: $ReportPath" }
+    }
+    $lines += $separator
+    Add-Content -Path $script:LogFile -Value $lines -Encoding UTF8
+    foreach ($line in $lines) { Write-Host $line }
 }
 
 function Set-SmtpPasswordFromSecureFile {
@@ -83,7 +105,13 @@ Set-Location $ProjectDir
 $fullLogDir = Join-Path $ProjectDir $LogDir
 New-Item -ItemType Directory -Force -Path $fullLogDir | Out-Null
 $script:LogFile = Join-Path $fullLogDir ("market-report-{0}.log" -f (Get-Date -Format "yyyy-MM-dd"))
+$script:RunStartedAt = Get-Date
+$script:RunId = "{0}-market-report" -f $script:RunStartedAt.ToString("yyyyMMdd-HHmmss-fff")
+$script:ParentRunIdLabel = if ($ParentRunId) { $ParentRunId } else { "none" }
+$script:RunStatus = "FAILED"
+$script:LatestReportPath = ""
 
+Write-RunBoundary "START"
 Write-Log "Starting Macro Regime Radar report."
 Write-Log "ProjectDir=$ProjectDir"
 Write-Log "ConfigPath=$ConfigPath"
@@ -109,6 +137,13 @@ try {
         throw "market_report exited with code $exitCode"
     }
 
+    $latestReport = Get-ChildItem -Path (Join-Path $ProjectDir "output") -File -Filter "market-report-*.html" |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+    if ($latestReport) {
+        $script:LatestReportPath = $latestReport.FullName
+    }
+    $script:RunStatus = "SUCCESS"
     Write-Log "Report run completed successfully."
     exit 0
 }
@@ -119,4 +154,7 @@ catch {
     }
     Write-Log "Report run failed." "ERROR"
     exit 1
+}
+finally {
+    Write-RunBoundary "END" $script:RunStatus $script:LatestReportPath
 }
