@@ -1,0 +1,51 @@
+[
+  {
+    "event_id": "nflx-2026-annual-meeting",
+    "symbols": ["NFLX"],
+    "title": "Netflix 2026年度股东大会",
+    "event_type": "管理层与治理事件",
+    "scope": "直接事件",
+    "status": "已确认",
+    "event_at": "2026-06-04T15:00:00-07:00",
+    "reminder_rule": "exact-6h",
+    "reminder_hours_before": 6,
+    "source_label": "Netflix IR：年度股东大会页面",
+    "source_url": "https://ir.netflix.net/investor-news-and-events/investor-events/event-details/2026/2026-Annual-Meeting-of-Stockholders/default.aspx",
+    "progress_source_label": "Netflix IR：投资者事件页面",
+    "progress_source_url": "https://ir.netflix.net/investor-news-and-events/investor-events/default.aspx",
+    "note": "该窗口用于复核管理层对盈利纪律、内容投入和竞争格局的最新语气。价格回撤预警本身不等同于基本面恶化。",
+    "watch_items": ["广告业务与利润率语气", "内容投入纪律", "竞争格局与用户参与度"]
+  },
+  {
+    "event_id": "nflx-sector-paramount-wbd-eu-review-2026-07-07",
+    "symbols": ["NFLX"],
+    "title": "Paramount-WBD欧盟反垄断初步审查截止窗口",
+    "event_type": "行业监管事件",
+    "scope": "行业事件",
+    "status": "媒体报道，待欧盟案件进展页确认",
+    "event_date": "2026-07-07",
+    "reminder_rule": "premarket",
+    "source_label": "Paramount：收购WBD官方公告",
+    "source_url": "https://paramount.gcs-web.com/news-releases/news-release-details/paramount-acquire-warner-bros-discovery-form-next-generation",
+    "progress_source_label": "Reuters转述：欧盟初步审查决定截止日",
+    "progress_source_url": "https://www.streetinsider.com/Reuters/Paramount%2Bseeks%2BEU%2Bapproval%2Bto%2Bbuy%2BWarner%2BBros%3B%2Bdecision%2Bdue%2BJuly%2B7/26589947.html",
+    "note": "该事件并非Netflix直接公司事件，但可能改变流媒体竞争格局和内容资产议价预期。",
+    "watch_items": ["欧盟是否批准或进入深入审查", "流媒体行业整合预期", "内容资产与分发议价变化"]
+  },
+  {
+    "event_id": "nflx-q2-2026-estimated-window",
+    "symbols": ["NFLX"],
+    "title": "Netflix Q2财报与guidance预计窗口",
+    "event_type": "财报事件",
+    "scope": "直接事件",
+    "status": "预计日期，等待Netflix IR正式确认",
+    "event_date": "2026-07-16",
+    "reminder_rule": "premarket",
+    "source_label": "Netflix IR：财务发布页面",
+    "source_url": "https://ir.netflix.net/investor-news-and-events/financial-releases/default.aspx",
+    "progress_source_label": "Netflix IR：财务发布页面",
+    "progress_source_url": "https://ir.netflix.net/investor-news-and-events/financial-releases/default.aspx",
+    "note": "当前日期仅作为预计观察窗口。收到Netflix IR正式公告后，应更新为已确认时刻。",
+    "watch_items": ["营收与利润率guidance", "广告业务进展", "内容投入和自由现金流", "估值对增长预期的敏感度"]
+  }
+]

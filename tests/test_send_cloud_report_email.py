@@ -20,6 +20,7 @@ class SendCloudReportEmailTests(unittest.TestCase):
     def test_without_portfolio_removes_private_fields(self) -> None:
         module = _load_module()
         payload = {
+            "portfolio_event_monitor": {"events": [{"event_id": "private-event"}]},
             "etf_monitor": {
                 "portfolio_positions": [{"symbol": "VUAG"}],
                 "portfolio_summary": ["summary"],
@@ -37,6 +38,7 @@ class SendCloudReportEmailTests(unittest.TestCase):
         self.assertIsNone(sanitized["etf_monitor"]["portfolio_total_value_gbp"])
         self.assertIsNone(sanitized["etf_monitor"]["portfolio_performance"])
         self.assertEqual(sanitized["etf_monitor"]["portfolio_mag7_exposures"], [])
+        self.assertIsNone(sanitized["portfolio_event_monitor"])
         self.assertEqual(payload["etf_monitor"]["portfolio_positions"], [{"symbol": "VUAG"}])
 
     def test_full_portfolio_run_sends_public_and_private_editions(self) -> None:

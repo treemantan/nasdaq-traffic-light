@@ -86,6 +86,7 @@ def _prepare_full_report() -> tuple[str, Path, str, dict, list[str]] | int:
 
 def _without_portfolio(payload: dict) -> dict:
     sanitized = deepcopy(payload)
+    sanitized["portfolio_event_monitor"] = None
     monitor = sanitized.get("etf_monitor")
     if isinstance(monitor, dict):
         monitor["portfolio_positions"] = []

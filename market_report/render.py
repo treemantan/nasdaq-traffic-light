@@ -7,6 +7,7 @@ from .data_sources import MarketMetric
 from .etf_monitor import ETFAssetMonitor, ETFMonitor, PortfolioPosition
 from .mag7_capital_network import AggregateCapitalDisclosure, CapitalRelation, Mag7CapitalNetwork
 from .news_monitor import NewsEvent, NewsMonitor
+from .portfolio_events import PortfolioEventMonitor
 from .scoring import IronCondorAssessment, ScoredMetric, ScoredReport
 from .time_utils import format_timestamp
 
@@ -31,7 +32,7 @@ def render_html_report(report: ScoredReport, title: str) -> str:
     iron_condor = _render_iron_condor(report.iron_condor)
     news_monitor = _render_news_monitor(report.news_monitor)
     mag7_capital_network = _render_mag7_capital_network(report.mag7_capital_network)
-    etf_monitor = _render_etf_monitor(report.etf_monitor, report.news_monitor)
+    etf_monitor = _render_etf_monitor(report.etf_monitor, report.news_monitor, report.portfolio_event_monitor)
 
     return f"""<!doctype html>
 <html lang="zh-CN">
@@ -125,6 +126,8 @@ def render_html_report(report: ScoredReport, title: str) -> str:
     .portfolio-total {{ text-align: right; }}
     .portfolio-total strong {{ display: block; font-size: 24px; }}
     .portfolio-notes {{ padding: 0 14px 12px; color: var(--subtle); font-size: 12px; }}
+    .portfolio-event-grid {{ display: grid; gap: 8px; margin-top: 8px; }}
+    .portfolio-event {{ padding: 10px; border: 1px solid var(--line); background: var(--panel-2); border-radius: 6px; }}
     .portfolio-exposure-grid {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; padding: 12px 14px 4px; }}
     .portfolio-exposure {{ border: 1px solid var(--line); border-radius: 6px; padding: 9px; background: rgba(255,255,255,.025); }}
     .portfolio-exposure strong {{ display: block; font-size: 18px; }}
@@ -440,7 +443,11 @@ def _render_aggregate_capital_disclosure(item: AggregateCapitalDisclosure) -> st
     </article>"""
 
 
-def _render_etf_monitor(monitor: ETFMonitor | None, news_monitor: NewsMonitor | None = None) -> str:
+def _render_etf_monitor(
+    monitor: ETFMonitor | None,
+    news_monitor: NewsMonitor | None = None,
+    portfolio_event_monitor: PortfolioEventMonitor | None = None,
+) -> str:
     if monitor is None:
         return ""
     groups = "\n".join(_render_etf_group(group, index) for index, group in enumerate(_group_etf_assets(monitor.assets)))
@@ -448,7 +455,7 @@ def _render_etf_monitor(monitor: ETFMonitor | None, news_monitor: NewsMonitor | 
     if monitor.warnings:
         warnings = "<div class=\"small-note\">数据提示：" + escape(_summarize_etf_warnings(monitor.warnings)) + "</div>"
     changes = _render_etf_notes("今日ETF变动摘要", monitor.change_summary)
-    portfolio = _render_portfolio_panel(monitor, news_monitor)
+    portfolio = _render_portfolio_panel(monitor, news_monitor, portfolio_event_monitor)
     sensitivities = _render_sensitivity_panel(monitor)
     return f"""<section class="panel">
       <h2>UK ETF估值、趋势与拥挤度监控器</h2>
@@ -462,7 +469,11 @@ def _render_etf_monitor(monitor: ETFMonitor | None, news_monitor: NewsMonitor | 
     </section>"""
 
 
-def _render_portfolio_panel(monitor: ETFMonitor, news_monitor: NewsMonitor | None = None) -> str:
+def _render_portfolio_panel(
+    monitor: ETFMonitor,
+    news_monitor: NewsMonitor | None = None,
+    portfolio_event_monitor: PortfolioEventMonitor | None = None,
+) -> str:
     if not monitor.portfolio_positions:
         return _render_etf_notes("实际组合视角", monitor.portfolio_summary + monitor.portfolio_warnings)
     rows = "\n".join(_render_portfolio_row(position) for position in monitor.portfolio_positions)
@@ -498,7 +509,8 @@ def _render_portfolio_panel(monitor: ETFMonitor, news_monitor: NewsMonitor | Non
         else ""
     )
     performance_panel = _render_portfolio_performance(monitor)
-    event_panel = _render_portfolio_event_review(monitor.portfolio_positions, news_monitor)
+    event_panel = _render_portfolio_event_calendar(portfolio_event_monitor)
+    event_panel += _render_portfolio_event_review(monitor.portfolio_positions, news_monitor)
     total = _fmt_gbp(monitor.portfolio_total_value_gbp)
     return f"""<div class="portfolio-panel">
       <div class="portfolio-head">
@@ -546,6 +558,27 @@ def _render_portfolio_performance(monitor: ETFMonitor) -> str:
         '<div class="portfolio-notes"><strong>收益归因（statement 导出窗口内，可识别口径）</strong></div>'
         f'<div class="portfolio-exposure-grid">{rendered}</div>'
     )
+
+
+def _render_portfolio_event_calendar(monitor: PortfolioEventMonitor | None) -> str:
+    if monitor is None or not monitor.events:
+        return ""
+    rows = "".join(
+        f"""<article class="portfolio-event">
+          <div><strong>{escape(event.title)}</strong> <span class="status">{escape(event.alert_level)}</span></div>
+          <div class="portfolio-scope">{escape(" / ".join(event.symbols))} · {escape(event.scope)} · {escape(event.status)} · {escape(event.event_time_label)}</div>
+          <div>{escape(event.note)}</div>
+          <div class="portfolio-scope">关注：{escape("；".join(event.watch_items))}</div>
+          <div class="portfolio-scope"><a href="{escape(event.source_url)}" target="_blank" rel="noopener noreferrer">{escape(event.source_label)}</a>
+          · <a href="{escape(event.progress_source_url)}" target="_blank" rel="noopener noreferrer">查看进展：{escape(event.progress_source_label)}</a></div>
+        </article>"""
+        for event in monitor.events
+    )
+    return f"""<div class="portfolio-notes">
+      <strong>持仓事件复核日历</strong>
+      <div class="small-note">{escape(monitor.summary)} 事件来源用于跟踪进展；预计日期会明确标记，不视为公司已确认日程。</div>
+      <div class="portfolio-event-grid">{rows}</div>
+    </div>"""
 
 
 def _render_portfolio_event_review(

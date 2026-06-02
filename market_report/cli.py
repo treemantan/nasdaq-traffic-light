@@ -13,6 +13,7 @@ from .etf_monitor import fetch_etf_monitor
 from .mag7_capital_network import build_mag7_capital_network
 from .memory import load_previous_regime, save_current_regime
 from .news_monitor import fetch_news_monitor
+from .portfolio_events import build_portfolio_event_monitor
 from .render import render_html_report
 from .scoring import score_snapshot
 
@@ -29,6 +30,7 @@ def main() -> int:
     etf_monitor = fetch_etf_monitor(macro_metrics=snapshot.metrics)
     news_monitor = fetch_news_monitor()
     mag7_capital_network = build_mag7_capital_network()
+    portfolio_event_monitor = build_portfolio_event_monitor(etf_monitor.portfolio_positions)
     previous_regime = load_previous_regime(config.output_dir)
     scored = score_snapshot(
         snapshot,
@@ -38,6 +40,7 @@ def main() -> int:
         etf_monitor=etf_monitor,
         news_monitor=news_monitor,
         mag7_capital_network=mag7_capital_network,
+        portfolio_event_monitor=portfolio_event_monitor,
     )
 
     output_path = Path(args.output) if args.output else config.output_dir / f"market-report-{scored.report_date}.html"

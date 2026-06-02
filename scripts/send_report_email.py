@@ -221,6 +221,7 @@ def _report_from_payload(payload: dict):
     )
     from market_report.news_monitor import NewsEvent, NewsMonitor
     from market_report.mag7_capital_network import AggregateCapitalDisclosure, CapitalRelation, Mag7CapitalNetwork
+    from market_report.portfolio_events import PortfolioEventMonitor, PortfolioEventObservation
 
     metrics = {
         key: _dataclass_from_dict(
@@ -308,6 +309,29 @@ def _report_from_payload(payload: dict):
                 "warnings": lambda raw: tuple(raw or ()),
             },
         )
+    portfolio_event_monitor = None
+    if isinstance(payload.get("portfolio_event_monitor"), dict):
+        portfolio_event_monitor = _dataclass_from_dict(
+            PortfolioEventMonitor,
+            payload["portfolio_event_monitor"],
+            converters={
+                "events": lambda raw: tuple(
+                    _dataclass_from_dict(
+                        PortfolioEventObservation,
+                        item,
+                        converters={
+                            "symbols": lambda symbols: tuple(symbols or ()),
+                            "watch_items": lambda watch_items: tuple(watch_items or ()),
+                            "event_at": _parse_datetime_or_now,
+                            "reminder_at": _parse_datetime_or_now,
+                        },
+                    )
+                    for item in (raw or [])
+                    if isinstance(item, dict)
+                ),
+                "warnings": lambda raw: tuple(raw or ()),
+            },
+        )
 
     return _dataclass_from_dict(
         ScoredReport,
@@ -319,6 +343,7 @@ def _report_from_payload(payload: dict):
             "etf_monitor": lambda _raw: etf_monitor,
             "news_monitor": lambda _raw: news_monitor,
             "mag7_capital_network": lambda _raw: mag7_capital_network,
+            "portfolio_event_monitor": lambda _raw: portfolio_event_monitor,
         },
     )
 

@@ -122,3 +122,23 @@ ONEDRIVE_USE_LATEST_PER_ACCOUNT_FOLDER=false
 ```
 
 该路径只使用免费 App Registration 和标准 Graph 文件读取接口，不创建 Azure VM、Storage、Functions、数据库或其他计费资源。CSV、refresh token 和 `portfolio.csv` 不应提交到 GitHub。
+
+## 持仓事件提醒
+
+GitHub Actions 在完成 OneDrive 持仓导入后，会运行轻量持仓事件检查器：
+
+```text
+python scripts/send_portfolio_event_reminders.py --lookahead-hours 7
+```
+
+- 提醒只发送至 `PORTFOLIO_EMAIL_TO`，不会发送到公开报告收件人。
+- 有精确时刻的事件在首次进入约 7 小时观察窗口时提醒；这使现有定时任务能够覆盖“事件前约 6 小时”的需求。
+- 只有日期的事件会在事件当天、美股开盘前首次检查时提醒。
+- 已发送事件写入 `output/cache/portfolio_event_reminders.json`，并随 GitHub Actions cache 延续，避免重复提醒。
+- 每个事件包含官方来源或可审计的进展链接。预计日期和媒体报道会明确标记，不应误读为公司已经正式确认。
+
+事件日历维护在：
+
+```text
+data/portfolio_events.json
+```

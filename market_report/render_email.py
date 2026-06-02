@@ -6,6 +6,7 @@ from .data_sources import MarketMetric
 from .etf_monitor import ETFAssetMonitor, ETFMonitor, PortfolioPosition
 from .mag7_capital_network import Mag7CapitalNetwork
 from .news_monitor import NewsMonitor
+from .portfolio_events import PortfolioEventMonitor
 from .scoring import IronCondorAssessment, ScoredMetric, ScoredReport
 
 
@@ -27,7 +28,7 @@ def render_email_report(report: ScoredReport) -> str:
     iron_condor = _render_iron_condor(report.iron_condor)
     news_monitor = _render_news_monitor(report.news_monitor)
     mag7_capital_network = _render_mag7_capital_network(report.mag7_capital_network)
-    etf_monitor = _render_etf_monitor(report.etf_monitor, report.news_monitor)
+    etf_monitor = _render_etf_monitor(report.etf_monitor, report.news_monitor, report.portfolio_event_monitor)
     accent = report.light_color
 
     return f"""<!doctype html>
@@ -268,12 +269,16 @@ def _render_mag7_capital_network(network: Mag7CapitalNetwork | None) -> str:
     </tr>"""
 
 
-def _render_etf_monitor(monitor: ETFMonitor | None, news_monitor: NewsMonitor | None = None) -> str:
+def _render_etf_monitor(
+    monitor: ETFMonitor | None,
+    news_monitor: NewsMonitor | None = None,
+    portfolio_event_monitor: PortfolioEventMonitor | None = None,
+) -> str:
     if monitor is None:
         return ""
     grouped_rows = "".join(_render_etf_email_group(group) for group in _group_etf_assets(monitor.assets))
     changes = _render_email_notes("今日ETF变动摘要", monitor.change_summary)
-    portfolio = _render_portfolio_email(monitor, news_monitor)
+    portfolio = _render_portfolio_email(monitor, news_monitor, portfolio_event_monitor)
     return f"""<tr>
       <td style="padding:0 24px 18px;">
         <div style="font-size:19px;font-weight:700;color:#f3f4f6;margin:8px 0 8px;">UK ETF估值、趋势与拥挤度监控器</div>
@@ -286,7 +291,11 @@ def _render_etf_monitor(monitor: ETFMonitor | None, news_monitor: NewsMonitor | 
     </tr>"""
 
 
-def _render_portfolio_email(monitor: ETFMonitor, news_monitor: NewsMonitor | None = None) -> str:
+def _render_portfolio_email(
+    monitor: ETFMonitor,
+    news_monitor: NewsMonitor | None = None,
+    portfolio_event_monitor: PortfolioEventMonitor | None = None,
+) -> str:
     if not monitor.portfolio_positions:
         return _render_email_notes("实际组合视角", monitor.portfolio_summary + monitor.portfolio_warnings)
     rows = "".join(_render_portfolio_email_row(position) for position in monitor.portfolio_positions)
@@ -325,7 +334,8 @@ def _render_portfolio_email(monitor: ETFMonitor, news_monitor: NewsMonitor | Non
         else ""
     )
     performance_panel = _render_portfolio_performance_email(monitor)
-    event_panel = _render_portfolio_event_review_email(monitor.portfolio_positions, news_monitor)
+    event_panel = _render_portfolio_event_calendar_email(portfolio_event_monitor)
+    event_panel += _render_portfolio_event_review_email(monitor.portfolio_positions, news_monitor)
     return f"""
         <div style="font-size:15px;font-weight:700;color:#f3f4f6;margin:14px 0 4px;">实际组合持仓（Revolut statement 估算）</div>
         <div style="font-size:12px;color:#9ca3af;margin-bottom:6px;">持仓估算市值 {_fmt_gbp(monitor.portfolio_total_value_gbp)}。基于导出的 statement 与 Yahoo 最近价格估算，不等同于券商实时账户净值。</div>
@@ -359,6 +369,28 @@ def _render_portfolio_performance_email(monitor: ETFMonitor) -> str:
         f'已实现交易盈亏 {_fmt_signed_gbp(performance.realized_pnl_gbp)} · '
         f'股息收入 {_fmt_signed_gbp(performance.dividend_income_gbp)}</div>'
     )
+
+
+def _render_portfolio_event_calendar_email(monitor: PortfolioEventMonitor | None) -> str:
+    if monitor is None or not monitor.events:
+        return ""
+    rows = "".join(
+        f"""<li style="margin-bottom:7px;"><strong>{escape(event.title)}</strong>
+          <span style="color:#fbbf24;"> · {escape(event.alert_level)}</span><br>
+          <span style="color:#9ca3af;">{escape(" / ".join(event.symbols))} · {escape(event.scope)} · {escape(event.status)} · {escape(event.event_time_label)}</span><br>
+          <span>{escape(event.note)}</span><br>
+          <span style="color:#9ca3af;">关注：{escape("；".join(event.watch_items))}</span><br>
+          <a href="{escape(event.source_url)}" style="color:#bfdbfe;">{escape(event.source_label)}</a>
+          <span style="color:#9ca3af;"> · </span>
+          <a href="{escape(event.progress_source_url)}" style="color:#bfdbfe;">查看进展：{escape(event.progress_source_label)}</a>
+        </li>"""
+        for event in monitor.events
+    )
+    return f"""<div style="font-size:12px;color:#d1d5db;margin:8px 0;">
+      <strong>持仓事件复核日历</strong>
+      <div style="color:#9ca3af;margin-top:3px;">{escape(monitor.summary)} 预计日期会明确标记，不视为公司已确认日程。</div>
+      <ul style="padding-left:18px;">{rows}</ul>
+    </div>"""
 
 
 def _render_portfolio_event_review_email(
