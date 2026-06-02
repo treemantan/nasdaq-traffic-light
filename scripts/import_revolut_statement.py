@@ -24,7 +24,7 @@ from market_report.etf_monitor import (
 )
 
 
-UK_SYMBOL_OVERRIDES = {"IGTM": "IGTM.L", "ISF": "ISF.L"}
+UK_SYMBOL_OVERRIDES = {"IGTM": "IGTM.L", "ISF": "ISF.L", "ERNS": "ERNS.L"}
 REVOLUT_TRANSACTION_FIELDS = (
     "Date",
     "Ticker",
@@ -168,8 +168,8 @@ def _build_portfolio_rows(positions: dict[str, dict[str, float]]) -> list[dict[s
         quantity = position["quantity"]
         if quantity <= 1e-8:
             continue
-        monitor_symbol = monitor_symbols.get(ticker)
-        yahoo_symbol = monitor_symbol or UK_SYMBOL_OVERRIDES.get(ticker) or ticker
+        monitor_symbol = monitor_symbols.get(ticker) or UK_SYMBOL_OVERRIDES.get(ticker) or _resolve_lse_etf_symbol(ticker)
+        yahoo_symbol = monitor_symbol or ticker
         price, previous_price, native_currency, history = _latest_quote(yahoo_symbol)
         price_source = _QUOTE_SOURCES.get(yahoo_symbol, f"Yahoo:{yahoo_symbol}")
         fx_pair = ""
@@ -321,6 +321,27 @@ def _latest_quote(symbol: str) -> tuple[float | None, float | None, str, list[tu
     if "error" in locals():
         print(f"Quote unavailable for {symbol}; using statement cost fallback. Last error: {error}", file=sys.stderr)
     return None, None, "", []
+
+
+def _resolve_lse_etf_symbol(ticker: str) -> str | None:
+    if "." in ticker:
+        return ticker if ticker.endswith(".L") else None
+    candidate = f"{ticker}.L"
+    try:
+        data = _fetch_yahoo_price_data(candidate, timeout=5, attempts=1)
+    except Exception:
+        return None
+    meta = data.meta or {}
+    exchange = str(meta.get("exchangeName") or "")
+    instrument = str(meta.get("instrumentType") or "")
+    long_name = str(meta.get("longName") or meta.get("shortName") or "")
+    if exchange == "LSE" and instrument in {"ETF", "ETC"}:
+        _QUOTE_SOURCES[candidate] = f"Yahoo:{candidate}"
+        return candidate
+    if exchange == "LSE" and any(token in long_name.lower() for token in ("ucits etf", "physical gold")):
+        _QUOTE_SOURCES[candidate] = f"Yahoo:{candidate}"
+        return candidate
+    return None
 
 
 def _load_portfolio_quote_cache() -> dict[str, dict[str, object]]:

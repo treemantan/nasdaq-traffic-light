@@ -311,6 +311,7 @@ DEFAULT_ETF_SPECS = [
     ETFSpec("hkor", "HSBC MSCI Korea Capped UCITS ETF", "HKOR.L", "South Korea Equity", "HSBC", ter=0.50),
     ETFSpec("flrk", "Franklin FTSE Korea UCITS ETF", "FLRK.L", "South Korea Equity", "Franklin", ter=0.09),
     ETFSpec("igtm", "iShares $ Treasury Bond 7-10yr UCITS ETF GBP Hedged", "IGTM.L", "US Treasury 7-10Y GBP Hedged", "iShares", equity_like=False, ter=0.10),
+    ETFSpec("erns", "iShares £ Ultrashort Bond UCITS ETF", "ERNS.L", "GBP Ultrashort Bond / Cash-like", "iShares", equity_like=False, ter=0.09),
     ETFSpec("dfnd", "iShares Global Aerospace & Defence UCITS ETF", "DFND.L", "Defence", "iShares", ter=0.35),
     ETFSpec("wdef", "WisdomTree Europe Defence UCITS ETF", "WDEF.L", "European Defence", "WisdomTree", ter=0.40),
     ETFSpec("dfng", "VanEck Defense UCITS ETF", "DFNG.L", "Defence", "VanEck", ter=0.55),
@@ -355,9 +356,10 @@ def fetch_etf_monitor(specs: list[ETFSpec] | None = None, macro_metrics: dict[st
     fetched_at = datetime.now(timezone.utc)
     cache = _load_cache()
     previous_assets = dict(cache.get("assets") or {})
+    active_specs = _with_portfolio_supplement_specs(specs or DEFAULT_ETF_SPECS)
     assets: list[ETFAssetMonitor] = []
     warnings: list[str] = []
-    for spec in specs or DEFAULT_ETF_SPECS:
+    for spec in active_specs:
         try:
             asset = _fetch_etf_asset(spec, fetched_at, cache, macro_metrics)
         except Exception as exc:
@@ -384,6 +386,49 @@ def fetch_etf_monitor(specs: list[ETFSpec] | None = None, macro_metrics: dict[st
         portfolio_mag7_exposures=portfolio_mag7_exposures,
         portfolio_mag7_notes=portfolio_mag7_notes,
     )
+
+
+def _with_portfolio_supplement_specs(specs: list[ETFSpec]) -> list[ETFSpec]:
+    configured = {spec.symbol.upper(): spec for spec in specs}
+    supplements = []
+    for symbol in _portfolio_lse_symbols():
+        if symbol in configured:
+            continue
+        if _looks_like_non_etf_single_stock(symbol):
+            continue
+        supplements.append(
+            ETFSpec(
+                key=f"portfolio-{symbol.lower().replace('.', '-')}",
+                label=f"{symbol} portfolio ETF holding",
+                symbol=symbol,
+                theme="Portfolio Supplement",
+                provider="Portfolio",
+                equity_like=True,
+            )
+        )
+    return specs + supplements
+
+
+def _portfolio_lse_symbols(path: Path = Path("portfolio.csv")) -> list[str]:
+    if not path.exists():
+        return []
+    try:
+        with path.open("r", encoding="utf-8-sig", newline="") as handle:
+            rows = list(csv.DictReader(handle))
+    except Exception:
+        return []
+    symbols = []
+    for row in rows:
+        raw = str(row.get("symbol") or "").strip().upper()
+        if not raw or not raw.endswith(".L"):
+            continue
+        symbols.append(raw)
+    return list(dict.fromkeys(symbols))
+
+
+def _looks_like_non_etf_single_stock(symbol: str) -> bool:
+    base = symbol[:-2] if symbol.endswith(".L") else symbol
+    return base in {"NVDA", "AVGO", "META", "NFLX", "KO"}
 
 
 def _fetch_etf_asset(

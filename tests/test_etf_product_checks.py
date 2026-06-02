@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+import os
 from datetime import date, datetime, timezone
 from pathlib import Path
 
@@ -10,18 +11,40 @@ from market_report.etf_monitor import (
     ETFHolding,
     PortfolioPosition,
     ETFSpec,
+    DEFAULT_ETF_SPECS,
     _audit_metadata,
     _load_portfolio_summary,
     _parse_ishares_portfolio_valuation,
     _parse_compact_number,
     _portfolio_exposure_summary,
     _portfolio_mag7_summary,
+    _with_portfolio_supplement_specs,
 )
 from market_report.news_monitor import NewsEvent, NewsMonitor
 from market_report.render import _max_holdings_overlap, _portfolio_news_matches
 
 
 class ETFProductCheckTests(unittest.TestCase):
+    def test_erns_is_default_cash_like_etf(self) -> None:
+        erns = next(spec for spec in DEFAULT_ETF_SPECS if spec.symbol == "ERNS.L")
+        self.assertFalse(erns.equity_like)
+        self.assertEqual(erns.theme, "GBP Ultrashort Bond / Cash-like")
+        self.assertEqual(erns.ter, 0.09)
+
+    def test_portfolio_lse_holding_extends_monitor_specs(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            previous = os.getcwd()
+            try:
+                os.chdir(directory)
+                Path("portfolio.csv").write_text("symbol,weight_pct\nTEST.L,12\nMETA,5\n", encoding="utf-8")
+                specs = _with_portfolio_supplement_specs([ETFSpec("base", "Base", "BASE.L", "Base", "Demo")])
+            finally:
+                os.chdir(previous)
+
+        symbols = {spec.symbol for spec in specs}
+        self.assertIn("TEST.L", symbols)
+        self.assertNotIn("META.L", symbols)
+
     def test_parse_compact_assets_value(self) -> None:
         self.assertEqual(_parse_compact_number("3.03B"), 3_030_000_000)
 
