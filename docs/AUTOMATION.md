@@ -40,7 +40,7 @@ python -m market_report --config config.example.json --dry-run
 - `18:00`：Volatility / Iron Condor 简报
 - `21:15`：完整 HTML 报告
 
-英国夏令时按固定规则转换：三月最后一个周日进入 BST，十月最后一个周日回到 GMT。GitHub cron 使用 UTC，因此 workflow 配置两组候选 UTC 时间，并在运行时按 `Europe/London` 判断是否执行。
+英国夏令时按固定规则转换：三月最后一个周日进入 BST，十月最后一个周日回到 GMT。GitHub cron 使用 UTC，因此 workflow 配置两组候选 UTC 时间，并在运行时按 `Europe/London` 判断是否执行。GitHub scheduled workflow 可能被平台排队延迟；若实际启动时间距离目标 UK 时间超过 45 分钟，本项目会跳过该次发送，避免 21:15 的 full 报告被延迟到深夜补发。
 
 ## 邮件 secrets
 
@@ -65,7 +65,7 @@ SMTP_PORT
 SMTP_SECURITY
 ```
 
-多个收件人使用英文逗号分隔。`PORTFOLIO_EMAIL_TO` 可选：当 full 报告包含实际持仓时，公开收件人收到移除组合信息的版本，私人收件人收到完整版本。
+多个收件人使用英文逗号分隔。`PORTFOLIO_EMAIL_TO` 可选：当 full 报告包含实际持仓时，公开收件人收到移除组合信息的版本，私人收件人收到完整版本。若同一邮箱同时出现在 `REPORT_EMAIL_TO` 和 `PORTFOLIO_EMAIL_TO`，full 模式会优先发送私人完整版本，并从公开版收件人中去重。
 
 ## OneDrive 本地 inbox
 

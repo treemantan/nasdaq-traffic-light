@@ -88,13 +88,19 @@ jobs:
           target_london = datetime.combine(now_london.date(), time(hour, minute), london)
           target_utc = target_london.astimezone(timezone.utc)
           cron_minute, cron_hour = [int(part) for part in schedule.split()[:2]]
-          should_run = target_utc.hour == cron_hour and target_utc.minute == cron_minute
+          correct_dst_candidate = target_utc.hour == cron_hour and target_utc.minute == cron_minute
+          delay_minutes = abs((now_london - target_london).total_seconds()) / 60
+          max_delay_minutes = int(os.environ.get("MAX_SCHEDULE_DELAY_MINUTES", "45"))
+          fresh_enough = delay_minutes <= max_delay_minutes
+          should_run = correct_dst_candidate and fresh_enough
 
           emit(
               mode,
               should_run,
               f"schedule={schedule}, target_uk={target_hhmm}, "
-              + f"expected_utc={target_utc:%H:%M}, run={should_run}",
+              + f"expected_utc={target_utc:%H:%M}, "
+              + f"delay_minutes={delay_minutes:.1f}, max_delay_minutes={max_delay_minutes}, "
+              + f"run={should_run}",
           )
           PY
 

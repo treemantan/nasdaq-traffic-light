@@ -26,14 +26,25 @@ def main() -> int:
         return prepared
     provider, report_path, html, payload, group_recipients = prepared
 
-    subject, public_html, public_text = emailer._render_message(
-        "full", report_path, html, _without_portfolio(payload)
-    )
-    public_result = _send(provider, subject, public_html, public_text, group_recipients, report_path)
-    if public_result:
-        return public_result
-
     private_recipients = emailer._parse_recipients(os.environ.get("PORTFOLIO_EMAIL_TO", ""))
+    if private_recipients:
+        private_keys = {_recipient_key(address) for address in private_recipients}
+        public_recipients = [
+            address for address in group_recipients if _recipient_key(address) not in private_keys
+        ]
+    else:
+        public_recipients = group_recipients
+
+    if public_recipients:
+        subject, public_html, public_text = emailer._render_message(
+            "full", report_path, html, _without_portfolio(payload)
+        )
+        public_result = _send(provider, subject, public_html, public_text, public_recipients, report_path)
+        if public_result:
+            return public_result
+    else:
+        print("All full-report recipients are portfolio recipients; skipping the sanitized group edition.")
+
     if not private_recipients:
         print(
             "Full report contains imported portfolio data, but PORTFOLIO_EMAIL_TO is not configured. "
@@ -99,6 +110,10 @@ def _without_portfolio(payload: dict) -> dict:
         monitor["portfolio_mag7_exposures"] = []
         monitor["portfolio_mag7_notes"] = []
     return sanitized
+
+
+def _recipient_key(address: str) -> str:
+    return address.strip().lower()
 
 
 def _send(
