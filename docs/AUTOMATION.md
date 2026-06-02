@@ -39,8 +39,9 @@ python -m market_report --config config.example.json --dry-run
 - `14:45`：Market Pulse
 - `18:00`：Volatility / Iron Condor 简报
 - `21:15`：完整 HTML 报告
+- `21:45` / `22:15`：full 报告兜底候选，仅在当天 full 尚未成功发送时补发
 
-英国夏令时按固定规则转换：三月最后一个周日进入 BST，十月最后一个周日回到 GMT。GitHub cron 使用 UTC，因此 workflow 配置两组候选 UTC 时间，并在运行时按 `Europe/London` 判断是否执行。GitHub scheduled workflow 可能被平台排队延迟；若实际启动时间距离目标 UK 时间超过 45 分钟，本项目会跳过该次发送，避免 21:15 的 full 报告被延迟到深夜补发。
+英国夏令时按固定规则转换：三月最后一个周日进入 BST，十月最后一个周日回到 GMT。GitHub cron 使用 UTC，因此 workflow 配置两组候选 UTC 时间，并在运行时按 `Europe/London` 判断是否执行。GitHub scheduled workflow 可能被平台排队延迟；非 full 简报若距离目标 UK 时间超过 45 分钟会跳过。为了避免当天最重要的 full 邮件缺失，workflow 额外设置 `21:45` 和 `22:15` full 兜底候选，full 候选允许最多 150 分钟延迟，并通过 `market-report-email-sent-...-full` cache marker 确保同一天 full 邮件只发送一次。
 
 ## 邮件 secrets
 

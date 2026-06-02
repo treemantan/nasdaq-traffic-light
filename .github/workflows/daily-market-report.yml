@@ -1,5 +1,9 @@
 name: Macro Regime Radar
 
+concurrency:
+  group: macro-regime-radar-${{ github.ref }}
+  cancel-in-progress: false
+
 on:
   schedule:
     # GitHub cron is UTC and does not support Europe/London directly.
@@ -15,6 +19,9 @@ on:
     - cron: "0 18 * * 1-5"   # 18:00 UK when GMT
     - cron: "15 20 * * 1-5"  # 21:15 UK when BST
     - cron: "15 21 * * 1-5"  # 21:15 UK when GMT
+    - cron: "45 20 * * 1-5"  # 21:45 UK full-email backup when BST
+    - cron: "45 21 * * 1-5"  # 21:45 UK full-email backup when GMT
+    - cron: "15 22 * * 1-5"  # 22:15 UK full-email backup when GMT
   workflow_dispatch:
     inputs:
       email_mode:
@@ -45,17 +52,20 @@ jobs:
         run: |
           python - <<'PY'
           import os
-          from datetime import datetime, time, timezone
+          from datetime import datetime, time, timezone, timedelta
           from zoneinfo import ZoneInfo
 
-          def emit(mode, should_run, notice):
+          def emit(mode, should_run, notice, target_date=""):
               with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
                   output.write(f"email_mode={mode}\n")
                   output.write(f"should_run={'true' if should_run else 'false'}\n")
+                  output.write(f"target_date={target_date}\n")
                   output.write(f"notice={notice}\n")
               with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env:
                   env.write(f"EMAIL_MODE={mode}\n")
                   env.write(f"SHOULD_RUN={'true' if should_run else 'false'}\n")
+                  if target_date:
+                      env.write(f"TARGET_UK_DATE={target_date}\n")
               print(notice)
 
           valid_modes = {"none", "pulse", "volatility", "full", "auto"}
@@ -63,46 +73,102 @@ jobs:
               mode = os.environ.get("DISPATCH_EMAIL_MODE") or "full"
               if mode not in valid_modes:
                   raise SystemExit(f"Invalid email_mode: {mode}")
-              emit(mode, True, f"manual run, EMAIL_MODE={mode}")
+              emit(mode, True, f"manual run, EMAIL_MODE={mode}", datetime.now(ZoneInfo("Europe/London")).date().isoformat())
               raise SystemExit(0)
 
           schedule = os.environ["EVENT_SCHEDULE"]
           mapping = {
-              "30 7 * * 1-5": ("08:30", "pulse"),
-              "30 8 * * 1-5": ("08:30", "pulse"),
-              "45 13 * * 1-5": ("14:45", "pulse"),
-              "45 14 * * 1-5": ("14:45", "pulse"),
-              "0 17 * * 1-5": ("18:00", "volatility"),
-              "0 18 * * 1-5": ("18:00", "volatility"),
-              "15 20 * * 1-5": ("21:15", "full"),
-              "15 21 * * 1-5": ("21:15", "full"),
+              "30 7 * * 1-5": [("08:30", "pulse")],
+              "30 8 * * 1-5": [("08:30", "pulse")],
+              "45 13 * * 1-5": [("14:45", "pulse")],
+              "45 14 * * 1-5": [("14:45", "pulse")],
+              "0 17 * * 1-5": [("18:00", "volatility")],
+              "0 18 * * 1-5": [("18:00", "volatility")],
+              "15 20 * * 1-5": [("21:15", "full")],
+              # In GMT this is the primary 21:15 full run; in BST the same UTC
+              # slot is a 22:15 backup. The send-marker cache prevents duplicates.
+              "15 21 * * 1-5": [("21:15", "full"), ("22:15", "full")],
+              "45 20 * * 1-5": [("21:45", "full")],
+              "45 21 * * 1-5": [("21:45", "full"), ("22:45", "full")],
+              "15 22 * * 1-5": [("22:15", "full")],
           }
           if schedule not in mapping:
               emit("auto", True, "unknown schedule, fallback to auto")
               raise SystemExit(0)
 
-          target_hhmm, mode = mapping[schedule]
-          hour, minute = [int(part) for part in target_hhmm.split(":")]
           london = ZoneInfo("Europe/London")
           now_london = datetime.now(london)
-          target_london = datetime.combine(now_london.date(), time(hour, minute), london)
-          target_utc = target_london.astimezone(timezone.utc)
           cron_minute, cron_hour = [int(part) for part in schedule.split()[:2]]
-          correct_dst_candidate = target_utc.hour == cron_hour and target_utc.minute == cron_minute
-          delay_minutes = abs((now_london - target_london).total_seconds()) / 60
-          max_delay_minutes = int(os.environ.get("MAX_SCHEDULE_DELAY_MINUTES", "45"))
-          fresh_enough = delay_minutes <= max_delay_minutes
-          should_run = correct_dst_candidate and fresh_enough
+
+          selected = None
+          considered = []
+          for target_hhmm, candidate_mode in mapping[schedule]:
+              hour, minute = [int(part) for part in target_hhmm.split(":")]
+              target_london = datetime.combine(now_london.date(), time(hour, minute), london)
+              if (target_london - now_london).total_seconds() > 12 * 60 * 60:
+                  target_london = target_london - timedelta(days=1)
+              target_utc = target_london.astimezone(timezone.utc)
+              correct_dst_candidate = target_utc.hour == cron_hour and target_utc.minute == cron_minute
+              delay_minutes = abs((now_london - target_london).total_seconds()) / 60
+              if candidate_mode == "full":
+                  max_delay_minutes = int(os.environ.get("MAX_FULL_SCHEDULE_DELAY_MINUTES", "150"))
+              else:
+                  max_delay_minutes = int(os.environ.get("MAX_SCHEDULE_DELAY_MINUTES", "45"))
+              fresh_enough = delay_minutes <= max_delay_minutes
+              considered.append(
+                  f"{target_hhmm}/{candidate_mode}:expected_utc={target_utc:%H:%M},"
+                  + f"delay={delay_minutes:.1f},fresh={fresh_enough},dst={correct_dst_candidate}"
+              )
+              if correct_dst_candidate and fresh_enough:
+                  selected = (target_hhmm, candidate_mode, target_utc, delay_minutes, max_delay_minutes)
+                  break
+
+          if selected is None:
+              emit(
+                  mapping[schedule][0][1],
+                  False,
+                  f"schedule={schedule}, no fresh matching UK target; considered={' | '.join(considered)}",
+              )
+              raise SystemExit(0)
+
+          target_hhmm, mode, target_utc, delay_minutes, max_delay_minutes = selected
+          target_date = target_utc.astimezone(london).date().isoformat()
 
           emit(
               mode,
-              should_run,
+              True,
               f"schedule={schedule}, target_uk={target_hhmm}, "
               + f"expected_utc={target_utc:%H:%M}, "
               + f"delay_minutes={delay_minutes:.1f}, max_delay_minutes={max_delay_minutes}, "
-              + f"run={should_run}",
+              + "run=True",
+              target_date,
           )
           PY
+
+      - name: Resolve report date
+        id: report-date
+        if: steps.email-mode.outputs.should_run == 'true'
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+          from datetime import datetime
+          from zoneinfo import ZoneInfo
+          report_date = os.environ.get("TARGET_UK_DATE") or datetime.now(ZoneInfo("Europe/London")).date().isoformat()
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"report_date={report_date}\n")
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env:
+              env.write(f"REPORT_LOCAL_DATE={report_date}\n")
+          print(f"REPORT_LOCAL_DATE={report_date}")
+          PY
+
+      - name: Restore full-email send marker
+        id: full-email-marker
+        if: steps.email-mode.outputs.should_run == 'true' && steps.email-mode.outputs.email_mode == 'full'
+        uses: actions/cache/restore@v4
+        with:
+          path: output/email-markers
+          key: market-report-email-sent-${{ runner.os }}-${{ steps.report-date.outputs.report_date }}-full
 
       - name: Install dependencies
         if: steps.email-mode.outputs.should_run == 'true'
@@ -174,6 +240,7 @@ jobs:
           if-no-files-found: error
 
       - name: Send report email
+        id: send-report-email
         if: steps.email-mode.outputs.should_run == 'true'
         env:
           EMAIL_PROVIDER: ${{ secrets.EMAIL_PROVIDER }}
@@ -188,4 +255,23 @@ jobs:
           SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           SMTP_FROM: ${{ secrets.SMTP_FROM }}
-        run: python scripts/send_cloud_report_email.py
+        run: |
+          if [ "$EMAIL_MODE" = "full" ] && [ "${{ steps.full-email-marker.outputs.cache-hit }}" = "true" ]; then
+            echo "Full report email already sent for ${REPORT_LOCAL_DATE}; skipping duplicate full email."
+            exit 0
+          fi
+          python scripts/send_cloud_report_email.py
+
+      - name: Mark full report email sent
+        if: steps.email-mode.outputs.should_run == 'true' && steps.email-mode.outputs.email_mode == 'full' && steps.full-email-marker.outputs.cache-hit != 'true' && steps.send-report-email.outcome == 'success'
+        shell: bash
+        run: |
+          mkdir -p output/email-markers
+          printf 'sent_at=%s\nrun_id=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${{ github.run_id }}" > "output/email-markers/${REPORT_LOCAL_DATE}-full.txt"
+
+      - name: Save full-email send marker
+        if: steps.email-mode.outputs.should_run == 'true' && steps.email-mode.outputs.email_mode == 'full' && steps.full-email-marker.outputs.cache-hit != 'true' && steps.send-report-email.outcome == 'success'
+        uses: actions/cache/save@v4
+        with:
+          path: output/email-markers
+          key: market-report-email-sent-${{ runner.os }}-${{ steps.report-date.outputs.report_date }}-full
