@@ -117,11 +117,16 @@ Write-Log "ProjectDir=$ProjectDir"
 Write-Log "ConfigPath=$ConfigPath"
 
 try {
-    $securePath = Join-Path $ProjectDir $SecurePasswordPath
-    Set-SmtpPasswordFromSecureFile -Path $securePath
+    if ($DryRun) {
+        Write-Log "Dry-run mode: skipping SMTP credential loading."
+    }
+    else {
+        $securePath = Join-Path $ProjectDir $SecurePasswordPath
+        Set-SmtpPasswordFromSecureFile -Path $securePath
 
-    if (-not $env:SMTP_PASSWORD) {
-        Write-Log "SMTP password not found in env var or secure file. If this is not a dry run, email sending may fail." "WARN"
+        if (-not $env:SMTP_PASSWORD) {
+            Write-Log "SMTP password not found in env var or secure file. Email sending may fail." "WARN"
+        }
     }
 
     $python = "python"

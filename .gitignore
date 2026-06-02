@@ -1,4 +1,5 @@
 .idea/
+.obsidian/
 .vs/
 __pycache__/
 *.py[cod]

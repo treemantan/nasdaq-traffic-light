@@ -46,7 +46,7 @@ else {
     $trigger = New-ScheduledTaskTrigger -Daily -At $Time
     $scheduleText = "Every day at $Time local time"
 }
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew
 
 Register-ScheduledTask `
     -TaskName $TaskName `

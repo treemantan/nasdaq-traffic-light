@@ -88,13 +88,41 @@ Set-Location $ProjectDir
 $fullLogDir = Join-Path $ProjectDir $LogDir
 New-Item -ItemType Directory -Force -Path $fullLogDir | Out-Null
 $script:LogFile = Join-Path $fullLogDir ("portfolio-report-{0}.log" -f (Get-Date -Format "yyyy-MM-dd"))
+$script:StatusFile = Join-Path $fullLogDir "portfolio-report-status.txt"
+$script:LockFile = Join-Path $fullLogDir "portfolio-report.lock"
 $script:RunStartedAt = Get-Date
 $script:RunId = "{0}-local-portfolio" -f $script:RunStartedAt.ToString("yyyyMMdd-HHmmss-fff")
 $script:RunStatus = "FAILED"
 $script:LatestReportPath = ""
 
+function Write-Status {
+    param(
+        [string]$Status,
+        [string]$Message
+    )
+    $line = "{0} [{1}] [run_id={2}] {3}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $Status, $script:RunId, $Message
+    Set-Content -Path $script:StatusFile -Value $line -Encoding UTF8
+}
+
 Write-RunBoundary "START"
+try {
+    $script:LockHandle = [System.IO.File]::Open(
+        $script:LockFile,
+        [System.IO.FileMode]::OpenOrCreate,
+        [System.IO.FileAccess]::ReadWrite,
+        [System.IO.FileShare]::None
+    )
+}
+catch [System.IO.IOException] {
+    Write-Log "Another portfolio report run is already active. Skipping this duplicate launch." "WARN"
+    Write-Status "SKIPPED_BUSY" "Another portfolio report run is already active."
+    $script:RunStatus = "SKIPPED_BUSY"
+    Write-RunBoundary "END" $script:RunStatus
+    exit 0
+}
+
 Write-Log "Starting local portfolio import and report generation."
+Write-Status "RUNNING" "Importing the latest OneDrive CSV and generating the report."
 Write-Log "ProjectDir=$ProjectDir"
 if ($StatementDir) {
     Write-Log "StatementDir=$StatementDir"
@@ -179,13 +207,18 @@ try {
     }
     $script:RunStatus = "SUCCESS"
     Write-Log "Local portfolio report completed successfully."
+    Write-Status "SUCCESS" ("Latest HTML report: {0}" -f $latestReport.FullName)
     exit 0
 }
 catch {
     Write-Log $_.Exception.Message "ERROR"
     Write-Log "Local portfolio report failed." "ERROR"
+    Write-Status "FAILED" $_.Exception.Message
     exit 1
 }
 finally {
+    if ($script:LockHandle) {
+        $script:LockHandle.Dispose()
+    }
     Write-RunBoundary "END" $script:RunStatus $script:LatestReportPath
 }
