@@ -10,7 +10,7 @@ import urllib.parse
 import urllib.request
 from html import unescape
 from bisect import bisect_right
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -218,6 +218,7 @@ class ETFAssetMonitor:
     previous_value: float | None
     as_of: date | None
     fetched_at: datetime
+    equity_like: bool = True
     ter: float | None = None
     change_pct: float | None = None
     daily_sigma: float | None = None
@@ -431,6 +432,38 @@ def _looks_like_non_etf_single_stock(symbol: str) -> bool:
     return base in {"NVDA", "AVGO", "META", "NFLX", "KO"}
 
 
+def _classify_portfolio_supplement(spec: ETFSpec, meta: dict[str, Any]) -> tuple[str, bool]:
+    if spec.theme != "Portfolio Supplement":
+        return spec.theme, spec.equity_like
+    name = str(meta.get("longName") or meta.get("shortName") or spec.label).lower()
+    haystack = f"{spec.symbol.lower()} {name}"
+    if any(token in haystack for token in ("physical gold", "gold etc", "gold")):
+        return "Gold", False
+    if any(token in haystack for token in ("ultrashort", "ultra-short", "money market", "cash", "short duration", "short bond")):
+        return "GBP Ultrashort Bond / Cash-like", False
+    if any(token in haystack for token in ("treasury", "gilt", "bond", "fixed income")):
+        return "US Treasury 7-10Y GBP Hedged", False
+    if "korea" in haystack:
+        return "South Korea Equity", True
+    if any(token in haystack for token in ("semiconductor", "semiconductors", "chip")):
+        return "Semiconductor", True
+    if any(token in haystack for token in ("defence", "defense", "aerospace")):
+        return "Defence", True
+    if "quantum" in haystack:
+        return "Quantum Computing", True
+    if any(token in haystack for token in ("artificial intelligence", " ai ", "automation", "robotics", "cloud", "cybersecurity", "digital security")):
+        return "Artificial Intelligence", True
+    if "nasdaq 100" in haystack:
+        return "Nasdaq 100", True
+    if "s&p 500" in haystack or "sp 500" in haystack:
+        return "S&P 500", True
+    if "ftse 100" in haystack:
+        return "UK Large Cap", True
+    if "world" in haystack or "global equity" in haystack:
+        return "Global Equity", True
+    return spec.theme, spec.equity_like
+
+
 def _fetch_etf_asset(
     spec: ETFSpec,
     fetched_at: datetime,
@@ -441,6 +474,8 @@ def _fetch_etf_asset(
     metadata_status, metadata_note = _audit_metadata(spec, price_data.meta)
     if metadata_status == "异常":
         raise ValueError(f"metadata audit failed: {metadata_note}")
+    effective_theme, effective_equity_like = _classify_portfolio_supplement(spec, price_data.meta)
+    effective_spec = replace(spec, theme=effective_theme, equity_like=effective_equity_like)
     history = price_data.history
     if len(history) < 2:
         raise ValueError(f"{spec.symbol} returned insufficient price history")
@@ -457,16 +492,16 @@ def _fetch_etf_asset(
     valuations: dict[str, Any] = {}
     valuation_source = "unavailable"
     valuation_as_of = ""
-    if spec.equity_like and spec.symbol.upper() in ISHARES_PORTFOLIO_VALUATION_URLS:
+    if effective_spec.equity_like and effective_spec.symbol.upper() in ISHARES_PORTFOLIO_VALUATION_URLS:
         try:
-            valuations = _fetch_ishares_portfolio_valuation(spec.symbol)
+            valuations = _fetch_ishares_portfolio_valuation(effective_spec.symbol)
             if _has_any_valuation(valuations):
                 valuation_source = "iShares官方组合估值"
                 valuation_as_of = str(valuations.get("asOf") or "")
         except Exception as exc:
             valuation_fetch_warning = f"iShares官方组合估值暂不可用：{type(exc).__name__}"
     try:
-        yahoo_valuations = _fetch_yahoo_valuation(spec.symbol) if spec.equity_like else {}
+        yahoo_valuations = _fetch_yahoo_valuation(effective_spec.symbol) if effective_spec.equity_like else {}
         valuations = _merge_missing_valuations(valuations, yahoo_valuations)
     except Exception as exc:
         fallback_warning = f"Yahoo估值接口暂不可用：{type(exc).__name__}"
@@ -477,9 +512,9 @@ def _fetch_etf_asset(
         )
     if valuation_source == "unavailable" and _has_any_valuation(valuations):
         valuation_source = "Yahoo"
-    if spec.equity_like and not _has_any_valuation(valuations):
+    if effective_spec.equity_like and not _has_any_valuation(valuations):
         try:
-            valuations = _fetch_stockanalysis_valuation(spec.symbol)
+            valuations = _fetch_stockanalysis_valuation(effective_spec.symbol)
             valuation_source = "StockAnalysis" if _has_any_valuation(valuations) else "unavailable"
         except Exception as exc:
             fallback_warning = f"StockAnalysis PE fallback failed: {type(exc).__name__}"
@@ -488,8 +523,8 @@ def _fetch_etf_asset(
                 if valuation_fetch_warning
                 else fallback_warning
             )
-    if spec.equity_like and not _has_any_valuation(valuations) and spec.symbol.upper() in VALUATION_PROXY_SYMBOLS:
-        proxy_symbol, proxy_source = VALUATION_PROXY_SYMBOLS[spec.symbol.upper()]
+    if effective_spec.equity_like and not _has_any_valuation(valuations) and effective_spec.symbol.upper() in VALUATION_PROXY_SYMBOLS:
+        proxy_symbol, proxy_source = VALUATION_PROXY_SYMBOLS[effective_spec.symbol.upper()]
         try:
             valuations = _fetch_stockanalysis_proxy_valuation(proxy_symbol)
             valuation_source = proxy_source if _has_any_valuation(valuations) else "unavailable"
@@ -509,22 +544,23 @@ def _fetch_etf_asset(
     pe_percentile, pb_percentile, pe_high_1y, pe_high_1y_ratio = _update_valuation_history(
         cache, spec.key, valuation_day, pe, pb
     )
-    warnings = _valuation_warnings(spec, pe, forward_pe, pb, pe_percentile, pe_high_1y_ratio)
+    warnings = _valuation_warnings(effective_spec, pe, forward_pe, pb, pe_percentile, pe_high_1y_ratio)
     if valuation_fetch_warning:
         warnings.append(valuation_fetch_warning)
-    liquidity = _fetch_liquidity_profile(spec, history, price_data.volumes)
+    liquidity = _fetch_liquidity_profile(effective_spec, history, price_data.volumes)
     warnings.extend(liquidity["warnings"])
     asset = ETFAssetMonitor(
         key=spec.key,
         label=spec.label,
         symbol=spec.symbol,
-        theme=spec.theme,
+        theme=effective_spec.theme,
         provider=spec.provider,
         currency=_normalize_currency(price_data.meta.get("currency")) or spec.currency,
         value=value,
         previous_value=previous,
         as_of=history[-1][0],
         fetched_at=fetched_at,
+        equity_like=effective_spec.equity_like,
         ter=spec.ter,
         change_pct=one_day_change,
         daily_sigma=daily_sigma,
@@ -571,7 +607,7 @@ def _fetch_etf_asset(
         momentum_label=_momentum_label(asset.rsi14, asset.momentum_1m),
         sigma_label=_sigma_label(asset.daily_sigma, asset.daily_volatility),
         trend_stretch_label=_trend_stretch_label(trend_sigma),
-        valuation_label=_valuation_label(spec, pe, forward_pe, pe_percentile),
+        valuation_label=_valuation_label(effective_spec, pe, forward_pe, pe_percentile),
         crowding_score=_crowding_score(asset.rsi14, distance, pe_percentile, asset.momentum_1m),
     )
     enriched = _replace_asset(enriched, crowding_label=_crowding_label(enriched.crowding_score, enriched.rsi14, enriched.distance_sma200))
@@ -587,7 +623,7 @@ def _fetch_etf_asset(
     enriched = _replace_asset(
         enriched,
         sensitivities=_rolling_sensitivities(history, market_histories),
-        backtest=_backtest_entry_environment(spec, history, macro_metrics, market_histories),
+        backtest=_backtest_entry_environment(effective_spec, history, macro_metrics, market_histories),
     )
     _write_asset_cache(cache, enriched)
     return enriched
@@ -604,14 +640,14 @@ def _cached_or_failed(
         return ETFAssetMonitor(
             key=spec.key, label=spec.label, symbol=spec.symbol, theme=spec.theme, provider=spec.provider,
             currency=spec.currency, value=None, previous_value=None, as_of=None, fetched_at=fetched_at,
-            ter=spec.ter, status="metadata-error", metadata_status="异常", metadata_note=reason,
+            equity_like=spec.equity_like, ter=spec.ter, status="metadata-error", metadata_status="异常", metadata_note=reason,
             warnings=(f"{spec.label}（{spec.symbol}）ticker元数据审计失败，已停止纳入评分：{reason}",),
         )
     entry = (cache.get("assets") or {}).get(spec.key)
     if entry:
         asset = _asset_from_cache(spec, entry, fetched_at, reason)
         if asset is not None:
-            if not spec.equity_like:
+            if not asset.equity_like:
                 entry_score, entry_label, entry_note, risk_note = _entry_quality(asset, macro_metrics)
                 return _replace_asset(
                     asset,
@@ -632,6 +668,7 @@ def _cached_or_failed(
         previous_value=None,
         as_of=None,
         fetched_at=fetched_at,
+        equity_like=spec.equity_like,
         ter=spec.ter,
         status="missing",
         warnings=(f"{spec.label}（{spec.symbol}）ETF数据暂不可用：{reason}",),
@@ -1137,6 +1174,7 @@ def _write_asset_cache(cache: dict[str, Any], asset: ETFAssetMonitor) -> None:
         "theme": asset.theme,
         "provider": asset.provider,
         "currency": asset.currency,
+        "equity_like": asset.equity_like,
         "ter": asset.ter,
         "value": asset.value,
         "previous_value": asset.previous_value,
@@ -1211,6 +1249,7 @@ def _asset_from_cache(spec: ETFSpec, entry: dict[str, Any], fetched_at: datetime
         theme=entry.get("theme") or spec.theme,
         provider=entry.get("provider") or spec.provider,
         currency=entry.get("currency") or spec.currency,
+        equity_like=bool(entry.get("equity_like", spec.equity_like)),
         ter=_safe_float(entry.get("ter")) if entry.get("ter") is not None else spec.ter,
         value=_safe_float(entry.get("value")),
         previous_value=_safe_float(entry.get("previous_value")),
@@ -1483,6 +1522,7 @@ def _historical_entry_snapshot(
         previous_value=previous,
         as_of=history[-1][0],
         fetched_at=datetime.combine(history[-1][0], datetime.min.time(), timezone.utc),
+        equity_like=spec.equity_like,
         ter=spec.ter,
         change_pct=_pct_change(value, previous),
         daily_sigma=_sigma_move(_pct_change(value, previous), daily_volatility),
@@ -2575,7 +2615,7 @@ def _valuation_warnings(
     if spec.theme == "Gold":
         return ["黄金ETC不适用PE/PB估值，需结合实际利率、美元和金价趋势观察。"]
     if not spec.equity_like:
-        return ["固定收益ETF不适用PE/PB估值，需结合久期、收益率曲线与利率风险观察。"]
+        return ["非权益ETF不适用PE/PB估值，需结合久期、收益率曲线、利率风险与流动性观察。"]
     warnings: list[str] = []
     if pe is None and forward_pe is None:
         warnings.append("Yahoo暂未返回可靠PE/Forward PE，估值分位数需要继续积累或使用发行商数据补充。")
@@ -2621,7 +2661,7 @@ def _valuation_label(spec: ETFSpec, pe: float | None, forward_pe: float | None, 
     if spec.theme == "Gold":
         return "黄金不适用盈利估值，重点观察实际利率与美元"
     if not spec.equity_like:
-        return "固定收益ETF不适用盈利估值，重点观察久期与利率风险"
+        return "非权益ETF不适用盈利估值，重点观察久期、收益率与利率风险"
     active_pe = forward_pe or pe
     if active_pe is None:
         return "估值数据不足，暂不判断重估压力"

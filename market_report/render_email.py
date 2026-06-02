@@ -286,7 +286,7 @@ def _render_etf_monitor(
         {changes}
         {portfolio}
         {grouped_rows}
-        <div style="font-size:12px;color:#9ca3af;margin-top:8px;">PE与组合P/B均为底层持仓组合估值，不是ETF自身资产负债表指标。组合估值按发行商披露节奏更新，不等同于实时行情。PE位置优先显示本地历史分位；样本不足时显示当前PE/近一年缓存最高PE的近似比例。σ200使用去极值后的稳健趋势波动率，避免少数极端日收益掩盖趋势拉伸。proxy 表示使用同类ETF作近似估值参考；黄金ETC不适用PE/PB。</div>
+        <div style="font-size:12px;color:#9ca3af;margin-top:8px;">PE与组合P/B均为底层持仓组合估值，不是ETF自身资产负债表指标。组合估值按发行商披露节奏更新，不等同于实时行情。PE位置优先显示本地历史分位；样本不足时显示当前PE/近一年缓存最高PE的近似比例。σ200使用去极值后的稳健趋势波动率，避免少数极端日收益掩盖趋势拉伸。proxy 表示使用同类ETF作近似估值参考；黄金、现金、短债和固定收益类产品不适用PE/PB。</div>
       </td>
     </tr>"""
 
@@ -452,7 +452,7 @@ def _render_etf_email_group(group: tuple[str, str, list[ETFAssetMonitor]]) -> st
             <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">ETF</th>
             <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">主题</th>
             <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">1Dσ / 1M / RSI</th>
-            <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">组合PE / Fwd / 组合P/B</th>
+            <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">估值/资产属性</th>
             <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">规模/流动性</th>
             <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">PE位置</th>
             <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">新增仓位环境</th>
@@ -463,21 +463,26 @@ def _render_etf_email_group(group: tuple[str, str, list[ETFAssetMonitor]]) -> st
 
 
 def _render_etf_row(asset: ETFAssetMonitor) -> str:
+    valuation, valuation_detail, pe_position = _fmt_valuation_block(asset)
     valuation_source = _fmt_email_valuation_source(asset)
     liquidity = _fmt_liquidity(asset)
     return f"""<tr>
       <td style="padding:7px;border-bottom:1px solid #263244;"><strong>{escape(asset.symbol)}</strong><br>{escape(asset.provider)}<br><span style="color:#9ca3af;">TER {escape(_fmt_ter(asset.ter))} · {escape(_ter_label(asset.ter))}<br>审计：{escape(asset.metadata_status)}</span></td>
       <td style="padding:7px;border-bottom:1px solid #263244;">{escape(asset.theme)}<br>{escape(_fmt_sigma_200d(asset.trend_sigma_200d))} · {escape(asset.trend_stretch_label)}</td>
       <td style="padding:7px;border-bottom:1px solid #263244;">{escape(_fmt_sigma(asset.daily_sigma))} / {escape(_fmt_pct(asset.momentum_1m))} / {escape(_fmt_plain(asset.rsi14))}<br>{escape(asset.sigma_label)}</td>
-      <td style="padding:7px;border-bottom:1px solid #263244;">{escape(_fmt_plain(asset.pe))} / {escape(_fmt_plain(asset.forward_pe))} / {escape(_fmt_plain(asset.pb))}<br>{escape(asset.valuation_label)}<br><span style="color:#9ca3af;">{escape(valuation_source)}</span></td>
+      <td style="padding:7px;border-bottom:1px solid #263244;">{escape(valuation)}<br>{escape(valuation_detail)}<br><span style="color:#9ca3af;">{escape(valuation_source)}</span></td>
       <td style="padding:7px;border-bottom:1px solid #263244;">{escape(asset.liquidity_label)}<br><span style="color:#9ca3af;">{escape(liquidity)}</span></td>
-      <td style="padding:7px;border-bottom:1px solid #263244;">{escape(_fmt_pe_position(asset))}</td>
+      <td style="padding:7px;border-bottom:1px solid #263244;">{escape(pe_position)}</td>
       <td style="padding:7px;border-bottom:1px solid #263244;">{asset.entry_score}/100<br>{escape(asset.entry_label)}<br><span style="color:#9ca3af;">{escape(_fmt_backtest(asset))}</span></td>
       <td style="padding:7px;border-bottom:1px solid #263244;">{asset.crowding_score}/100<br>{escape(asset.crowding_label)}</td>
     </tr>"""
 
 
 def _fmt_email_valuation_source(asset: ETFAssetMonitor) -> str:
+    if asset.theme == "Gold":
+        return "资产属性：实物黄金ETC"
+    if not asset.equity_like:
+        return "资产属性：非权益ETF"
     if asset.valuation_source == "unavailable":
         return "估值源：暂无"
     as_of = f" · 最近披露：{asset.valuation_as_of}" if asset.valuation_as_of else ""
@@ -493,6 +498,7 @@ def _group_etf_assets(assets: list[ETFAssetMonitor]) -> list[tuple[str, str, lis
         ("量子计算", "高beta前沿主题，适合单独观察热度与波动", {"Quantum Computing"}),
         ("韩国权益与存储链", "Samsung Electronics、SK hynix及韩国科技/工业周期暴露", {"South Korea Equity"}),
         ("军工与防务", "全球/欧洲防务、网络防务与防务创新", {"Defence", "European Defence", "Defence Innovation"}),
+        ("现金与短债", "现金替代、超短债、货币市场与短久期防守仓", {"GBP Ultrashort Bond / Cash-like", "Cash-like", "Money Market", "Short Duration Bond"}),
         ("固定收益与久期", "利率、久期与债券波动环境观察", {"US Treasury 7-10Y GBP Hedged"}),
         ("黄金与实物资产", "实际利率、美元与避险需求的交叉验证", {"Gold"}),
     ]
@@ -578,11 +584,24 @@ def _holding_key(holding) -> str:
 
 
 def _fmt_pe_position(asset: ETFAssetMonitor) -> str:
+    if asset.theme == "Gold":
+        return "不适用"
+    if not asset.equity_like:
+        return "不适用"
     if asset.pe_percentile is not None:
         return f"分位 {asset.pe_percentile:.0f}%"
     if asset.pe_high_1y_ratio is not None:
         return f"约{asset.pe_high_1y_ratio:.0f}% / 1Y高点"
     return "样本不足"
+
+
+def _fmt_valuation_block(asset: ETFAssetMonitor) -> tuple[str, str, str]:
+    if asset.theme == "Gold":
+        return "不适用：实物黄金ETC", "观察实际利率、美元与金价趋势", "不适用"
+    if not asset.equity_like:
+        return "不适用：久期/收益率/利率风险", "观察久期、收益率曲线、利率风险与流动性", "不适用"
+    valuation = f"{_fmt_plain(asset.pe)} / {_fmt_plain(asset.forward_pe)} / {_fmt_plain(asset.pb)}"
+    return valuation, asset.valuation_label, _fmt_pe_position(asset)
 
 
 def _fmt_backtest(asset: ETFAssetMonitor) -> str:

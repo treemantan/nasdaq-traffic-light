@@ -13,6 +13,7 @@ from market_report.etf_monitor import (
     ETFSpec,
     DEFAULT_ETF_SPECS,
     _audit_metadata,
+    _classify_portfolio_supplement,
     _load_portfolio_summary,
     _parse_ishares_portfolio_valuation,
     _parse_compact_number,
@@ -21,7 +22,7 @@ from market_report.etf_monitor import (
     _with_portfolio_supplement_specs,
 )
 from market_report.news_monitor import NewsEvent, NewsMonitor
-from market_report.render import _max_holdings_overlap, _portfolio_news_matches
+from market_report.render import _fmt_valuation_block, _group_etf_assets, _max_holdings_overlap, _portfolio_news_matches
 
 
 class ETFProductCheckTests(unittest.TestCase):
@@ -30,6 +31,26 @@ class ETFProductCheckTests(unittest.TestCase):
         self.assertFalse(erns.equity_like)
         self.assertEqual(erns.theme, "GBP Ultrashort Bond / Cash-like")
         self.assertEqual(erns.ter, 0.09)
+
+    def test_cash_like_etf_groups_and_valuation_copy_are_non_equity(self) -> None:
+        asset = self._asset("ERNS.L", (), equity_like=False, theme="GBP Ultrashort Bond / Cash-like")
+        groups = _group_etf_assets([asset])
+        valuation, detail, pe_position = _fmt_valuation_block(asset)
+
+        self.assertEqual(groups[0][0], "现金与短债")
+        self.assertIn("久期/收益率/利率风险", valuation)
+        self.assertNotIn("N/A", valuation)
+        self.assertEqual(pe_position, "不适用")
+        self.assertIn("收益率曲线", detail)
+
+    def test_portfolio_supplement_cash_like_metadata_is_auto_classified(self) -> None:
+        theme, equity_like = _classify_portfolio_supplement(
+            ETFSpec("portfolio-erns-l", "ERNS.L portfolio ETF holding", "ERNS.L", "Portfolio Supplement", "Portfolio"),
+            {"longName": "iShares £ Ultrashort Bond UCITS ETF", "instrumentType": "ETF"},
+        )
+
+        self.assertEqual(theme, "GBP Ultrashort Bond / Cash-like")
+        self.assertFalse(equity_like)
 
     def test_portfolio_lse_holding_extends_monitor_specs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -172,18 +193,25 @@ class ETFProductCheckTests(unittest.TestCase):
         self.assertEqual([event.title for event in _portfolio_news_matches(positions, monitor)], ["NVIDIA update"])
 
     @staticmethod
-    def _asset(symbol: str, holdings: tuple[ETFHolding, ...], ter: float = 0.10) -> ETFAssetMonitor:
+    def _asset(
+        symbol: str,
+        holdings: tuple[ETFHolding, ...],
+        ter: float = 0.10,
+        equity_like: bool = True,
+        theme: str = "Demo",
+    ) -> ETFAssetMonitor:
         return ETFAssetMonitor(
             key=symbol.lower(),
             label=symbol,
             symbol=symbol,
-            theme="Demo",
+            theme=theme,
             provider="Demo",
             currency="GBP",
             value=1,
             previous_value=1,
             as_of=date(2026, 1, 1),
             fetched_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            equity_like=equity_like,
             ter=ter,
             holdings=holdings,
         )

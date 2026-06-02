@@ -21,7 +21,7 @@
 
 - `TER`：总费用率
 - AUM、20 日平均成交额和流动性标签
-- PE、Forward PE、组合 P/B 和披露日期
+- 权益类 ETF 显示 PE、Forward PE、组合 P/B 和披露日期；现金、短债、固定收益和黄金类显示资产属性与主要风险因子
 - SMA13、SMA50、SMA200、RSI14、动量和稳健波动率
 - 拥挤度、新增仓位环境分数、相关性与 beta
 - walk-forward 相似环境样本和尾部历史阶段
@@ -31,6 +31,8 @@
 ### 自适应补充观察池
 
 如果 statement 中出现未在默认观察池里的 UK ETF，导入器会尝试验证 `ticker.L` 的 Yahoo 元数据。只有确认是 LSE ETF/ETC 时，才会自动标记为 `covered`；报告端也会把已经解析成 `.L` 的持仓补入 `Portfolio Supplement` 观察组。单股如 `NVDA`、`META` 不会被误加入 ETF 趋势池。
+
+对补充标的，系统会基于 Yahoo 的产品名称做保守主题归类：例如 cash / ultrashort / bond 会归入现金、短债或固定收益；gold 会归入黄金与实物资产；korea、semiconductor、defence 等关键词会归入对应主题。识别不了的标的才继续留在 `Portfolio Supplement`。
 
 `ERNS.L` 已作为 iShares £ Ultrashort Bond UCITS ETF 纳入默认池，按现金/超短债防守仓处理，不使用 PE/PB 估值逻辑。观察重点应放在现金替代属性、利率环境、久期风险和流动性，而不是盈利倍数。
 

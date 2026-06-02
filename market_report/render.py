@@ -464,7 +464,7 @@ def _render_etf_monitor(
       {portfolio}
       {sensitivities}
       <div class="etf-groups">{groups}</div>
-      <div class="small-note">PE衡量底层持仓组合的盈利估值，Forward PE基于未来盈利预期；组合P/B衡量底层持仓市值相对账面净资产的加权估值，并非ETF自身资产负债表指标。组合估值按发行商披露节奏更新，不等同于实时行情。PE位置优先显示本地历史分位；样本不足时显示“当前PE/近一年缓存最高PE”的近似比例。σ200使用63/126/252日窗口去极值后的稳健趋势波动率。持仓重叠度基于可获得的前十大持仓近似计算，并非完整穿透。估值源若标记为proxy，表示使用高度相关的同类ETF作近似参考。黄金ETC不适用PE/PB。</div>
+      <div class="small-note">PE衡量底层持仓组合的盈利估值，Forward PE基于未来盈利预期；组合P/B衡量底层持仓市值相对账面净资产的加权估值，并非ETF自身资产负债表指标。组合估值按发行商披露节奏更新，不等同于实时行情。PE位置优先显示本地历史分位；样本不足时显示“当前PE/近一年缓存最高PE”的近似比例。σ200使用63/126/252日窗口去极值后的稳健趋势波动率。持仓重叠度基于可获得的前十大持仓近似计算，并非完整穿透。估值源若标记为proxy，表示使用高度相关的同类ETF作近似参考。黄金、现金、短债和固定收益类产品不适用PE/PB，应观察实际利率、久期、收益率和流动性。</div>
       {warnings}
     </section>"""
 
@@ -698,7 +698,7 @@ def _render_etf_group(group: tuple[str, str, list[ETFAssetMonitor]], index: int 
             <th>1M</th>
             <th>RSI14</th>
             <th>SMA13/200</th>
-            <th>组合PE / Forward PE / 组合P/B</th>
+            <th>估值/资产属性</th>
             <th>规模/流动性</th>
             <th>PE位置</th>
             <th>新增仓位环境</th>
@@ -739,6 +739,7 @@ def _group_etf_assets(assets: list[ETFAssetMonitor]) -> list[tuple[str, str, lis
         ("量子计算", "高beta前沿主题，适合单独观察热度与波动", {"Quantum Computing"}),
         ("韩国权益与存储链", "Samsung Electronics、SK hynix及韩国科技/工业周期暴露", {"South Korea Equity"}),
         ("军工与防务", "全球/欧洲防务、网络防务与防务创新", {"Defence", "European Defence", "Defence Innovation"}),
+        ("现金与短债", "现金替代、超短债、货币市场与短久期防守仓", {"GBP Ultrashort Bond / Cash-like", "Cash-like", "Money Market", "Short Duration Bond"}),
         ("固定收益与久期", "利率、久期与债券波动环境观察", {"US Treasury 7-10Y GBP Hedged"}),
         ("黄金与实物资产", "实际利率、美元与避险需求的交叉验证", {"Gold"}),
     ]
@@ -833,10 +834,9 @@ def _render_etf_row(asset: ETFAssetMonitor) -> str:
     rsi = "N/A" if asset.rsi14 is None else f"{asset.rsi14:.1f}"
     sma = f"{_fmt_price(asset.sma13, asset.currency)} / {_fmt_price(asset.sma200, asset.currency)}"
     trend_sigma = _fmt_sigma_200d(asset.trend_sigma_200d)
-    valuation = f"{_fmt_plain(asset.pe)} / {_fmt_plain(asset.forward_pe)} / {_fmt_plain(asset.pb)}"
+    valuation, valuation_detail, pe_position = _fmt_valuation_block(asset)
     valuation_source = _fmt_valuation_source(asset)
     liquidity = _fmt_liquidity(asset)
-    pe_position = _fmt_pe_position(asset)
     symbol = f"{escape(asset.symbol)} · {escape(asset.provider)}"
     cost = f"TER {escape(_fmt_ter(asset.ter))} · {escape(_ter_label(asset.ter))}"
     entry_cell = _render_entry_cell(asset, entry_status, compact=False)
@@ -848,7 +848,7 @@ def _render_etf_row(asset: ETFAssetMonitor) -> str:
       <td>{escape(one_month)}</td>
       <td>{escape(rsi)}<br><span class="muted">{escape(asset.momentum_label)}</span></td>
       <td>{escape(sma)}<br><span class="muted">距200日线 {escape(_fmt_pct(asset.distance_sma200))} / {escape(trend_sigma)} · {escape(asset.trend_stretch_label)}</span></td>
-      <td>{escape(valuation)}<br><span class="muted">{escape(asset.valuation_label)}</span><br><span class="muted">{escape(valuation_source)}</span></td>
+      <td>{escape(valuation)}<br><span class="muted">{escape(valuation_detail)}</span><br><span class="muted">{escape(valuation_source)}</span></td>
       <td>{escape(asset.liquidity_label)}<br><span class="muted">{escape(liquidity)}</span></td>
       <td>{escape(pe_position)}</td>
       <td>{entry_cell}</td>
@@ -863,7 +863,7 @@ def _render_etf_card(asset: ETFAssetMonitor) -> str:
     one_day = _fmt_pct(asset.change_pct)
     one_month = _fmt_pct(asset.momentum_1m)
     rsi = "N/A" if asset.rsi14 is None else f"{asset.rsi14:.1f}"
-    valuation = f"{_fmt_plain(asset.pe)} / {_fmt_plain(asset.forward_pe)} / {_fmt_plain(asset.pb)}"
+    valuation, valuation_detail, _ = _fmt_valuation_block(asset)
     valuation_source = _fmt_valuation_source(asset)
     liquidity = _fmt_liquidity(asset)
     trend_line = f"距200日线 {_fmt_pct(asset.distance_sma200)} / {_fmt_sigma_200d(asset.trend_sigma_200d)}"
@@ -883,7 +883,7 @@ def _render_etf_card(asset: ETFAssetMonitor) -> str:
         <div class="etf-card-line"><strong>1D / 1M</strong>{escape(one_day)} / {escape(one_month)}<br>{escape(_fmt_sigma(asset.daily_sigma))}</div>
         <div class="etf-card-line"><strong>RSI14</strong>{escape(rsi)}<br>{escape(asset.momentum_label)}</div>
         <div class="etf-card-line"><strong>趋势拉伸</strong>{escape(trend_line)}<br>{escape(asset.trend_stretch_label)}</div>
-        <div class="etf-card-line"><strong>组合PE / Fwd / 组合P/B</strong>{escape(valuation)}<br>{escape(_fmt_pe_position(asset))} · {escape(valuation_source)}</div>
+        <div class="etf-card-line"><strong>估值/资产属性</strong>{escape(valuation)}<br>{escape(valuation_detail)} · {escape(valuation_source)}</div>
         <div class="etf-card-line"><strong>规模/流动性</strong>{escape(asset.liquidity_label)}<br>{escape(liquidity)}</div>
         <div class="etf-card-line">{entry_cell}</div>
       </div>
@@ -891,6 +891,10 @@ def _render_etf_card(asset: ETFAssetMonitor) -> str:
 
 
 def _fmt_valuation_source(asset: ETFAssetMonitor) -> str:
+    if asset.theme == "Gold":
+        return "资产属性：实物黄金ETC"
+    if not asset.equity_like:
+        return "资产属性：非权益ETF"
     if asset.valuation_source == "unavailable":
         return "估值源：暂无"
     as_of = f" · 最近披露：{asset.valuation_as_of}" if asset.valuation_as_of else ""
@@ -1058,11 +1062,24 @@ def _fmt_money_short(value: float | None) -> str:
 
 
 def _fmt_pe_position(asset: ETFAssetMonitor) -> str:
+    if asset.theme == "Gold":
+        return "不适用"
+    if not asset.equity_like:
+        return "不适用"
     if asset.pe_percentile is not None:
         return f"分位 {asset.pe_percentile:.0f}%"
     if asset.pe_high_1y_ratio is not None:
         return f"约{asset.pe_high_1y_ratio:.0f}% / 1Y高点"
     return "样本不足"
+
+
+def _fmt_valuation_block(asset: ETFAssetMonitor) -> tuple[str, str, str]:
+    if asset.theme == "Gold":
+        return "不适用：实物黄金ETC", "观察实际利率、美元与金价趋势", "不适用"
+    if not asset.equity_like:
+        return "不适用：久期/收益率/利率风险", "观察久期、收益率曲线、利率风险与流动性", "不适用"
+    valuation = f"{_fmt_plain(asset.pe)} / {_fmt_plain(asset.forward_pe)} / {_fmt_plain(asset.pb)}"
+    return valuation, asset.valuation_label, _fmt_pe_position(asset)
 
 
 def _fmt_backtest(asset: ETFAssetMonitor) -> str:
