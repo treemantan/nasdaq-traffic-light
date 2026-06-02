@@ -47,5 +47,37 @@
     "progress_source_url": "https://ir.netflix.net/investor-news-and-events/financial-releases/default.aspx",
     "note": "当前日期仅作为预计观察窗口。收到Netflix IR正式公告后，应更新为已确认时刻。",
     "watch_items": ["营收与利润率guidance", "广告业务进展", "内容投入和自由现金流", "估值对增长预期的敏感度"]
+  },
+  {
+    "event_id": "meta-dividend-record-date-2026-06-15",
+    "symbols": ["META"],
+    "title": "Meta季度股息登记日",
+    "event_type": "资本回报事件",
+    "scope": "直接事件",
+    "status": "已确认",
+    "event_date": "2026-06-15",
+    "reminder_rule": "premarket",
+    "source_label": "Meta IR：季度现金股息公告",
+    "source_url": "https://investor.atmeta.com/investor-news/press-release-details/2026/Meta-Announces-Quarterly-Cash-Dividend-3f2eb420d/default.aspx",
+    "progress_source_label": "Meta IR：投资者新闻页面",
+    "progress_source_url": "https://investor.atmeta.com/investor-news/",
+    "note": "Meta董事会已宣布每股0.525美元季度股息，登记日为2026-06-15，支付日为2026-06-25。该事项本身不是基本面转折信号，但适合作为资本回报纪律的复核节点。",
+    "watch_items": ["资本回报纪律", "现金流与AI资本开支之间的平衡", "支付日2026-06-25"]
+  },
+  {
+    "event_id": "meta-q2-2026-estimated-window",
+    "symbols": ["META"],
+    "title": "Meta Q2财报与AI资本开支guidance预计窗口",
+    "event_type": "财报事件",
+    "scope": "直接事件",
+    "status": "预计日期，等待Meta IR正式确认",
+    "event_date": "2026-07-29",
+    "reminder_rule": "premarket",
+    "source_label": "Meta IR：Q1 2026财报与最新guidance",
+    "source_url": "https://investor.atmeta.com/investor-news/press-release-details/2026/Meta-Reports-First-Quarter-2026-Results/",
+    "progress_source_label": "Meta IR：投资者事件页面",
+    "progress_source_url": "https://investor.atmeta.com/investor-events/",
+    "note": "当前日期仅作为预计复核窗口。Meta Q1已将2026年资本开支预期上调至1250亿至1450亿美元；后续应重点观察AI基础设施投入、广告变现和监管风险之间的再平衡。",
+    "watch_items": ["AI资本开支guidance", "广告收入和价格趋势", "Family of Apps利润率", "欧盟与美国监管事项", "等待Meta IR确认正式时间"]
   }
 ]

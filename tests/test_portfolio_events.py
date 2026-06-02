@@ -66,6 +66,18 @@ class PortfolioEventMonitorTests(unittest.TestCase):
         )
         self.assertEqual(monitor.events, ())
 
+    def test_red_alert_without_registered_event_is_visible_as_coverage_gap(self) -> None:
+        class RedPosition:
+            symbol = "META"
+            peak_watch = "红色观察"
+            drawdown_regime = "趋势破坏风险"
+
+        monitor = build_portfolio_event_monitor(
+            [RedPosition()],
+            now=datetime.fromisoformat("2026-10-01T12:00:00+01:00"),
+        )
+        self.assertEqual(monitor.review_required_symbols, ("META",))
+
 
 if __name__ == "__main__":
     unittest.main()

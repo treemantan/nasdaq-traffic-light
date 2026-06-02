@@ -59,6 +59,7 @@ class PortfolioEventMonitor:
     generated_at: str
     summary: str
     events: tuple[PortfolioEventObservation, ...]
+    review_required_symbols: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
 
 
@@ -122,15 +123,26 @@ def build_portfolio_event_monitor(
         )
 
     observations.sort(key=lambda item: item.event_at)
+    covered_symbols = {symbol for item in observations for symbol in item.symbols}
+    review_required = tuple(
+        sorted(
+            symbol
+            for symbol, alert_level in alert_levels.items()
+            if alert_level == "红色回撤复核" and symbol not in covered_symbols
+        )
+    )
     summary = (
         f"未来{horizon_days}日内识别到{len(observations)}个持仓相关观察窗口。"
         if observations
         else f"未来{horizon_days}日内暂无已登记的持仓相关事件。"
     )
+    if review_required:
+        summary += f" 仍有{len(review_required)}个红色预警ticker需要补充人工复核来源。"
     return PortfolioEventMonitor(
         generated_at=current_time.isoformat(),
         summary=summary,
         events=tuple(observations),
+        review_required_symbols=review_required,
     )
 
 

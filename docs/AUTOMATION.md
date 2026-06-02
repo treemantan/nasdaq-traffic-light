@@ -136,6 +136,7 @@ python scripts/send_portfolio_event_reminders.py --lookahead-hours 7
 - 只有日期的事件会在事件当天、美股开盘前首次检查时提醒。
 - 已发送事件写入 `output/cache/portfolio_event_reminders.json`，并随 GitHub Actions cache 延续，避免重复提醒。
 - 每个事件包含官方来源或可审计的进展链接。预计日期和媒体报道会明确标记，不应误读为公司已经正式确认。
+- 所有红色回撤预警 ticker 都会进入事件复核覆盖检查。若尚未登记未来窗口，私人报告会显示“红色预警待补充事件来源”，提醒人工检查公司 IR、SEC 披露和行业监管进展。
 
 事件日历维护在：
 

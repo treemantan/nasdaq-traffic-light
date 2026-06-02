@@ -561,7 +561,7 @@ def _render_portfolio_performance(monitor: ETFMonitor) -> str:
 
 
 def _render_portfolio_event_calendar(monitor: PortfolioEventMonitor | None) -> str:
-    if monitor is None or not monitor.events:
+    if monitor is None or (not monitor.events and not monitor.review_required_symbols):
         return ""
     rows = "".join(
         f"""<article class="portfolio-event">
@@ -574,9 +574,17 @@ def _render_portfolio_event_calendar(monitor: PortfolioEventMonitor | None) -> s
         </article>"""
         for event in monitor.events
     )
+    gaps = ""
+    if monitor.review_required_symbols:
+        gaps = (
+            '<div class="small-note" style="color:var(--amber);">红色预警待补充事件来源：'
+            + escape("、".join(monitor.review_required_symbols))
+            + "。请人工复核公司IR、SEC披露及行业监管进展。</div>"
+        )
     return f"""<div class="portfolio-notes">
       <strong>持仓事件复核日历</strong>
       <div class="small-note">{escape(monitor.summary)} 事件来源用于跟踪进展；预计日期会明确标记，不视为公司已确认日程。</div>
+      {gaps}
       <div class="portfolio-event-grid">{rows}</div>
     </div>"""
 

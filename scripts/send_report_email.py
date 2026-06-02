@@ -283,6 +283,7 @@ def _report_from_payload(payload: dict):
                     for item in (raw or [])
                     if isinstance(item, dict)
                 ),
+                "review_required_symbols": lambda raw: tuple(raw or ()),
                 "warnings": lambda raw: tuple(raw or ()),
             },
         )

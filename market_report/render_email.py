@@ -372,7 +372,7 @@ def _render_portfolio_performance_email(monitor: ETFMonitor) -> str:
 
 
 def _render_portfolio_event_calendar_email(monitor: PortfolioEventMonitor | None) -> str:
-    if monitor is None or not monitor.events:
+    if monitor is None or (not monitor.events and not monitor.review_required_symbols):
         return ""
     rows = "".join(
         f"""<li style="margin-bottom:7px;"><strong>{escape(event.title)}</strong>
@@ -386,9 +386,17 @@ def _render_portfolio_event_calendar_email(monitor: PortfolioEventMonitor | None
         </li>"""
         for event in monitor.events
     )
+    gaps = ""
+    if monitor.review_required_symbols:
+        gaps = (
+            '<div style="color:#fbbf24;margin-top:3px;">红色预警待补充事件来源：'
+            + escape("、".join(monitor.review_required_symbols))
+            + "。请人工复核公司IR、SEC披露及行业监管进展。</div>"
+        )
     return f"""<div style="font-size:12px;color:#d1d5db;margin:8px 0;">
       <strong>持仓事件复核日历</strong>
       <div style="color:#9ca3af;margin-top:3px;">{escape(monitor.summary)} 预计日期会明确标记，不视为公司已确认日程。</div>
+      {gaps}
       <ul style="padding-left:18px;">{rows}</ul>
     </div>"""
 
