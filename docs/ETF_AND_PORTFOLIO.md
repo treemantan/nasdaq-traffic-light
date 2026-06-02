@@ -14,7 +14,8 @@
 | 量子计算 | `QWTM.L`, `QNTM.L`, `QANT.L` |
 | 韩国权益 | `CSKR.L`, `HKOR.L`, `FLRK.L` |
 | 防务 | `DFND.L`, `WDEF.L`, `DFNG.L`, `NATO.L`, `DFNX.L`, `DFEU.L` |
-| 固定收益与黄金 | `IGTM.L`, `SGLN.L`, `PHAU.L`, `SGBX.L` |
+| 固定收益、现金与短债 | `IGTM.L`, `ERNS.L` |
+| 黄金与实物资产 | `SGLN.L`, `PHAU.L`, `SGBX.L` |
 
 每只产品尽量展示：
 
@@ -27,7 +28,13 @@
 
 免费数据源对 LSE ETF 的真实 bid/ask spread 不稳定，因此价差保持“待确认”，不填入伪精度。
 
-## 组合估值字段
+### 自适应补充观察池
+
+如果 statement 中出现未在默认观察池里的 UK ETF，导入器会尝试验证 `ticker.L` 的 Yahoo 元数据。只有确认是 LSE ETF/ETC 时，才会自动标记为 `covered`；报告端也会把已经解析成 `.L` 的持仓补入 `Portfolio Supplement` 观察组。单股如 `NVDA`、`META` 不会被误加入 ETF 趋势池。
+
+`ERNS.L` 已作为 iShares £ Ultrashort Bond UCITS ETF 纳入默认池，按现金/超短债防守仓处理，不使用 PE/PB 估值逻辑。观察重点应放在现金替代属性、利率环境、久期风险和流动性，而不是盈利倍数。
+
+## Revolut 组合导入字段
 
 运行：
 
@@ -36,8 +43,6 @@ python scripts/import_revolut_statement.py "*.csv"
 ```
 
 导入器会读取 CSV 表头确认是否为 Revolut trading statement，因此可以识别标准文件名和 iPhone 生成的 UUID 文件名。多个导出可以保留在 OneDrive inbox 中：系统使用 `Date`、`Ticker`、`Type`、`Quantity`、`Price per share`、`Total Amount`、`Currency` 和 `FX Rate` 建立交易指纹，移除重叠 statement 中的重复行，再按时间顺序重建持仓。无需人工清理旧文件。
-
-如果 statement 中出现未在默认观察池里的 UK ETF，导入器会尝试验证 `ticker.L` 的 Yahoo 元数据。只有确认是 LSE ETF/ETC 时，才会自动标记为 `covered`；报告端也会把已经解析成 `.L` 的持仓补入“Portfolio Supplement”观察组。单股如 `NVDA`、`META` 不会被误加入 ETF 趋势池。`ERNS.L` 已作为 iShares £ Ultrashort Bond UCITS ETF 纳入默认池，按现金/超短债防守仓处理，不使用 PE/PB 估值逻辑。
 
 导入器按 `BUY`、`SELL` 和 `STOCK SPLIT` 重建数量与历史 GBP 成本，并抓取 Yahoo 最新价格。美元和欧元资产使用抓取时点的 GBP/USD 或 GBP/EUR 汇率转换为 GBP 参考市值。
 
