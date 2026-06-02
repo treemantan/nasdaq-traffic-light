@@ -832,8 +832,7 @@ def _render_etf_row(asset: ETFAssetMonitor) -> str:
     sigma = _fmt_sigma(asset.daily_sigma)
     one_month = _fmt_pct(asset.momentum_1m)
     rsi = "N/A" if asset.rsi14 is None else f"{asset.rsi14:.1f}"
-    sma = f"{_fmt_price(asset.sma13, asset.currency)} / {_fmt_price(asset.sma200, asset.currency)}"
-    trend_sigma = _fmt_sigma_200d(asset.trend_sigma_200d)
+    trend_main, trend_detail = _fmt_trend_cell(asset)
     valuation, valuation_detail, pe_position = _fmt_valuation_block(asset)
     valuation_source = _fmt_valuation_source(asset)
     liquidity = _fmt_liquidity(asset)
@@ -847,7 +846,7 @@ def _render_etf_row(asset: ETFAssetMonitor) -> str:
       <td>{escape(one_day)}<br><span class="muted">{escape(sigma)} · {escape(asset.sigma_label)}</span></td>
       <td>{escape(one_month)}</td>
       <td>{escape(rsi)}<br><span class="muted">{escape(asset.momentum_label)}</span></td>
-      <td>{escape(sma)}<br><span class="muted">距200日线 {escape(_fmt_pct(asset.distance_sma200))} / {escape(trend_sigma)} · {escape(asset.trend_stretch_label)}</span></td>
+      <td>{escape(trend_main)}<br><span class="muted">{escape(trend_detail)}</span></td>
       <td>{escape(valuation)}<br><span class="muted">{escape(valuation_detail)}</span><br><span class="muted">{escape(valuation_source)}</span></td>
       <td>{escape(asset.liquidity_label)}<br><span class="muted">{escape(liquidity)}</span></td>
       <td>{escape(pe_position)}</td>
@@ -866,7 +865,7 @@ def _render_etf_card(asset: ETFAssetMonitor) -> str:
     valuation, valuation_detail, _ = _fmt_valuation_block(asset)
     valuation_source = _fmt_valuation_source(asset)
     liquidity = _fmt_liquidity(asset)
-    trend_line = f"距200日线 {_fmt_pct(asset.distance_sma200)} / {_fmt_sigma_200d(asset.trend_sigma_200d)}"
+    trend_line, trend_detail = _fmt_trend_cell(asset)
     cost_line = f"TER {_fmt_ter(asset.ter)} · {_ter_label(asset.ter)}"
     entry_cell = _render_entry_cell(asset, entry_status, compact=True)
     return f"""<article class="etf-card">
@@ -882,7 +881,7 @@ def _render_etf_card(asset: ETFAssetMonitor) -> str:
       <div class="etf-card-lines">
         <div class="etf-card-line"><strong>1D / 1M</strong>{escape(one_day)} / {escape(one_month)}<br>{escape(_fmt_sigma(asset.daily_sigma))}</div>
         <div class="etf-card-line"><strong>RSI14</strong>{escape(rsi)}<br>{escape(asset.momentum_label)}</div>
-        <div class="etf-card-line"><strong>趋势拉伸</strong>{escape(trend_line)}<br>{escape(asset.trend_stretch_label)}</div>
+        <div class="etf-card-line"><strong>趋势/稳定性</strong>{escape(trend_line)}<br>{escape(trend_detail)}</div>
         <div class="etf-card-line"><strong>估值/资产属性</strong>{escape(valuation)}<br>{escape(valuation_detail)} · {escape(valuation_source)}</div>
         <div class="etf-card-line"><strong>规模/流动性</strong>{escape(asset.liquidity_label)}<br>{escape(liquidity)}</div>
         <div class="etf-card-line">{entry_cell}</div>
@@ -899,6 +898,16 @@ def _fmt_valuation_source(asset: ETFAssetMonitor) -> str:
         return "估值源：暂无"
     as_of = f" · 最近披露：{asset.valuation_as_of}" if asset.valuation_as_of else ""
     return f"估值源：{asset.valuation_source}{as_of}"
+
+
+def _fmt_trend_cell(asset: ETFAssetMonitor) -> tuple[str, str]:
+    if asset.theme == "GBP Ultrashort Bond / Cash-like":
+        main = "稳定性/短端利率敏感"
+        detail = f"1M {_fmt_pct(asset.momentum_1m)} / 日波动 {_fmt_sigma(asset.daily_sigma)} · {asset.trend_stretch_label}"
+        return main, detail
+    main = f"{_fmt_price(asset.sma13, asset.currency)} / {_fmt_price(asset.sma200, asset.currency)}"
+    detail = f"距200日线 {_fmt_pct(asset.distance_sma200)} / {_fmt_sigma_200d(asset.trend_sigma_200d)} · {asset.trend_stretch_label}"
+    return main, detail
 
 
 def _render_entry_cell(asset: ETFAssetMonitor, status_class: str, compact: bool) -> str:

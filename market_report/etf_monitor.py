@@ -464,6 +464,10 @@ def _classify_portfolio_supplement(spec: ETFSpec, meta: dict[str, Any]) -> tuple
     return spec.theme, spec.equity_like
 
 
+def _is_cash_like_theme(theme: str) -> bool:
+    return theme in {"GBP Ultrashort Bond / Cash-like", "Cash-like", "Money Market", "Short Duration Bond"}
+
+
 def _fetch_etf_asset(
     spec: ETFSpec,
     fetched_at: datetime,
@@ -603,10 +607,10 @@ def _fetch_etf_asset(
         asset,
         distance_sma200=distance,
         trend_sigma_200d=trend_sigma,
-        trend_label=_trend_label(asset.value, asset.sma13, asset.sma50, asset.sma200),
+        trend_label=_asset_trend_label(effective_spec, asset.value, asset.sma13, asset.sma50, asset.sma200),
         momentum_label=_momentum_label(asset.rsi14, asset.momentum_1m),
         sigma_label=_sigma_label(asset.daily_sigma, asset.daily_volatility),
-        trend_stretch_label=_trend_stretch_label(trend_sigma),
+        trend_stretch_label=_asset_trend_stretch_label(effective_spec, trend_sigma),
         valuation_label=_valuation_label(effective_spec, pe, forward_pe, pe_percentile),
         crowding_score=_crowding_score(asset.rsi14, distance, pe_percentile, asset.momentum_1m),
     )
@@ -2641,6 +2645,18 @@ def _trend_label(value: float | None, sma13: float | None, sma50: float | None, 
     return "价格低于200日线，中长期趋势偏弱"
 
 
+def _asset_trend_label(spec: ETFSpec, value: float | None, sma13: float | None, sma50: float | None, sma200: float | None) -> str:
+    if _is_cash_like_theme(spec.theme):
+        return "现金替代资产：不使用200日线判断趋势"
+    return _trend_label(value, sma13, sma50, sma200)
+
+
+def _asset_trend_stretch_label(spec: ETFSpec, trend_sigma: float | None) -> str:
+    if _is_cash_like_theme(spec.theme):
+        return "派息/除息会影响价格路径，重点看波动、流动性和短端利率"
+    return _trend_stretch_label(trend_sigma)
+
+
 def _momentum_label(rsi14: float | None, momentum_1m: float | None) -> str:
     if rsi14 is None:
         return "RSI不足，动量待确认"
@@ -2714,6 +2730,8 @@ def _crowding_label(score: int, rsi14: float | None, distance_sma200: float | No
 
 
 def _entry_quality(asset: ETFAssetMonitor, macro_metrics: dict[str, Any] | None = None) -> tuple[int, str, str, str]:
+    if _is_cash_like_theme(asset.theme):
+        return _cash_like_entry_quality(asset)
     if asset.theme == "US Treasury 7-10Y GBP Hedged":
         return _fixed_income_entry_quality(asset)
     if asset.theme == "Gold":
@@ -2809,6 +2827,53 @@ def _entry_label(score: int) -> str:
     if score >= 45:
         return "信号分歧，等待确认"
     return "追高风险或趋势压力较高"
+
+
+def _cash_like_entry_quality(asset: ETFAssetMonitor) -> tuple[int, str, str, str]:
+    score = 62.0
+    if asset.ter is not None:
+        if asset.ter <= 0.15:
+            score += 8
+        elif asset.ter >= 0.40:
+            score -= 6
+    if asset.aum is not None:
+        if asset.aum >= 500_000_000:
+            score += 8
+        elif asset.aum < 100_000_000:
+            score -= 6
+    if asset.avg_traded_value_20d is not None:
+        if asset.avg_traded_value_20d >= 1_000_000:
+            score += 6
+        elif asset.avg_traded_value_20d < 100_000:
+            score -= 8
+    if asset.daily_sigma is not None:
+        if abs(asset.daily_sigma) <= 1:
+            score += 5
+        elif abs(asset.daily_sigma) >= 2:
+            score -= 8
+    if asset.momentum_1m is not None:
+        if -0.5 <= asset.momentum_1m <= 1.5:
+            score += 6
+        elif asset.momentum_1m < -1.5:
+            score -= 8
+        elif asset.momentum_1m > 3:
+            score -= 4
+    if asset.bid_ask_spread_pct is not None and asset.bid_ask_spread_pct > 0.30:
+        score -= 10
+
+    final_score = _clamp(score)
+    if final_score >= 70:
+        label = "现金替代质量较好"
+    elif final_score >= 55:
+        label = "现金替代环境中性"
+    else:
+        label = "现金替代需复核流动性与波动"
+    note = (
+        "超短债/现金替代ETF不按200日均线评估趋势。当前分数主要来自TER、AUM、20日成交额、"
+        "短期价格稳定性和可观测价差。"
+    )
+    risk = "风险管理重点：关注短端利率预期、除息造成的价格回落、基金流动性和异常折溢价。"
+    return final_score, label, note, risk
 
 
 def _fixed_income_entry_quality(asset: ETFAssetMonitor) -> tuple[int, str, str, str]:

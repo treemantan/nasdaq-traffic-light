@@ -13,7 +13,9 @@ from market_report.etf_monitor import (
     ETFSpec,
     DEFAULT_ETF_SPECS,
     _audit_metadata,
+    _asset_trend_label,
     _classify_portfolio_supplement,
+    _entry_quality,
     _load_portfolio_summary,
     _parse_ishares_portfolio_valuation,
     _parse_compact_number,
@@ -42,6 +44,37 @@ class ETFProductCheckTests(unittest.TestCase):
         self.assertNotIn("N/A", valuation)
         self.assertEqual(pe_position, "不适用")
         self.assertIn("收益率曲线", detail)
+
+    def test_cash_like_entry_quality_does_not_use_200_day_trend_break(self) -> None:
+        asset = self._asset(
+            "ERNS.L",
+            (),
+            equity_like=False,
+            theme="GBP Ultrashort Bond / Cash-like",
+            value=98,
+            sma200=100,
+            momentum_1m=0.2,
+            daily_sigma=0.3,
+            aum=1_900_000_000,
+            avg_traded_value_20d=5_000_000,
+        )
+        score, label, note, risk = _entry_quality(asset)
+
+        self.assertGreaterEqual(score, 70)
+        self.assertIn("现金替代", label)
+        self.assertIn("不按200日均线", note)
+        self.assertNotIn("趋势破坏", note + risk)
+
+    def test_cash_like_trend_label_avoids_sma200_language(self) -> None:
+        label = _asset_trend_label(
+            ETFSpec("erns", "ERNS", "ERNS.L", "GBP Ultrashort Bond / Cash-like", "iShares", equity_like=False),
+            98,
+            99,
+            99,
+            100,
+        )
+
+        self.assertIn("不使用200日线", label)
 
     def test_portfolio_supplement_cash_like_metadata_is_auto_classified(self) -> None:
         theme, equity_like = _classify_portfolio_supplement(
@@ -199,6 +232,12 @@ class ETFProductCheckTests(unittest.TestCase):
         ter: float = 0.10,
         equity_like: bool = True,
         theme: str = "Demo",
+        value: float = 1,
+        sma200: float | None = None,
+        momentum_1m: float | None = None,
+        daily_sigma: float | None = None,
+        aum: float | None = None,
+        avg_traded_value_20d: float | None = None,
     ) -> ETFAssetMonitor:
         return ETFAssetMonitor(
             key=symbol.lower(),
@@ -207,12 +246,17 @@ class ETFProductCheckTests(unittest.TestCase):
             theme=theme,
             provider="Demo",
             currency="GBP",
-            value=1,
+            value=value,
             previous_value=1,
             as_of=date(2026, 1, 1),
             fetched_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
             equity_like=equity_like,
             ter=ter,
+            momentum_1m=momentum_1m,
+            sma200=sma200,
+            daily_sigma=daily_sigma,
+            aum=aum,
+            avg_traded_value_20d=avg_traded_value_20d,
             holdings=holdings,
         )
 

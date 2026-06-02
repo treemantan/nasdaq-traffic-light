@@ -464,11 +464,12 @@ def _render_etf_email_group(group: tuple[str, str, list[ETFAssetMonitor]]) -> st
 
 def _render_etf_row(asset: ETFAssetMonitor) -> str:
     valuation, valuation_detail, pe_position = _fmt_valuation_block(asset)
+    trend_main, trend_detail = _fmt_trend_cell(asset)
     valuation_source = _fmt_email_valuation_source(asset)
     liquidity = _fmt_liquidity(asset)
     return f"""<tr>
       <td style="padding:7px;border-bottom:1px solid #263244;"><strong>{escape(asset.symbol)}</strong><br>{escape(asset.provider)}<br><span style="color:#9ca3af;">TER {escape(_fmt_ter(asset.ter))} · {escape(_ter_label(asset.ter))}<br>审计：{escape(asset.metadata_status)}</span></td>
-      <td style="padding:7px;border-bottom:1px solid #263244;">{escape(asset.theme)}<br>{escape(_fmt_sigma_200d(asset.trend_sigma_200d))} · {escape(asset.trend_stretch_label)}</td>
+      <td style="padding:7px;border-bottom:1px solid #263244;">{escape(asset.theme)}<br>{escape(trend_main)} · {escape(trend_detail)}</td>
       <td style="padding:7px;border-bottom:1px solid #263244;">{escape(_fmt_sigma(asset.daily_sigma))} / {escape(_fmt_pct(asset.momentum_1m))} / {escape(_fmt_plain(asset.rsi14))}<br>{escape(asset.sigma_label)}</td>
       <td style="padding:7px;border-bottom:1px solid #263244;">{escape(valuation)}<br>{escape(valuation_detail)}<br><span style="color:#9ca3af;">{escape(valuation_source)}</span></td>
       <td style="padding:7px;border-bottom:1px solid #263244;">{escape(asset.liquidity_label)}<br><span style="color:#9ca3af;">{escape(liquidity)}</span></td>
@@ -487,6 +488,12 @@ def _fmt_email_valuation_source(asset: ETFAssetMonitor) -> str:
         return "估值源：暂无"
     as_of = f" · 最近披露：{asset.valuation_as_of}" if asset.valuation_as_of else ""
     return f"估值源：{asset.valuation_source}{as_of}"
+
+
+def _fmt_trend_cell(asset: ETFAssetMonitor) -> tuple[str, str]:
+    if asset.theme == "GBP Ultrashort Bond / Cash-like":
+        return "稳定性/短端利率敏感", f"1M {_fmt_pct(asset.momentum_1m)} / 日波动 {_fmt_sigma(asset.daily_sigma)}"
+    return _fmt_sigma_200d(asset.trend_sigma_200d), asset.trend_stretch_label
 
 
 def _group_etf_assets(assets: list[ETFAssetMonitor]) -> list[tuple[str, str, list[ETFAssetMonitor]]]:
