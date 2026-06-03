@@ -367,7 +367,8 @@ def _render_portfolio_performance_email(monitor: ETFMonitor) -> str:
         f'可识别总收益 {_fmt_signed_gbp(performance.total_return_gbp)} · '
         f'未实现盈亏 {_fmt_signed_gbp(performance.unrealized_pnl_gbp)} · '
         f'已实现交易盈亏 {_fmt_signed_gbp(performance.realized_pnl_gbp)} · '
-        f'股息收入 {_fmt_signed_gbp(performance.dividend_income_gbp)}</div>'
+        f'股息收入 {_fmt_signed_gbp(performance.dividend_income_gbp)}<br>'
+        '<span style="color:#9ca3af;">Revolut 交易费用未单独纳入；若后续导入 Costs and Charges PDF，可再做成本归因。</span></div>'
     )
 
 

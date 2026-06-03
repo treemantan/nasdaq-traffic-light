@@ -557,6 +557,7 @@ def _render_portfolio_performance(monitor: ETFMonitor) -> str:
     return (
         '<div class="portfolio-notes"><strong>收益归因（statement 导出窗口内，可识别口径）</strong></div>'
         f'<div class="portfolio-exposure-grid">{rendered}</div>'
+        '<div class="small-note">Revolut 交易费用未单独纳入；若后续导入 Costs and Charges PDF，可再做成本归因。</div>'
     )
 
 
