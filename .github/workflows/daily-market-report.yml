@@ -110,28 +110,23 @@ jobs:
               target_utc = target_london.astimezone(timezone.utc)
               correct_dst_candidate = target_utc.hour == cron_hour and target_utc.minute == cron_minute
               delay_minutes = abs((now_london - target_london).total_seconds()) / 60
-              if candidate_mode == "full":
-                  max_delay_minutes = int(os.environ.get("MAX_FULL_SCHEDULE_DELAY_MINUTES", "150"))
-              else:
-                  max_delay_minutes = int(os.environ.get("MAX_SCHEDULE_DELAY_MINUTES", "45"))
-              fresh_enough = delay_minutes <= max_delay_minutes
               considered.append(
                   f"{target_hhmm}/{candidate_mode}:expected_utc={target_utc:%H:%M},"
-                  + f"delay={delay_minutes:.1f},fresh={fresh_enough},dst={correct_dst_candidate}"
+                  + f"delay={delay_minutes:.1f},dst={correct_dst_candidate}"
               )
-              if correct_dst_candidate and fresh_enough:
-                  selected = (target_hhmm, candidate_mode, target_utc, delay_minutes, max_delay_minutes)
+              if correct_dst_candidate:
+                  selected = (target_hhmm, candidate_mode, target_utc, delay_minutes)
                   break
 
           if selected is None:
               emit(
                   mapping[schedule][0][1],
                   False,
-                  f"schedule={schedule}, no fresh matching UK target; considered={' | '.join(considered)}",
+                  f"schedule={schedule}, no matching UK target for DST/GMT; considered={' | '.join(considered)}",
               )
               raise SystemExit(0)
 
-          target_hhmm, mode, target_utc, delay_minutes, max_delay_minutes = selected
+          target_hhmm, mode, target_utc, delay_minutes = selected
           target_date = target_utc.astimezone(london).date().isoformat()
 
           emit(
@@ -139,7 +134,7 @@ jobs:
               True,
               f"schedule={schedule}, target_uk={target_hhmm}, "
               + f"expected_utc={target_utc:%H:%M}, "
-              + f"delay_minutes={delay_minutes:.1f}, max_delay_minutes={max_delay_minutes}, "
+              + f"delay_minutes={delay_minutes:.1f}, "
               + "run=True",
               target_date,
           )
