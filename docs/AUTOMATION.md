@@ -119,8 +119,11 @@ ONEDRIVE_REFRESH_TOKEN
 
 ```text
 ONEDRIVE_FOLDER_PATH=Trading/Revolut Transaction Statement
+ONEDRIVE_IBKR_FOLDER_PATH=Trading/IBKR Transaction Statement
 ONEDRIVE_USE_LATEST_PER_ACCOUNT_FOLDER=false
 ```
+
+云端导入会先读取 Revolut CSV，再尝试读取 IBKR CSV。IBKR Trade Confirmation 会只使用 `LevelOfDetail=EXECUTION` 的成交明细，避免把 summary/order/execution 重复计入持仓；如果 IBKR 文件夹不存在，会跳过该辅助来源并继续生成报告。
 
 该路径只使用免费 App Registration 和标准 Graph 文件读取接口，不创建 Azure VM、Storage、Functions、数据库或其他计费资源。CSV、refresh token 和 `portfolio.csv` 不应提交到 GitHub。
 

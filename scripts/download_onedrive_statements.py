@@ -16,6 +16,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 
 GRAPH_ROOT = "https://graph.microsoft.com/v1.0"
 DEFAULT_FOLDER = "Trading/Revolut Transaction Statement"
+DEFAULT_IBKR_FOLDER = "Trading/IBKR Transaction Statement"
 DEFAULT_PATTERN = "*.csv"
 
 
@@ -56,6 +57,7 @@ def main() -> int:
     )
     parser.add_argument("--output-dir", default=".cloud-statements")
     parser.add_argument("--folder-path", default=os.getenv("ONEDRIVE_FOLDER_PATH") or DEFAULT_FOLDER)
+    parser.add_argument("--ibkr-folder-path", default=os.getenv("ONEDRIVE_IBKR_FOLDER_PATH") or DEFAULT_IBKR_FOLDER)
     parser.add_argument("--pattern", default=os.getenv("ONEDRIVE_STATEMENT_PATTERN") or DEFAULT_PATTERN)
     parser.add_argument(
         "--latest-per-account-folder",
@@ -66,7 +68,7 @@ def main() -> int:
     parser.add_argument(
         "--import-portfolio",
         action="store_true",
-        help="Run scripts/import_revolut_statement.py after downloading the selected CSV files.",
+        help="Run scripts/import_portfolio_statements.py after downloading the selected CSV files.",
     )
     args = parser.parse_args()
 
@@ -75,9 +77,15 @@ def main() -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
     token = _acquire_access_token(config)
     items = _select_statement_items(token, config, args.latest_per_account_folder)
+    if args.ibkr_folder_path:
+        ibkr_config = _config_from_env(args.ibkr_folder_path, args.pattern)
+        try:
+            items.extend(_select_statement_items(token, ibkr_config, False))
+        except RuntimeError as exc:
+            print(f"Optional IBKR OneDrive folder skipped: {exc}", file=sys.stderr)
     if not items:
         raise SystemExit(
-            f"No Revolut statement CSV matched {config.pattern!r} inside OneDrive folder {config.folder_path!r}."
+            f"No supported portfolio statement CSV matched {config.pattern!r} inside configured OneDrive folders."
         )
 
     downloaded = [_download_item(token, config, item, output_dir) for item in items]
@@ -86,7 +94,7 @@ def main() -> int:
         print(f"Statement: {path.name}")
 
     if args.import_portfolio:
-        command = [sys.executable, "scripts/import_revolut_statement.py", *map(str, downloaded)]
+        command = [sys.executable, "scripts/import_portfolio_statements.py", *map(str, downloaded)]
         subprocess.run(command, check=True)
         print("Cloud portfolio import completed.")
     return 0
