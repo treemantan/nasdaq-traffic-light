@@ -252,7 +252,7 @@ jobs:
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           SMTP_FROM: ${{ secrets.SMTP_FROM }}
         run: |
-          if [ "$EMAIL_MODE" = "full" ] && [ "${{ steps.full-email-marker.outputs.cache-hit }}" = "true" ]; then
+          if [ "${{ github.event_name }}" = "schedule" ] && [ "$EMAIL_MODE" = "full" ] && [ "${{ steps.full-email-marker.outputs.cache-hit }}" = "true" ]; then
             echo "Full report email already sent for ${REPORT_LOCAL_DATE}; skipping duplicate full email."
             exit 0
           fi
