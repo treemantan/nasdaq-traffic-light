@@ -21,6 +21,7 @@ from market_report.portfolio_events import (
     build_portfolio_event_monitor,
     due_portfolio_event_reminders,
 )
+from market_report.time_utils import _timezone_for
 
 
 STATE_PATH = Path("output") / "cache" / "portfolio_event_reminders.json"
@@ -59,7 +60,7 @@ def main() -> int:
         print("No portfolio event reminder is due.")
         return 0
 
-    subject = f"Portfolio Event Reminder - {current_time:%Y-%m-%d %H:%M}"
+    subject = f"Portfolio Event Reminder - {_format_uk_time(current_time)}"
     message_html, message_text = _render_reminder(due)
     if args.dry_run:
         print(f"Dry run: {len(due)} portfolio event reminder(s) due.")
@@ -153,6 +154,12 @@ def _render_reminder(events: tuple[PortfolioEventObservation, ...]) -> tuple[str
         f"{text_rows}\n\n本邮件仅用于事件跟踪，不构成交易建议。"
     )
     return html, text
+
+
+def _format_uk_time(value: datetime) -> str:
+    if value.tzinfo is None:
+        value = value.astimezone()
+    return value.astimezone(_timezone_for(value, "Europe/London")).strftime("%Y-%m-%d %H:%M UK")
 
 
 if __name__ == "__main__":

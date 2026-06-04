@@ -20,6 +20,10 @@ class PortfolioEventMonitorTests(unittest.TestCase):
         self.assertIn("Netflix IR", monitor.events[0].source_label)
         self.assertTrue(monitor.events[0].source_url.startswith("https://"))
         self.assertTrue(monitor.events[0].progress_source_url.startswith("https://"))
+        self.assertEqual(
+            monitor.events[0].event_time_label,
+            "2026-06-04 23:00 UK（原始 2026-06-04 15:00 UTC-07:00）",
+        )
 
     def test_exact_event_is_due_inside_seven_hour_window(self) -> None:
         monitor = build_portfolio_event_monitor(
@@ -37,6 +41,11 @@ class PortfolioEventMonitorTests(unittest.TestCase):
         monitor = build_portfolio_event_monitor(
             ["NFLX"],
             now=datetime.fromisoformat("2026-07-07T08:30:00+01:00"),
+        )
+        event_by_id = {event.event_id: event for event in monitor.events}
+        self.assertEqual(
+            event_by_id["nflx-sector-paramount-wbd-eu-review-2026-07-07"].event_time_label,
+            "2026-07-07 14:30 UK（美股开盘前观察，默认 09:30 ET）",
         )
         due = due_portfolio_event_reminders(
             monitor,

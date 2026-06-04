@@ -203,7 +203,7 @@ def _resolve_event_times(event: PortfolioEvent) -> tuple[datetime, datetime, str
         if event_at.tzinfo is None:
             raise ValueError(f"{event.event_id}: event_at must include a timezone")
         reminder_at = event_at - timedelta(hours=event.reminder_hours_before)
-        label = event_at.astimezone(_new_york_timezone(event_at)).strftime("%Y-%m-%d %H:%M ET")
+        label = _format_uk_event_time_label(event_at)
         return event_at, reminder_at, label
     if not event.event_date:
         raise ValueError(f"{event.event_id}: event_at or event_date is required")
@@ -211,7 +211,7 @@ def _resolve_event_times(event: PortfolioEvent) -> tuple[datetime, datetime, str
     event_timezone = _new_york_timezone(datetime.combine(event_day, time(12), tzinfo=timezone.utc))
     event_at = datetime.combine(event_day, time(9, 30), tzinfo=event_timezone)
     reminder_at = datetime.combine(event_day, time(8, 0), tzinfo=event_timezone)
-    return event_at, reminder_at, f"{event.event_date} 美股开盘前观察"
+    return event_at, reminder_at, f"{_format_uk_event_time(event_at)}（美股开盘前观察，默认 09:30 ET）"
 
 
 def _held_symbols_and_alerts(positions: Iterable[object]) -> tuple[set[str], dict[str, str]]:
@@ -257,3 +257,30 @@ def _new_york_timezone(reference: datetime):
     if reference.tzinfo is None:
         reference = reference.replace(tzinfo=timezone.utc)
     return _timezone_for(reference, "America/New_York")
+
+
+def _london_timezone(reference: datetime):
+    if reference.tzinfo is None:
+        reference = reference.replace(tzinfo=timezone.utc)
+    return _timezone_for(reference, "Europe/London")
+
+
+def _format_uk_event_time_label(event_at: datetime) -> str:
+    uk_label = _format_uk_event_time(event_at)
+    original_label = _format_original_event_time(event_at)
+    return uk_label if original_label == uk_label else f"{uk_label}（原始 {original_label}）"
+
+
+def _format_uk_event_time(event_at: datetime) -> str:
+    return event_at.astimezone(_london_timezone(event_at)).strftime("%Y-%m-%d %H:%M UK")
+
+
+def _format_original_event_time(event_at: datetime) -> str:
+    offset = event_at.utcoffset()
+    if offset is None:
+        return event_at.strftime("%Y-%m-%d %H:%M")
+    total_minutes = int(offset.total_seconds() // 60)
+    sign = "+" if total_minutes >= 0 else "-"
+    total_minutes = abs(total_minutes)
+    hours, minutes = divmod(total_minutes, 60)
+    return event_at.strftime("%Y-%m-%d %H:%M") + f" UTC{sign}{hours:02d}:{minutes:02d}"
