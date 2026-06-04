@@ -54,13 +54,17 @@ def main() -> int:
 
     private_subject, private_html, private_text = emailer._render_message("full", report_path, html, payload)
     print("Full report contains imported portfolio data; sending a second private portfolio edition.")
+    attachment = _html_attachment(report_path, html, "private-portfolio-report")
     return _send(
         provider,
         f"{private_subject} - Private Portfolio",
         private_html,
-        private_text + "\n\nThis private edition includes imported portfolio data.",
+        private_text
+        + "\n\nThis private edition includes imported portfolio data. "
+        + "The complete private HTML report is attached for full table/detail review.",
         private_recipients,
         report_path,
+        attachments=[attachment],
     )
 
 
@@ -123,10 +127,23 @@ def _send(
     text: str,
     recipients: list[str],
     report_path: Path,
+    attachments: list[dict[str, str | bytes]] | None = None,
 ) -> int:
     if provider == "smtp":
-        return emailer._send_smtp(subject, html, text, recipients, "full", report_path)
-    return emailer._send_resend(subject, html, text, recipients, "full", report_path)
+        return emailer._send_smtp(subject, html, text, recipients, "full", report_path, attachments=attachments)
+    return emailer._send_resend(subject, html, text, recipients, "full", report_path, attachments=attachments)
+
+
+def _html_attachment(report_path: Path, html: str, stem: str) -> dict[str, str | bytes]:
+    report_date = report_path.stem
+    if report_date.startswith("market-report-"):
+        report_date = report_date[len("market-report-") :]
+    filename = f"{stem}-{report_date}.html"
+    return {
+        "filename": filename,
+        "content": html.encode("utf-8"),
+        "mime_type": "text/html",
+    }
 
 
 if __name__ == "__main__":

@@ -59,6 +59,10 @@ class SendCloudReportEmailTests(unittest.TestCase):
             self.assertEqual(module.main(), 0)
             self.assertEqual(send.call_args_list[0].args[4], ["group@example.com"])
             self.assertEqual(send.call_args_list[1].args[4], ["private@example.com"])
+            attachments = send.call_args_list[1].kwargs["attachments"]
+            self.assertEqual(attachments[0]["filename"], "private-portfolio-report-2026-05-27.html")
+            self.assertEqual(attachments[0]["content"], b"<html>report</html>")
+            self.assertEqual(attachments[0]["mime_type"], "text/html")
 
     def test_full_portfolio_run_without_private_recipient_sends_sanitized_group_only(self) -> None:
         module = _load_module()
@@ -74,6 +78,7 @@ class SendCloudReportEmailTests(unittest.TestCase):
         ):
             self.assertEqual(module.main(), 0)
             self.assertEqual(send.call_count, 1)
+            self.assertNotIn("attachments", send.call_args.kwargs)
 
 
 if __name__ == "__main__":

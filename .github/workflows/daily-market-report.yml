@@ -163,7 +163,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: output/email-markers
-          key: market-report-email-sent-${{ runner.os }}-${{ steps.report-date.outputs.report_date }}-full
+          key: market-report-scheduled-email-sent-${{ runner.os }}-${{ steps.report-date.outputs.report_date }}-full
 
       - name: Install dependencies
         if: steps.email-mode.outputs.should_run == 'true'
@@ -259,15 +259,15 @@ jobs:
           python scripts/send_cloud_report_email.py
 
       - name: Mark full report email sent
-        if: steps.email-mode.outputs.should_run == 'true' && steps.email-mode.outputs.email_mode == 'full' && steps.full-email-marker.outputs.cache-hit != 'true' && steps.send-report-email.outcome == 'success'
+        if: github.event_name == 'schedule' && steps.email-mode.outputs.should_run == 'true' && steps.email-mode.outputs.email_mode == 'full' && steps.full-email-marker.outputs.cache-hit != 'true' && steps.send-report-email.outcome == 'success'
         shell: bash
         run: |
           mkdir -p output/email-markers
           printf 'sent_at=%s\nrun_id=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${{ github.run_id }}" > "output/email-markers/${REPORT_LOCAL_DATE}-full.txt"
 
       - name: Save full-email send marker
-        if: steps.email-mode.outputs.should_run == 'true' && steps.email-mode.outputs.email_mode == 'full' && steps.full-email-marker.outputs.cache-hit != 'true' && steps.send-report-email.outcome == 'success'
+        if: github.event_name == 'schedule' && steps.email-mode.outputs.should_run == 'true' && steps.email-mode.outputs.email_mode == 'full' && steps.full-email-marker.outputs.cache-hit != 'true' && steps.send-report-email.outcome == 'success'
         uses: actions/cache/save@v4
         with:
           path: output/email-markers
-          key: market-report-email-sent-${{ runner.os }}-${{ steps.report-date.outputs.report_date }}-full
+          key: market-report-scheduled-email-sent-${{ runner.os }}-${{ steps.report-date.outputs.report_date }}-full

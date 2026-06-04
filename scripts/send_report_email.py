@@ -5,6 +5,7 @@ import os
 import re
 import smtplib
 import sys
+from base64 import b64encode
 from datetime import date, datetime, time, timezone
 from dataclasses import fields
 from email.message import EmailMessage
@@ -87,19 +88,29 @@ def _send_resend(
     recipients: list[str],
     mode: str,
     report_path: Path,
+    attachments: list[dict[str, str | bytes]] | None = None,
 ) -> int:
     try:
         import resend
 
         resend.api_key = os.environ["RESEND_API_KEY"]
+        payload = {
+            "from": os.environ["REPORT_EMAIL_FROM"],
+            "to": recipients,
+            "subject": subject,
+            "html": message_html,
+            "text": message_text,
+        }
+        if attachments:
+            payload["attachments"] = [
+                {
+                    "filename": str(item["filename"]),
+                    "content": b64encode(_attachment_content_bytes(item["content"])).decode("ascii"),
+                }
+                for item in attachments
+            ]
         response = resend.Emails.send(
-            {
-                "from": os.environ["REPORT_EMAIL_FROM"],
-                "to": recipients,
-                "subject": subject,
-                "html": message_html,
-                "text": message_text,
-            }
+            payload
         )
     except Exception as exc:
         print(f"Failed to send market report via Resend: {exc}", file=sys.stderr)
@@ -118,6 +129,7 @@ def _send_smtp(
     recipients: list[str],
     mode: str,
     report_path: Path,
+    attachments: list[dict[str, str | bytes]] | None = None,
 ) -> int:
     host = os.environ.get("SMTP_HOST") or "smtp.gmail.com"
     port = int(os.environ.get("SMTP_PORT") or "587")
@@ -132,6 +144,14 @@ def _send_smtp(
     message["To"] = ", ".join(recipients)
     message.set_content(message_text)
     message.add_alternative(message_html, subtype="html")
+    for item in attachments or []:
+        maintype, _, subtype = str(item.get("mime_type", "application/octet-stream")).partition("/")
+        message.add_attachment(
+            _attachment_content_bytes(item["content"]),
+            maintype=maintype or "application",
+            subtype=subtype or "octet-stream",
+            filename=str(item["filename"]),
+        )
 
     try:
         if security == "ssl" or port == 465:
@@ -150,6 +170,12 @@ def _send_smtp(
 
     print(f"Market report email sent successfully via SMTP. Mode: {mode}. Recipients: {len(recipients)}. Report: {report_path}.")
     return 0
+
+
+def _attachment_content_bytes(content: str | bytes) -> bytes:
+    if isinstance(content, bytes):
+        return content
+    return content.encode("utf-8")
 
 
 def _infer_email_mode(now: datetime | None = None) -> str:

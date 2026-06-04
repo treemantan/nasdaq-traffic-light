@@ -41,7 +41,7 @@ python -m market_report --config config.example.json --dry-run
 - `21:15`：完整 HTML 报告
 - `21:45` / `22:15`：full 报告兜底候选，仅在当天 full 尚未成功发送时补发
 
-英国夏令时按固定规则转换：三月最后一个周日进入 BST，十月最后一个周日回到 GMT。GitHub cron 使用 UTC，因此 workflow 配置两组候选 UTC 时间，并在运行时按 `Europe/London` 判断是否执行。GitHub scheduled workflow 可能被平台排队延迟；本项目不会因为 GitHub 延迟而跳过正确的 UK 候选，只会跳过错误的 BST/GMT 候选。为了避免当天最重要的 full 邮件缺失，workflow 额外设置 `21:45` 和 `22:15` full 兜底候选，并通过 `market-report-email-sent-...-full` cache marker 确保同一天 scheduled full 邮件只发送一次。手动 `workflow_dispatch` 的 `full` 模式不会被该 marker 拦截，可用于当天重新发送或验证邮件。
+英国夏令时按固定规则转换：三月最后一个周日进入 BST，十月最后一个周日回到 GMT。GitHub cron 使用 UTC，因此 workflow 配置两组候选 UTC 时间，并在运行时按 `Europe/London` 判断是否执行。GitHub scheduled workflow 可能被平台排队延迟；本项目不会因为 GitHub 延迟而跳过正确的 UK 候选，只会跳过错误的 BST/GMT 候选。为了避免当天最重要的 full 邮件缺失，workflow 额外设置 `21:45` 和 `22:15` full 兜底候选，并通过 `market-report-scheduled-email-sent-...-full` cache marker 确保同一天 scheduled full 邮件只发送一次。手动 `workflow_dispatch` 的 `full` 模式不会读取或写入 scheduled marker，不会影响当天定时 full 邮件；它只用于当天重新发送或验证邮件。
 
 ## 邮件 secrets
 
