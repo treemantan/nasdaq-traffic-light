@@ -187,6 +187,8 @@ class RevolutImportTests(unittest.TestCase):
             price_data = SimpleNamespace(history=history, meta={"currency": "USD"})
             with patch.object(MODULE, "PORTFOLIO_QUOTE_CACHE_PATH", cache_path), patch.object(
                 MODULE, "_fetch_yahoo_price_data", return_value=price_data
+            ), patch.object(
+                MODULE, "_fetch_yahoo_quote_snapshot", return_value={}
             ):
                 MODULE._PORTFOLIO_QUOTE_CACHE = None
                 MODULE._PORTFOLIO_QUOTE_CACHE_DIRTY = False
@@ -208,7 +210,9 @@ class RevolutImportTests(unittest.TestCase):
             history=[(date(2026, 6, 2), 138.64), (date(2026, 6, 4), 138.91)],
             meta={"currency": "GBP", "_price_source": "regularMarketPrice"},
         )
-        with patch.object(MODULE, "_fetch_yahoo_price_data", return_value=price_data):
+        with patch.object(MODULE, "_fetch_yahoo_price_data", return_value=price_data), patch.object(
+            MODULE, "_fetch_yahoo_quote_snapshot", return_value={}
+        ):
             MODULE._QUOTE_SOURCES.clear()
             price, previous, currency, history = MODULE._latest_quote("VWRL.L")
 
@@ -217,6 +221,49 @@ class RevolutImportTests(unittest.TestCase):
         self.assertEqual(currency, "GBP")
         self.assertEqual(history[-1], (date(2026, 6, 4), 138.91))
         self.assertEqual(MODULE._QUOTE_SOURCES["VWRL.L"], "Yahoo quote:VWRL.L")
+
+    def test_latest_quote_prefers_quote_endpoint_for_us_stock(self) -> None:
+        price_data = SimpleNamespace(
+            history=[(date(2026, 6, 3), 112.0)],
+            meta={"currency": "USD"},
+        )
+        quote = {
+            "currency": "USD",
+            "regularMarketPrice": 114.7,
+            "regularMarketPreviousClose": 112.0,
+            "regularMarketTime": 1780531200,
+        }
+        with patch.object(MODULE, "_fetch_yahoo_price_data", return_value=price_data), patch.object(
+            MODULE, "_fetch_yahoo_quote_snapshot", return_value=quote
+        ):
+            MODULE._QUOTE_SOURCES.clear()
+            price, previous, currency, history = MODULE._latest_quote("RKLB")
+
+        self.assertEqual(price, 114.7)
+        self.assertEqual(previous, 112.0)
+        self.assertEqual(currency, "USD")
+        self.assertEqual(history[-1], (date(2026, 6, 4), 114.7))
+        self.assertEqual(MODULE._QUOTE_SOURCES["RKLB"], "Yahoo quote:RKLB")
+
+    def test_latest_quote_scales_lse_gbp_quote_from_pence(self) -> None:
+        price_data = SimpleNamespace(
+            history=[(date(2026, 6, 3), 138.64)],
+            meta={"currency": "GBp"},
+        )
+        quote = {
+            "currency": "GBp",
+            "regularMarketPrice": 13805.0,
+            "regularMarketPreviousClose": 13864.0,
+            "regularMarketTime": 1780531200,
+        }
+        with patch.object(MODULE, "_fetch_yahoo_price_data", return_value=price_data), patch.object(
+            MODULE, "_fetch_yahoo_quote_snapshot", return_value=quote
+        ):
+            price, previous, currency, _history = MODULE._latest_quote("VWRL.L")
+
+        self.assertAlmostEqual(price, 138.05)
+        self.assertAlmostEqual(previous, 138.64)
+        self.assertEqual(currency, "GBP")
 
 
 if __name__ == "__main__":

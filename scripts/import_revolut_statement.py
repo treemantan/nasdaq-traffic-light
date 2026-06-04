@@ -5,6 +5,7 @@ import csv
 import json
 import math
 import sys
+import urllib.parse
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -14,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from market_report.etf_monitor import (
     DEFAULT_ETF_SPECS,
     ETF_CACHE_PATH,
+    _read_json,
     _daily_returns,
     _distance_to_sma,
     _fetch_yahoo_price_data,
@@ -303,12 +305,34 @@ def _latest_quote(symbol: str) -> tuple[float | None, float | None, str, list[tu
         price_data = _fetch_yahoo_price_data(symbol, timeout=5, attempts=1)
         history = price_data.history
         if history:
-            currency = _normalize_currency(price_data.meta.get("currency")) or ""
-            previous = history[-2][1] if len(history) > 1 else None
-            _store_portfolio_quote_cache(symbol, history[-1][1], previous, currency, history)
-            source_kind = "Yahoo quote" if price_data.meta.get("_price_source") == "regularMarketPrice" else "Yahoo"
+            try:
+                quote = _fetch_yahoo_quote_snapshot(symbol, timeout=5, attempts=1)
+            except Exception:
+                quote = {}
+            raw_currency = quote.get("currency") or price_data.meta.get("currency")
+            currency = _normalize_currency(raw_currency) or ""
+            scale = 0.01 if raw_currency == "GBp" else 1.0
+            latest_price = _safe_float(quote.get("regularMarketPrice"))
+            previous = _safe_float(quote.get("regularMarketPreviousClose"))
+            if latest_price is not None:
+                latest_price *= scale
+                previous = previous * scale if previous is not None else None
+                quote_day = _portfolio_quote_day(quote) or history[-1][0]
+                if history[-1][0] == quote_day:
+                    history = history[:-1] + [(quote_day, latest_price)]
+                elif history[-1][0] < quote_day:
+                    history = history + [(quote_day, latest_price)]
+            else:
+                latest_price = history[-1][1]
+                previous = history[-2][1] if len(history) > 1 else None
+            _store_portfolio_quote_cache(symbol, latest_price, previous, currency, history)
+            source_kind = (
+                "Yahoo quote"
+                if latest_price is not None and quote
+                else ("Yahoo quote" if price_data.meta.get("_price_source") == "regularMarketPrice" else "Yahoo")
+            )
             _QUOTE_SOURCES[symbol] = f"{source_kind}:{symbol}"
-            return history[-1][1], previous, currency, history
+            return latest_price, previous, currency, history
     except Exception as exc:
         error = f"{type(exc).__name__}: {exc}"
     cached = _portfolio_quote_from_cache(symbol)
@@ -322,6 +346,33 @@ def _latest_quote(symbol: str) -> tuple[float | None, float | None, str, list[tu
     if "error" in locals():
         print(f"Quote unavailable for {symbol}; using statement cost fallback. Last error: {error}", file=sys.stderr)
     return None, None, "", []
+
+
+def _fetch_yahoo_quote_snapshot(symbol: str, timeout: int = 5, attempts: int = 1) -> dict[str, object]:
+    encoded = urllib.parse.quote(symbol, safe="")
+    urls = [
+        f"https://query1.finance.yahoo.com/v7/finance/quote?symbols={encoded}",
+        f"https://query2.finance.yahoo.com/v7/finance/quote?symbols={encoded}",
+    ]
+    errors: list[str] = []
+    for url in urls:
+        try:
+            payload = _read_json(url, timeout=timeout, attempts=attempts)
+            results = payload.get("quoteResponse", {}).get("result") or []
+            if results:
+                return dict(results[0])
+        except Exception as exc:
+            errors.append(f"{url}: {exc}")
+    if errors:
+        raise RuntimeError("; ".join(errors))
+    return {}
+
+
+def _portfolio_quote_day(quote: dict[str, object]) -> date | None:
+    timestamp = _safe_float(quote.get("regularMarketTime") or quote.get("postMarketTime"))
+    if timestamp is None:
+        return None
+    return datetime.fromtimestamp(timestamp, timezone.utc).date()
 
 
 def _resolve_lse_etf_symbol(ticker: str) -> str | None:
