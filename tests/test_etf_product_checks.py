@@ -5,6 +5,7 @@ import unittest
 import os
 from datetime import date, datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 from market_report.etf_monitor import (
     ETFAssetMonitor,
@@ -16,6 +17,7 @@ from market_report.etf_monitor import (
     _asset_trend_label,
     _classify_portfolio_supplement,
     _entry_quality,
+    _fetch_yahoo_price_data,
     _load_portfolio_summary,
     _parse_ishares_portfolio_valuation,
     _parse_compact_number,
@@ -28,6 +30,28 @@ from market_report.render import _fmt_valuation_block, _group_etf_assets, _max_h
 
 
 class ETFProductCheckTests(unittest.TestCase):
+    def test_yahoo_price_data_prefers_regular_market_quote(self) -> None:
+        payload = {
+            "chart": {
+                "result": [
+                    {
+                        "meta": {
+                            "currency": "GBP",
+                            "regularMarketPrice": 138.91,
+                            "regularMarketTime": 1780588800,
+                        },
+                        "timestamp": [1780444800],
+                        "indicators": {"quote": [{"close": [138.64], "volume": [1000]}]},
+                    }
+                ]
+            }
+        }
+        with patch("market_report.etf_monitor._read_json", return_value=payload):
+            data = _fetch_yahoo_price_data("VWRL.L")
+
+        self.assertEqual(data.history[-1][1], 138.91)
+        self.assertEqual(data.meta["_price_source"], "regularMarketPrice")
+
     def test_erns_is_default_cash_like_etf(self) -> None:
         erns = next(spec for spec in DEFAULT_ETF_SPECS if spec.symbol == "ERNS.L")
         self.assertFalse(erns.equity_like)

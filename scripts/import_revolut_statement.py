@@ -306,7 +306,8 @@ def _latest_quote(symbol: str) -> tuple[float | None, float | None, str, list[tu
             currency = _normalize_currency(price_data.meta.get("currency")) or ""
             previous = history[-2][1] if len(history) > 1 else None
             _store_portfolio_quote_cache(symbol, history[-1][1], previous, currency, history)
-            _QUOTE_SOURCES[symbol] = f"Yahoo:{symbol}"
+            source_kind = "Yahoo quote" if price_data.meta.get("_price_source") == "regularMarketPrice" else "Yahoo"
+            _QUOTE_SOURCES[symbol] = f"{source_kind}:{symbol}"
             return history[-1][1], previous, currency, history
     except Exception as exc:
         error = f"{type(exc).__name__}: {exc}"

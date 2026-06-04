@@ -203,6 +203,21 @@ class RevolutImportTests(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertEqual(MODULE._QUOTE_SOURCES["NFLX"], "Yahoo cache:NFLX")
 
+    def test_latest_quote_labels_yahoo_quote_price(self) -> None:
+        price_data = SimpleNamespace(
+            history=[(date(2026, 6, 2), 138.64), (date(2026, 6, 4), 138.91)],
+            meta={"currency": "GBP", "_price_source": "regularMarketPrice"},
+        )
+        with patch.object(MODULE, "_fetch_yahoo_price_data", return_value=price_data):
+            MODULE._QUOTE_SOURCES.clear()
+            price, previous, currency, history = MODULE._latest_quote("VWRL.L")
+
+        self.assertEqual(price, 138.91)
+        self.assertEqual(previous, 138.64)
+        self.assertEqual(currency, "GBP")
+        self.assertEqual(history[-1], (date(2026, 6, 4), 138.91))
+        self.assertEqual(MODULE._QUOTE_SOURCES["VWRL.L"], "Yahoo quote:VWRL.L")
+
 
 if __name__ == "__main__":
     unittest.main()

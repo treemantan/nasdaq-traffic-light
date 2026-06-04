@@ -699,7 +699,8 @@ def _fetch_yahoo_price_data(symbol: str, timeout: int = 15, attempts: int = 3) -
     else:
         raise RuntimeError("; ".join(errors))
     result = payload["chart"]["result"][0]
-    scale = 0.01 if result.get("meta", {}).get("currency") == "GBp" else 1.0
+    meta = result.get("meta", {}) or {}
+    scale = 0.01 if meta.get("currency") == "GBp" else 1.0
     timestamps = result.get("timestamp", [])
     quote = result.get("indicators", {}).get("quote", [{}])[0]
     closes = quote.get("close", [])
@@ -716,7 +717,18 @@ def _fetch_yahoo_price_data(symbol: str, timeout: int = 15, attempts: int = 3) -
             pairs.append((day, value * scale))
         if vol is not None:
             volumes.append((day, vol))
-    return ETFPriceData(history=pairs, volumes=volumes, meta=result.get("meta", {}))
+    quote_price = _safe_float(meta.get("regularMarketPrice"))
+    quote_time = _safe_float(meta.get("regularMarketTime"))
+    if quote_price is not None and quote_time is not None:
+        quote_day = datetime.fromtimestamp(quote_time, timezone.utc).date()
+        quote_value = quote_price * scale
+        if pairs and pairs[-1][0] == quote_day:
+            pairs[-1] = (quote_day, quote_value)
+            meta["_price_source"] = "regularMarketPrice"
+        elif not pairs or pairs[-1][0] < quote_day:
+            pairs.append((quote_day, quote_value))
+            meta["_price_source"] = "regularMarketPrice"
+    return ETFPriceData(history=pairs, volumes=volumes, meta=meta)
 
 
 def _fetch_market_env_histories() -> dict[str, list[tuple[date, float]]]:
