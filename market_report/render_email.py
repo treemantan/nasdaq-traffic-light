@@ -298,7 +298,7 @@ def _render_portfolio_email(
 ) -> str:
     if not monitor.portfolio_positions:
         return _render_email_notes("实际组合视角", monitor.portfolio_summary + monitor.portfolio_warnings)
-    rows = "".join(_render_portfolio_email_row(position) for position in monitor.portfolio_positions)
+    cards = "".join(_render_portfolio_email_card(position) for position in monitor.portfolio_positions)
     notes = "".join(
         f"<li>{escape(item)}</li>"
         for item in monitor.portfolio_summary + monitor.portfolio_warnings + monitor.portfolio_exposure_notes
@@ -340,16 +340,9 @@ def _render_portfolio_email(
         <div style="font-size:15px;font-weight:700;color:#f3f4f6;margin:14px 0 4px;">实际组合持仓（Revolut statement 估算）</div>
         <div style="font-size:12px;color:#9ca3af;margin-bottom:6px;">持仓估算市值 {_fmt_gbp(monitor.portfolio_total_value_gbp)}。基于导出的 statement 与 Yahoo 最近价格估算，不等同于券商实时账户净值。</div>
         {performance_panel}
+        <div style="font-size:12px;color:#9ca3af;margin:4px 0 8px;">邮件客户端通常不稳定支持横向滚动表格；下方改用邮件友好的卡片布局。完整可滚动表格仍保留在 HTML 报告中。</div>
         <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;font-size:12px;color:#d1d5db;margin-bottom:6px;">
-          <tr>
-            <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">资产</th>
-            <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">Native / GBP参考市值</th>
-            <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">未实现盈亏</th>
-            <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">日变化</th>
-            <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">距年内高点</th>
-            <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">占比</th>
-          </tr>
-          {rows}
+          {cards}
         </table>
         {exposure_panel}
         {mag7_panel}
@@ -427,17 +420,53 @@ def _portfolio_news_matches(positions: list[PortfolioPosition], news_monitor: Ne
     ][:5]
 
 
-def _render_portfolio_email_row(position: PortfolioPosition) -> str:
+def _render_portfolio_email_card(position: PortfolioPosition) -> str:
     pnl_color = _pnl_color(position.unrealized_pnl_gbp)
     day_color = _pnl_color(position.day_change_pct)
     scope = "ETF观察池" if position.monitor_status == "covered" else "待穿透"
+    source = position.price_source or "行情来源待确认"
     return f"""<tr>
-      <td style="padding:7px;border-bottom:1px solid #263244;"><strong>{escape(position.symbol)}</strong><br><span style="color:#9ca3af;">{scope}<br>{escape(position.price_source or "行情来源待确认")}</span></td>
-      <td style="padding:7px;border-bottom:1px solid #263244;">{escape(_fmt_native(position.market_value_native, position.native_currency))}<br><span style="color:#9ca3af;">{escape(_fmt_gbp(position.market_value_gbp))} · {escape(_fmt_fx(position))}</span></td>
-      <td style="padding:7px;border-bottom:1px solid #263244;color:{pnl_color};">未实现 {escape(_fmt_signed_gbp(position.unrealized_pnl_gbp))}<br>{escape(_fmt_pct(position.unrealized_pnl_pct))}<br><span style="color:#9ca3af;">已实现 {escape(_fmt_signed_gbp(position.realized_pnl_gbp))} · 股息 {escape(_fmt_signed_gbp(position.dividend_income_gbp))} · 合计 {escape(_fmt_signed_gbp(position.total_return_gbp))}</span></td>
-      <td style="padding:7px;border-bottom:1px solid #263244;color:{day_color};">{escape(_fmt_pct(position.day_change_pct))}</td>
-      <td style="padding:7px;border-bottom:1px solid #263244;">{escape(_fmt_peak_watch(position))}</td>
-      <td style="padding:7px;border-bottom:1px solid #263244;">{position.weight_pct:.2f}%</td>
+      <td style="padding:0 0 9px 0;">
+        <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;background:#111827;border:1px solid #263244;">
+          <tr>
+            <td style="padding:10px 11px 6px 11px;">
+              <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">
+                <tr>
+                  <td valign="top" style="padding:0 8px 6px 0;">
+                    <strong style="font-size:15px;color:#f3f4f6;">{escape(position.symbol)}</strong><br>
+                    <span style="color:#9ca3af;">{scope} · {escape(source)}</span>
+                  </td>
+                  <td valign="top" align="right" style="padding:0 0 6px 8px;white-space:nowrap;">
+                    <span style="color:#9ca3af;">组合占比</span><br>
+                    <strong style="font-size:15px;color:#f3f4f6;">{position.weight_pct:.2f}%</strong>
+                  </td>
+                </tr>
+              </table>
+              <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">
+                <tr>
+                  <td valign="top" width="33%" style="padding:7px 8px 7px 0;border-top:1px solid #263244;">
+                    <span style="color:#9ca3af;">Native市值</span><br>
+                    <strong style="color:#f3f4f6;">{escape(_fmt_native(position.market_value_native, position.native_currency))}</strong><br>
+                    <span style="color:#9ca3af;">GBP参考 {escape(_fmt_gbp(position.market_value_gbp))}</span><br>
+                    <span style="color:#9ca3af;">{escape(_fmt_fx(position))}</span>
+                  </td>
+                  <td valign="top" width="34%" style="padding:7px 8px;border-top:1px solid #263244;">
+                    <span style="color:#9ca3af;">收益</span><br>
+                    <strong style="color:{pnl_color};">未实现 {escape(_fmt_signed_gbp(position.unrealized_pnl_gbp))} / {escape(_fmt_pct(position.unrealized_pnl_pct))}</strong><br>
+                    <span style="color:#9ca3af;">已实现 {escape(_fmt_signed_gbp(position.realized_pnl_gbp))}</span><br>
+                    <span style="color:#9ca3af;">股息 {escape(_fmt_signed_gbp(position.dividend_income_gbp))} · 合计 {escape(_fmt_signed_gbp(position.total_return_gbp))}</span>
+                  </td>
+                  <td valign="top" width="33%" style="padding:7px 0 7px 8px;border-top:1px solid #263244;">
+                    <span style="color:#9ca3af;">价格与风险观察</span><br>
+                    <strong style="color:{day_color};">日变化 {escape(_fmt_pct(position.day_change_pct))}</strong><br>
+                    <span style="color:#d1d5db;">{escape(_fmt_peak_watch(position))}</span>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+        </table>
+      </td>
     </tr>"""
 
 
