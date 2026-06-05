@@ -2,6 +2,7 @@ import unittest
 from datetime import date, datetime, timezone
 
 from market_report.data_sources import MarketMetric, MarketSnapshot, _scale_metric
+from market_report.etf_monitor import ETFMonitor
 from market_report.scoring import score_snapshot
 
 
@@ -187,6 +188,8 @@ class ScoringTests(unittest.TestCase):
         self.assertGreaterEqual(report.iron_condor.score, 75)
         self.assertEqual(report.iron_condor.label, "适合观察铁鹰 / Suitable")
         self.assertFalse(report.iron_condor.blockers)
+        self.assertTrue(report.score_drivers)
+        self.assertGreaterEqual(report.score_drivers[0].weighted_score, report.score_drivers[-1].weighted_score)
 
     def test_iron_condor_filter_blocker_overrides_numeric_score(self):
         snapshot = MarketSnapshot(
@@ -209,6 +212,35 @@ class ScoringTests(unittest.TestCase):
 
         self.assertEqual(report.iron_condor.label, "不适合铁鹰 / Unfavourable")
         self.assertTrue(report.iron_condor.blockers)
+
+    def test_iron_condor_context_reduces_score_for_portfolio_trend_break(self):
+        snapshot = MarketSnapshot(
+            as_of=date(2026, 5, 14),
+            fetched_at=datetime(2026, 5, 15, tzinfo=timezone.utc),
+            metrics={
+                "nasdaq": metric("nasdaq", "Nasdaq 100", 10020, 10000),
+                "sp500": metric("sp500", "S&P 500", 6006, 6000),
+                "vix": metric("vix", "VIX", 18, 19),
+                "vvix": metric("vvix", "VVIX", 90, 92),
+                "move": metric("move", "MOVE", 95, 96),
+                "credit_spread_hy": metric("credit_spread_hy", "HY spread", 3.0, 3.02, "%"),
+                "treasury_10y": metric("treasury_10y", "US 10Y", 4.3, 4.31, "%"),
+                "dxy": metric("dxy", "DXY", 103, 103.1),
+            },
+            warnings=(),
+        )
+        monitor = ETFMonitor(
+            summary="demo",
+            assets=[],
+            warnings=[],
+            portfolio_warnings=["趋势破坏风险复核：NFLX。"],
+        )
+
+        plain = score_snapshot(snapshot)
+        contextual = score_snapshot(snapshot, etf_monitor=monitor)
+
+        self.assertLess(contextual.iron_condor.score, plain.iron_condor.score)
+        self.assertTrue(any("组合层面" in item for item in contextual.iron_condor.warnings))
 
 
 if __name__ == "__main__":

@@ -2338,6 +2338,10 @@ def _load_portfolio_summary(
         for row in rows
         if str(row.get("symbol") or "").strip()
     ]
+    portfolio_positions = [
+        _adjust_portfolio_position_for_asset_type(item, asset_map.get(item.symbol))
+        for item in portfolio_positions
+    ]
     portfolio_total = sum(item.market_value_gbp or 0 for item in portfolio_positions) or None
     portfolio_performance = _portfolio_performance_summary(portfolio_positions)
     cached_quotes = [
@@ -2385,6 +2389,21 @@ def _load_portfolio_summary(
             + "、".join(trend_breaks)
             + "。"
         )
+    high_beta_pullbacks = [
+        f"{item.symbol} {_fmt_signed_pct(item.drawdown_from_year_peak_pct)}"
+        for item in portfolio_positions
+        if _is_direct_high_beta_position(item)
+        and item.drawdown_from_year_peak_pct is not None
+        and item.drawdown_from_year_peak_pct <= -15
+        and "瓒嬪娍鐮村潖" not in item.drawdown_regime
+        and "趋势破坏" not in item.drawdown_regime
+    ]
+    if high_beta_pullbacks:
+        warnings.append(
+            "高波动单票回撤观察：以下直接持仓较年内高点回撤较深，虽未必构成趋势破坏，但需要结合财报、管理层表态和主题拥挤度复核："
+            + "、".join(high_beta_pullbacks)
+            + "。"
+        )
     if portfolio_performance and portfolio_performance.unmatched_sell_proceeds_gbp > 0:
         warnings.append(
             f"已实现交易盈亏仅统计成本基础可识别的卖出。导出窗口内另有 "
@@ -2429,6 +2448,31 @@ def _load_portfolio_summary(
     if fx_notes:
         summary.append("GBP参考估值使用抓取时点FX：" + "；".join(fx_notes) + "。")
     return summary, warnings, portfolio_positions, portfolio_total
+
+
+def _adjust_portfolio_position_for_asset_type(
+    position: PortfolioPosition, asset: ETFAssetMonitor | None
+) -> PortfolioPosition:
+    if asset is None or not _is_cash_like_theme(asset.theme):
+        return position
+    return replace(
+        position,
+        peak_watch=position.peak_watch or "现金替代观察",
+        drawdown_regime="现金/短债：SMA200不作为趋势破坏核心依据；重点看分派收益、短端利率、久期与流动性。",
+    )
+
+
+def _is_direct_high_beta_position(position: PortfolioPosition) -> bool:
+    symbol = position.symbol.upper()
+    if symbol.endswith(".L") or symbol.endswith(".PA") or symbol.endswith(".DE"):
+        return False
+    if position.monitor_status == "covered":
+        return False
+    if position.daily_volatility_pct is not None and position.daily_volatility_pct >= 2.5:
+        return True
+    if position.pullback_sigma_1m is not None and position.pullback_sigma_1m >= 1.5:
+        return True
+    return symbol in {"RKLB", "NFLX", "NVDA", "META", "AVGO", "TSLA", "PLTR"}
 
 
 def _portfolio_fx_notes(positions: list[PortfolioPosition]) -> list[str]:

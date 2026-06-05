@@ -8,7 +8,7 @@ from .etf_monitor import ETFAssetMonitor, ETFMonitor, PortfolioPosition
 from .mag7_capital_network import AggregateCapitalDisclosure, CapitalRelation, Mag7CapitalNetwork
 from .news_monitor import NewsEvent, NewsMonitor
 from .portfolio_events import PortfolioEventMonitor
-from .scoring import IronCondorAssessment, ScoredMetric, ScoredReport
+from .scoring import IronCondorAssessment, ScoreDriver, ScoredMetric, ScoredReport
 from .time_utils import format_timestamp
 
 
@@ -28,6 +28,7 @@ def render_html_report(report: ScoredReport, title: str) -> str:
     unknowns = "\n".join(f"<li>{escape(item)}</li>" for item in report.regime.unknowns)
     risks = "\n".join(f"<li>{escape(item)}</li>" for item in report.risks)
     weights = "\n".join(_render_weight_row(key, value, report.metrics) for key, value in report.weights.items())
+    score_drivers = _render_score_drivers(report.score_drivers)
     health_notes = _render_health_notes(report)
     iron_condor = _render_iron_condor(report.iron_condor)
     news_monitor = _render_news_monitor(report.news_monitor)
@@ -208,6 +209,10 @@ def render_html_report(report: ScoredReport, title: str) -> str:
     .status-bad {{ color: #fca5a5; }}
     .bar {{ height: 8px; background: #1f2937; border-radius: 999px; overflow: hidden; margin-top: 5px; }}
     .bar span {{ display: block; height: 100%; background: var(--blue); }}
+    .driver-list {{ display: grid; gap: 8px; margin-top: 10px; }}
+    .driver-row {{ display: grid; grid-template-columns: 1fr auto; gap: 8px; border: 1px solid var(--line); border-radius: 6px; padding: 9px; background: rgba(255,255,255,.025); }}
+    .driver-score {{ font-weight: 760; color: var(--text); }}
+    .driver-meta {{ grid-column: 1 / -1; color: var(--muted); font-size: 12px; }}
     .footer {{ margin-top: 16px; color: var(--muted); font-size: 12px; display: flex; justify-content: space-between; gap: 12px; border-top: 1px solid var(--line); padding-top: 12px; }}
     @media (max-width: 980px) {{
       .hero, .grid, .columns, .strategy-head, .strategy-lists {{ grid-template-columns: 1fr; }}
@@ -297,6 +302,7 @@ def render_html_report(report: ScoredReport, title: str) -> str:
         <h2>自适应权重</h2>
         {weights}
       </div>
+      {score_drivers}
       <div class="panel wide">
         <h2>数据源、最近有效值与新鲜度</h2>
         <table>
@@ -328,6 +334,25 @@ def _render_health_notes(report: ScoredReport) -> str:
     if not notes:
         notes.append("核心数据源运行正常。")
     return escape(" ".join(notes))
+
+
+def _render_score_drivers(drivers: list[ScoreDriver]) -> str:
+    if not drivers:
+        return ""
+    rows = "".join(_render_score_driver_row(item) for item in drivers)
+    return f"""<div class="panel">
+        <h2>评分主要驱动</h2>
+        <div class="summary">按“单项风险分 × 自适应权重”排序，用于解释综合风险分的主要来源。</div>
+        <div class="driver-list">{rows}</div>
+      </div>"""
+
+
+def _render_score_driver_row(item: ScoreDriver) -> str:
+    return f"""<div class="driver-row">
+      <div><strong>{escape(item.label)}</strong><br><span class="muted">{escape(item.signal)}</span></div>
+      <div class="driver-score">{item.metric_score}/100</div>
+      <div class="driver-meta">权重 {item.weight:.0%} · 贡献 {item.weighted_score:.1f}</div>
+    </div>"""
 
 
 def _render_iron_condor(assessment: IronCondorAssessment) -> str:
@@ -1280,6 +1305,12 @@ def _fmt_peak_watch(position: PortfolioPosition) -> str:
     if position.drawdown_from_year_peak_pct is None:
         return "N/A"
     peak = _fmt_native(position.year_peak_price_native, position.native_currency)
+    if "现金/短债" in position.drawdown_regime:
+        sigma = f" · 回撤约{_fmt_plain(position.pullback_sigma_1m)}σ(1M)" if position.pullback_sigma_1m is not None else ""
+        return (
+            f"{_fmt_pct(position.drawdown_from_year_peak_pct)} · 峰值 {peak}"
+            f"（{position.year_peak_date or '日期待确认'}）{sigma} · {position.drawdown_regime}"
+        )
     sma = (
         f" · SMA200 {_fmt_native(position.sma200_native, position.native_currency)}"
         f" / {_fmt_pct(position.distance_sma200_pct)}"

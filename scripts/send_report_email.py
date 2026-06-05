@@ -242,6 +242,7 @@ def _report_from_payload(payload: dict):
     from market_report.scoring import (
         IronCondorAssessment,
         RegimeAssessment,
+        ScoreDriver,
         ScoredMetric,
         ScoredReport,
     )
@@ -367,6 +368,11 @@ def _report_from_payload(payload: dict):
             "metrics": lambda _raw: metrics,
             "regime": lambda raw: _dataclass_from_dict(RegimeAssessment, raw or {}),
             "iron_condor": lambda raw: _dataclass_from_dict(IronCondorAssessment, raw or {}),
+            "score_drivers": lambda raw: [
+                _dataclass_from_dict(ScoreDriver, item)
+                for item in (raw or [])
+                if isinstance(item, dict)
+            ],
             "etf_monitor": lambda _raw: etf_monitor,
             "news_monitor": lambda _raw: news_monitor,
             "mag7_capital_network": lambda _raw: mag7_capital_network,

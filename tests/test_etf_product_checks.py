@@ -175,6 +175,31 @@ class ETFProductCheckTests(unittest.TestCase):
 
         self.assertTrue(any("红色回撤观察" in item and "A.L -12.50%" in item for item in warnings))
 
+    def test_cash_like_portfolio_position_uses_cash_like_drawdown_context(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "portfolio.csv"
+            path.write_text(
+                "symbol,weight_pct,drawdown_from_year_peak_pct,distance_sma200_pct\nERNS.L,100,-0.2,-1.0\n",
+                encoding="utf-8",
+            )
+            _, _, positions, _ = _load_portfolio_summary(
+                [self._asset("ERNS.L", (), equity_like=False, theme="GBP Ultrashort Bond / Cash-like")],
+                path,
+            )
+
+        self.assertIn("现金/短债", positions[0].drawdown_regime)
+
+    def test_portfolio_summary_flags_high_beta_single_name_pullback(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "portfolio.csv"
+            path.write_text(
+                "symbol,weight_pct,drawdown_from_year_peak_pct,pullback_sigma_1m,monitor_status\nRKLB,10,-18,1.8,outside-monitor-pool\n",
+                encoding="utf-8",
+            )
+            _, warnings, _, _ = _load_portfolio_summary([], path)
+
+        self.assertTrue(any("高波动单票回撤观察" in item and "RKLB -18.00%" in item for item in warnings))
+
     def test_portfolio_summary_discloses_statement_cost_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "portfolio.csv"

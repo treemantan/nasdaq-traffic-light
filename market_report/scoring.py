@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 
 from .data_sources import MarketMetric, MarketSnapshot
@@ -16,6 +16,17 @@ from .time_utils import format_timestamp, timezone_label
 class ScoredMetric:
     metric: MarketMetric
     score: int
+    signal: str
+    note: str
+
+
+@dataclass(frozen=True)
+class ScoreDriver:
+    key: str
+    label: str
+    weight: float
+    metric_score: int
+    weighted_score: float
     signal: str
     note: str
 
@@ -68,6 +79,7 @@ class ScoredReport:
     news_monitor: NewsMonitor | None = None
     mag7_capital_network: Mag7CapitalNetwork | None = None
     portfolio_event_monitor: PortfolioEventMonitor | None = None
+    score_drivers: list[ScoreDriver] = field(default_factory=list)
     previous_regime: str | None = None
     regime_transition: str = "暂无可比历史叙事。"
 
@@ -88,7 +100,12 @@ def score_snapshot(
     light_label, light_color, headline = _light(overall)
     health = _data_health(snapshot.metrics)
     regime = _infer_regime(snapshot.metrics, health)
-    iron_condor = _iron_condor_filter(snapshot.metrics)
+    iron_condor = _contextualize_iron_condor(
+        _iron_condor_filter(snapshot.metrics),
+        etf_monitor,
+        news_monitor,
+        portfolio_event_monitor,
+    )
     data_warnings = list(snapshot.warnings)
     data_quality = _data_quality(health)
     transition = _regime_transition(previous_regime, regime.name)
@@ -112,6 +129,7 @@ def score_snapshot(
         news_monitor=news_monitor,
         mag7_capital_network=mag7_capital_network,
         portfolio_event_monitor=portfolio_event_monitor,
+        score_drivers=_score_drivers(scored_metrics, adaptive_weights),
         data_warnings=data_warnings,
         data_quality=data_quality,
         data_health=health,
@@ -388,6 +406,26 @@ def _nonlinear_score(scored: dict[str, ScoredMetric], weights: dict[str, float],
     return _clamp(base + adjustment)
 
 
+def _score_drivers(scored: dict[str, ScoredMetric], weights: dict[str, float], limit: int = 6) -> list[ScoreDriver]:
+    drivers: list[ScoreDriver] = []
+    for key, weight in weights.items():
+        item = scored.get(key)
+        if item is None:
+            continue
+        drivers.append(
+            ScoreDriver(
+                key=key,
+                label=item.metric.label,
+                weight=weight,
+                metric_score=item.score,
+                weighted_score=item.score * weight,
+                signal=item.signal,
+                note=item.note,
+            )
+        )
+    return sorted(drivers, key=lambda item: item.weighted_score, reverse=True)[:limit]
+
+
 def _iron_condor_filter(metrics: dict[str, MarketMetric]) -> IronCondorAssessment:
     score = 70
     positives: list[str] = []
@@ -538,6 +576,50 @@ def _iron_condor_filter(metrics: dict[str, MarketMetric]) -> IronCondorAssessmen
         warnings,
         blockers,
     )
+
+
+def _contextualize_iron_condor(
+    assessment: IronCondorAssessment,
+    etf_monitor: ETFMonitor | None,
+    news_monitor: NewsMonitor | None,
+    portfolio_event_monitor: PortfolioEventMonitor | None,
+) -> IronCondorAssessment:
+    score = assessment.score
+    warnings = list(assessment.warnings)
+    blockers = list(assessment.blockers)
+
+    high_impact_news = 0
+    if news_monitor is not None:
+        high_impact_news = sum(1 for event in news_monitor.events if event.impact == "high")
+    if high_impact_news >= 3:
+        score -= 6
+        warnings.append(
+            f"新闻与政策事件风险偏高（高影响事件{high_impact_news}条），卖波动环境需要叠加事件风险折价。"
+        )
+
+    if portfolio_event_monitor is not None and portfolio_event_monitor.events:
+        score -= 3
+        warnings.append("组合持仓存在待观察事件窗口，Iron Condor环境分不应被理解为组合层面的低风险结论。")
+
+    portfolio_warnings = list(etf_monitor.portfolio_warnings) if etf_monitor is not None else []
+    has_trend_break = any("趋势破坏" in item or "瓒嬪娍鐮村潖" in item for item in portfolio_warnings)
+    has_red_drawdown = any("红色回撤" in item or "绾㈣壊鍥炴挙" in item for item in portfolio_warnings)
+    if has_trend_break or has_red_drawdown:
+        score -= 5
+        warnings.append("组合层面已有红色回撤或趋势破坏复核项，短波动策略环境需与单票/主题仓位风险分开判断。")
+
+    final_score = _clamp(score)
+    if blockers or final_score < 50:
+        label = "不适合铁鹰 / Unfavourable"
+        color = "#c92a2a"
+    elif final_score >= 75:
+        label = "适合观察铁鹰 / Suitable"
+        color = "#2f9e44"
+    else:
+        label = "中性偏谨慎 / Neutral"
+        color = "#b7791f"
+
+    return replace(assessment, score=final_score, label=label, color=color, warnings=warnings, blockers=blockers)
 
 
 def _infer_regime(metrics: dict[str, MarketMetric], health: dict[str, int]) -> RegimeAssessment:

@@ -7,7 +7,7 @@ from .etf_monitor import ETFAssetMonitor, ETFMonitor, PortfolioPosition
 from .mag7_capital_network import Mag7CapitalNetwork
 from .news_monitor import NewsMonitor
 from .portfolio_events import PortfolioEventMonitor
-from .scoring import IronCondorAssessment, ScoredMetric, ScoredReport
+from .scoring import IronCondorAssessment, ScoreDriver, ScoredMetric, ScoredReport
 
 
 EMAIL_GROUPS = [
@@ -25,6 +25,7 @@ def render_email_report(report: ScoredReport) -> str:
     unknowns = "".join(f"<li>{escape(item)}</li>" for item in report.regime.unknowns)
     risks = "".join(f"<li>{escape(item)}</li>" for item in report.risks)
     data_rows = "".join(_render_data_row(item.metric) for item in report.metrics.values())
+    score_drivers = _render_score_drivers(report.score_drivers)
     iron_condor = _render_iron_condor(report.iron_condor)
     news_monitor = _render_news_monitor(report.news_monitor)
     mag7_capital_network = _render_mag7_capital_network(report.mag7_capital_network)
@@ -83,6 +84,7 @@ def render_email_report(report: ScoredReport) -> str:
               </table>
             </td>
           </tr>
+          {score_drivers}
           {iron_condor}
           {news_monitor}
           {mag7_capital_network}
@@ -149,6 +151,44 @@ def _render_group(title: str, keys: list[str], metrics: dict[str, ScoredMetric])
       <td style="padding:0 24px 18px;">
         <div style="font-size:19px;font-weight:700;color:#f3f4f6;margin:8px 0 10px;">{escape(title)}</div>
         <table role="presentation" width="100%" cellspacing="0" cellpadding="0">{''.join(rows)}</table>
+      </td>
+    </tr>"""
+
+
+def _render_score_drivers(drivers: list[ScoreDriver]) -> str:
+    if not drivers:
+        return ""
+    rows = "".join(
+        f"""<tr>
+          <td style="padding:8px;border-bottom:1px solid #263244;color:#d1d5db;">
+            <strong style="color:#f3f4f6;">{escape(item.label)}</strong><br>
+            <span style="font-size:12px;color:#9ca3af;">{escape(item.signal)}</span>
+          </td>
+          <td align="right" style="padding:8px;border-bottom:1px solid #263244;color:#f3f4f6;font-weight:700;">{item.metric_score}/100</td>
+          <td align="right" style="padding:8px;border-bottom:1px solid #263244;color:#9ca3af;">{item.weight:.0%}</td>
+          <td align="right" style="padding:8px;border-bottom:1px solid #263244;color:#9ca3af;">{item.weighted_score:.1f}</td>
+        </tr>"""
+        for item in drivers
+    )
+    return f"""<tr>
+      <td style="padding:0 24px 18px;">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#151f2d;border:1px solid #263244;border-radius:8px;">
+          <tr>
+            <td style="padding:12px;">
+              <div style="font-size:17px;font-weight:700;color:#f3f4f6;">评分主要驱动</div>
+              <div style="font-size:12px;color:#9ca3af;margin-top:4px;">按“单项风险分 × 自适应权重”排序，解释综合风险分的主要来源。</div>
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-top:8px;font-size:12px;">
+                <tr>
+                  <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">指标</th>
+                  <th align="right" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">风险分</th>
+                  <th align="right" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">权重</th>
+                  <th align="right" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">贡献</th>
+                </tr>
+                {rows}
+              </table>
+            </td>
+          </tr>
+        </table>
       </td>
     </tr>"""
 

@@ -30,6 +30,7 @@ output/market-report-YYYY-MM-DD.json
 - [自动化、邮件与 OneDrive 云端导入](docs/AUTOMATION.md)
 - [UK ETF 观察池、估值与组合导入](docs/ETF_AND_PORTFOLIO.md)
 - [方法论：评分、相似环境、walk-forward 与 MAD 自适应校准](docs/METHODOLOGY.md)
+- [评分解释、Iron Condor 上下文与现金/短债框架](docs/SCORING_EXPLANATION.md)
 - [数据源、缓存与回退机制](docs/DATA_SOURCES.md)
 - [组合行情缓存与降级机制](docs/PORTFOLIO_QUOTE_CACHE.md)
 - [MAG7 企业资本关系图谱与后续地缘政治辅助分](docs/MAG7_CAPITAL_NETWORK.md)
