@@ -8,6 +8,7 @@ from .mag7_capital_network import Mag7CapitalNetwork
 from .news_monitor import NewsMonitor
 from .portfolio_events import PortfolioEventMonitor
 from .scoring import IronCondorAssessment, ScoreDriver, ScoredMetric, ScoredReport
+from .shock_backtest import MarketShockBacktest, MarketShockSample
 
 
 EMAIL_GROUPS = [
@@ -27,6 +28,7 @@ def render_email_report(report: ScoredReport) -> str:
     data_rows = "".join(_render_data_row(item.metric) for item in report.metrics.values())
     score_drivers = _render_score_drivers(report.score_drivers)
     iron_condor = _render_iron_condor(report.iron_condor)
+    market_shock_backtest = _render_market_shock_backtest(report.market_shock_backtest)
     news_monitor = _render_news_monitor(report.news_monitor)
     mag7_capital_network = _render_mag7_capital_network(report.mag7_capital_network)
     etf_monitor = _render_etf_monitor(report.etf_monitor, report.news_monitor, report.portfolio_event_monitor)
@@ -86,6 +88,7 @@ def render_email_report(report: ScoredReport) -> str:
           </tr>
           {score_drivers}
           {iron_condor}
+          {market_shock_backtest}
           {news_monitor}
           {mag7_capital_network}
           {etf_monitor}
@@ -236,6 +239,57 @@ def _render_iron_condor(assessment: IronCondorAssessment) -> str:
           </tr>
         </table>
       </td>
+    </tr>"""
+
+
+def _render_market_shock_backtest(backtest: MarketShockBacktest | None) -> str:
+    if backtest is None or not backtest.triggered:
+        return ""
+    rows = "".join(_render_market_shock_sample(sample) for sample in backtest.samples[:8])
+    notes = "".join(f"<li>{escape(item)}</li>" for item in backtest.notes)
+    return f"""<tr>
+      <td style="padding:0 24px 18px;">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#151f2d;border:1px solid #d97706;border-radius:8px;">
+          <tr>
+            <td style="padding:14px;">
+              <div style="font-size:19px;font-weight:700;color:#f3f4f6;">市场冲击历史类比</div>
+              <div style="font-size:13px;color:#d1d5db;margin-top:5px;">当前冲击类型：{escape(backtest.shock_type)}。{escape(backtest.reliability)}。该模块只回答“过去类似冲击日之后怎么走”，不构成反弹或继续下跌预测。</div>
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-top:10px;font-size:12px;color:#d1d5db;">
+                <tr>
+                  <td style="padding:7px;border:1px solid #263244;">样本 / 独立阶段<br><strong style="font-size:16px;color:#f3f4f6;">{backtest.sample_count} / {backtest.independent_phase_count}</strong></td>
+                  <td style="padding:7px;border:1px solid #263244;">平均距离<br><strong style="font-size:16px;color:#f3f4f6;">{_fmt_distance(backtest.avg_distance)}</strong></td>
+                  <td style="padding:7px;border:1px solid #263244;">之后1D / 5D / 20D<br><strong style="font-size:16px;color:#f3f4f6;">{_fmt_pct(backtest.forward_1d_avg)} / {_fmt_pct(backtest.forward_5d_avg)} / {_fmt_pct(backtest.forward_20d_avg)}</strong></td>
+                  <td style="padding:7px;border:1px solid #263244;">尾部阶段<br><strong style="font-size:16px;color:#f3f4f6;">{backtest.tail_phase_count} / {backtest.independent_phase_count}</strong></td>
+                </tr>
+              </table>
+              <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;font-size:12px;color:#d1d5db;margin-top:10px;">
+                <tr>
+                  <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">样本日</th>
+                  <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">距离</th>
+                  <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">NDX</th>
+                  <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">VIX</th>
+                  <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">之后5D</th>
+                  <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">20D回撤</th>
+                </tr>
+                {rows}
+              </table>
+              <ul style="color:#9ca3af;padding-left:18px;margin:8px 0 0;font-size:12px;">{notes}</ul>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>"""
+
+
+def _render_market_shock_sample(sample: MarketShockSample) -> str:
+    phase = f"{sample.phase_id} · 代表样本" if sample.phase_representative else sample.phase_id
+    return f"""<tr>
+      <td style="padding:7px;border-bottom:1px solid #263244;">{escape(sample.as_of)}<br><span style="color:#9ca3af;">{escape(phase)}</span></td>
+      <td style="padding:7px;border-bottom:1px solid #263244;">{sample.distance:.2f}</td>
+      <td style="padding:7px;border-bottom:1px solid #263244;">{_fmt_pct(sample.nasdaq_change_pct)}</td>
+      <td style="padding:7px;border-bottom:1px solid #263244;">{_fmt_pct(sample.vix_change_pct)}</td>
+      <td style="padding:7px;border-bottom:1px solid #263244;">{_fmt_pct(sample.forward_5d)}</td>
+      <td style="padding:7px;border-bottom:1px solid #263244;">{_fmt_pct(sample.drawdown_20d)}</td>
     </tr>"""
 
 
@@ -829,6 +883,12 @@ def _fmt_pct(value: float | None) -> str:
         return "N/A"
     sign = "+" if value >= 0 else ""
     return f"{sign}{value:.2f}%"
+
+
+def _fmt_distance(value: float | None) -> str:
+    if value is None:
+        return "N/A"
+    return f"{value:.2f}"
 
 
 def _fmt_native(value: float | None, currency: str) -> str:

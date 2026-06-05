@@ -88,6 +88,41 @@ class SendReportEmailTests(unittest.TestCase):
             "data_warnings": [],
             "data_quality": "正常",
             "data_health": {"core_cached": 0, "aux_missing": 0},
+            "market_shock_backtest": {
+                "triggered": True,
+                "shock_type": "权益急跌 + 波动率扩散",
+                "reliability": "历史可比性中等",
+                "sample_count": 1,
+                "independent_phase_count": 1,
+                "avg_distance": 0.8,
+                "forward_1d_avg": 1.0,
+                "forward_5d_avg": -2.0,
+                "forward_20d_avg": 3.0,
+                "hit_rate_5d": 0.0,
+                "drawdown_5d_avg": -4.0,
+                "drawdown_20d_avg": -8.0,
+                "tail_phase_count": 1,
+                "tail_phase_rate": 100.0,
+                "samples": [
+                    {
+                        "as_of": "2024-01-09",
+                        "distance": 0.8,
+                        "nasdaq_change_pct": -3.0,
+                        "sp500_change_pct": -2.0,
+                        "vix_change_pct": 18.0,
+                        "vvix_change_pct": 12.0,
+                        "dxy_change_pct": 0.5,
+                        "forward_1d": 1.0,
+                        "forward_5d": -2.0,
+                        "forward_20d": 3.0,
+                        "drawdown_5d": -4.0,
+                        "drawdown_20d": -8.0,
+                        "phase_id": "P1",
+                        "phase_representative": True,
+                    }
+                ],
+                "notes": ["匹配步骤不使用未来收益。"],
+            },
         }
 
         subject, html, text = module._render_message(
@@ -103,6 +138,8 @@ class SendReportEmailTests(unittest.TestCase):
         self.assertNotIn("<style>", html)
         self.assertIn("Trump tells crowd to buy a Dell computer", html)
         self.assertIn("DELL", html)
+        self.assertIn("市场冲击历史类比", html)
+        self.assertIn("2024-01-09", html)
         self.assertIn("email-optimized HTML", text)
 
 

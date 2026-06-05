@@ -9,6 +9,7 @@ from .etf_monitor import ETFMonitor
 from .mag7_capital_network import Mag7CapitalNetwork
 from .news_monitor import NewsMonitor
 from .portfolio_events import PortfolioEventMonitor
+from .shock_backtest import MarketShockBacktest
 from .time_utils import format_timestamp, timezone_label
 
 
@@ -79,6 +80,7 @@ class ScoredReport:
     news_monitor: NewsMonitor | None = None
     mag7_capital_network: Mag7CapitalNetwork | None = None
     portfolio_event_monitor: PortfolioEventMonitor | None = None
+    market_shock_backtest: MarketShockBacktest | None = None
     score_drivers: list[ScoreDriver] = field(default_factory=list)
     previous_regime: str | None = None
     regime_transition: str = "暂无可比历史叙事。"

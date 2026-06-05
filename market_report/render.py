@@ -9,6 +9,7 @@ from .mag7_capital_network import AggregateCapitalDisclosure, CapitalRelation, M
 from .news_monitor import NewsEvent, NewsMonitor
 from .portfolio_events import PortfolioEventMonitor
 from .scoring import IronCondorAssessment, ScoreDriver, ScoredMetric, ScoredReport
+from .shock_backtest import MarketShockBacktest, MarketShockSample
 from .time_utils import format_timestamp
 
 
@@ -31,6 +32,7 @@ def render_html_report(report: ScoredReport, title: str) -> str:
     score_drivers = _render_score_drivers(report.score_drivers)
     health_notes = _render_health_notes(report)
     iron_condor = _render_iron_condor(report.iron_condor)
+    market_shock_backtest = _render_market_shock_backtest(report.market_shock_backtest)
     news_monitor = _render_news_monitor(report.news_monitor)
     mag7_capital_network = _render_mag7_capital_network(report.mag7_capital_network)
     etf_monitor = _render_etf_monitor(report.etf_monitor, report.news_monitor, report.portfolio_event_monitor)
@@ -155,6 +157,8 @@ def render_html_report(report: ScoredReport, title: str) -> str:
     .etf-group-end {{ margin-top: 10px; padding-top: 8px; border-top: 1px dashed rgba(148,163,184,.28); color: var(--muted); font-size: 12px; }}
     .table-scroll {{ max-width: 100%; overflow-x: auto; overflow-y: hidden; }}
     .table-scroll table {{ min-width: 1580px; }}
+    .shock-table-scroll {{ max-width: 100%; overflow-x: auto; overflow-y: hidden; }}
+    .shock-table-scroll table {{ min-width: 980px; }}
     .etf-cards {{ display: none; }}
     .etf-card-grid {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }}
     .etf-card {{ border: 1px solid var(--line); border-radius: 8px; background: rgba(255,255,255,.025); padding: 12px; min-width: 0; }}
@@ -275,6 +279,7 @@ def render_html_report(report: ScoredReport, title: str) -> str:
     </section>
 
     {iron_condor}
+    {market_shock_backtest}
     {news_monitor}
     {mag7_capital_network}
     {etf_monitor}
@@ -378,6 +383,61 @@ def _render_iron_condor(assessment: IronCondorAssessment) -> str:
       </div>
       <div class="disclaimer">本模块仅评估市场环境是否适合区间型卖波动策略，不构成期权交易建议。</div>
 </section>"""
+
+
+def _render_market_shock_backtest(backtest: MarketShockBacktest | None) -> str:
+    if backtest is None or not backtest.triggered:
+        return ""
+    sample_rows = "\n".join(_render_market_shock_sample(sample) for sample in backtest.samples[:12])
+    notes = "".join(f"<li>{escape(item)}</li>" for item in backtest.notes)
+    tail = (
+        f"{backtest.tail_phase_count}/{backtest.independent_phase_count}个独立阶段"
+        if backtest.independent_phase_count
+        else "样本不足"
+    )
+    return f"""<section class="panel news-panel">
+      <div class="news-head">
+        <div>
+          <h2>市场冲击历史类比</h2>
+          <div class="summary">当前冲击类型：{escape(backtest.shock_type)}。该模块只回答“过去类似冲击日之后怎么走”，不预测反弹或继续下跌。</div>
+        </div>
+        <span class="tag">{escape(backtest.reliability)}</span>
+      </div>
+      <div class="capital-grid">
+        <div class="capital-item"><span class="muted">样本 / 独立阶段</span><div class="capital-value">{backtest.sample_count} / {backtest.independent_phase_count}</div></div>
+        <div class="capital-item"><span class="muted">平均距离</span><div class="capital-value">{_fmt_distance(backtest.avg_distance)}</div></div>
+        <div class="capital-item"><span class="muted">之后1D / 5D / 20D</span><div class="capital-value">{_fmt_pct(backtest.forward_1d_avg)} / {_fmt_pct(backtest.forward_5d_avg)} / {_fmt_pct(backtest.forward_20d_avg)}</div></div>
+        <div class="capital-item"><span class="muted">5D胜率 / 20D回撤</span><div class="capital-value">{_fmt_pct(backtest.hit_rate_5d)} / {_fmt_pct(backtest.drawdown_20d_avg)}</div></div>
+        <div class="capital-item"><span class="muted">尾部路径占比</span><div class="capital-value">{escape(tail)} · {_fmt_pct(backtest.tail_phase_rate)}</div></div>
+      </div>
+      <div class="shock-table-scroll" style="margin-top:12px;">
+        <table>
+          <thead>
+            <tr><th>样本日</th><th>阶段</th><th>距离</th><th>NDX</th><th>S&P</th><th>VIX</th><th>VVIX</th><th>DXY</th><th>之后1D</th><th>之后5D</th><th>之后20D</th><th>20D回撤</th></tr>
+          </thead>
+          <tbody>{sample_rows}</tbody>
+        </table>
+      </div>
+      <ul class="small-note">{notes}</ul>
+    </section>"""
+
+
+def _render_market_shock_sample(sample: MarketShockSample) -> str:
+    representative = " · 代表样本" if sample.phase_representative else ""
+    return f"""<tr>
+      <td>{escape(sample.as_of)}</td>
+      <td>{escape(sample.phase_id)}{representative}</td>
+      <td>{sample.distance:.2f}</td>
+      <td>{_fmt_pct(sample.nasdaq_change_pct)}</td>
+      <td>{_fmt_pct(sample.sp500_change_pct)}</td>
+      <td>{_fmt_pct(sample.vix_change_pct)}</td>
+      <td>{_fmt_pct(sample.vvix_change_pct)}</td>
+      <td>{_fmt_pct(sample.dxy_change_pct)}</td>
+      <td>{_fmt_pct(sample.forward_1d)}</td>
+      <td>{_fmt_pct(sample.forward_5d)}</td>
+      <td>{_fmt_pct(sample.forward_20d)}</td>
+      <td>{_fmt_pct(sample.drawdown_20d)}</td>
+    </tr>"""
 
 
 def _render_news_monitor(monitor: NewsMonitor | None) -> str:
@@ -1341,6 +1401,12 @@ def _fmt_pct(value: float | None) -> str:
         return "N/A"
     sign = "+" if value >= 0 else ""
     return f"{sign}{value:.2f}%"
+
+
+def _fmt_distance(value: float | None) -> str:
+    if value is None:
+        return "N/A"
+    return f"{value:.2f}"
 
 
 def _fmt_gbp(value: float | None) -> str:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import date, datetime
 from pathlib import Path
 
@@ -16,6 +16,7 @@ from .news_monitor import fetch_news_monitor
 from .portfolio_events import build_portfolio_event_monitor
 from .render import render_html_report
 from .scoring import score_snapshot
+from .shock_backtest import analyze_market_shock_history
 
 
 def main() -> int:
@@ -42,6 +43,7 @@ def main() -> int:
         mag7_capital_network=mag7_capital_network,
         portfolio_event_monitor=portfolio_event_monitor,
     )
+    scored = replace(scored, market_shock_backtest=analyze_market_shock_history(snapshot.metrics))
 
     output_path = Path(args.output) if args.output else config.output_dir / f"market-report-{scored.report_date}.html"
     output_path.parent.mkdir(parents=True, exist_ok=True)

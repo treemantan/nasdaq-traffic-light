@@ -377,6 +377,7 @@ def _report_from_payload(payload: dict):
             "news_monitor": lambda _raw: news_monitor,
             "mag7_capital_network": lambda _raw: mag7_capital_network,
             "portfolio_event_monitor": lambda _raw: portfolio_event_monitor,
+            "market_shock_backtest": _market_shock_backtest_from_payload,
         },
     )
 
@@ -439,6 +440,25 @@ def _etf_backtest_from_payload(raw: object):
                 for item in (items or [])
                 if isinstance(item, dict)
             ),
+        },
+    )
+
+
+def _market_shock_backtest_from_payload(raw: object):
+    from market_report.shock_backtest import MarketShockBacktest, MarketShockSample
+
+    if not isinstance(raw, dict):
+        return None
+    return _dataclass_from_dict(
+        MarketShockBacktest,
+        raw,
+        converters={
+            "samples": lambda items: tuple(
+                _dataclass_from_dict(MarketShockSample, item)
+                for item in (items or [])
+                if isinstance(item, dict)
+            ),
+            "notes": lambda items: tuple(items or ()),
         },
     )
 

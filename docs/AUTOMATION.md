@@ -161,3 +161,9 @@ python scripts/send_portfolio_event_reminders.py --lookahead-hours 7
 ```text
 data/portfolio_events.json
 ```
+
+## 市场冲击历史类比
+
+当市场冲击触发时，完整报告会显示“市场冲击历史类比”。该模块使用 Nasdaq 100、S&P 500、Russell 2000、VIX、VVIX 与 DXY 的当日变化寻找历史相似冲击日，并展示之后 `1D/5D/20D` 路径、回撤和独立历史阶段数。
+
+匹配步骤不使用未来收益，未来路径只作为 outcome 复盘；详见 `docs/METHODOLOGY.md`。
