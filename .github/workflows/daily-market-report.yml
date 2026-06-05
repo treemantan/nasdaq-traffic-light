@@ -201,6 +201,22 @@ jobs:
         if: steps.email-mode.outputs.should_run == 'true'
         run: python -m market_report --config config.example.json --dry-run
 
+      - name: Send emergency market shock alert
+        if: steps.email-mode.outputs.should_run == 'true'
+        env:
+          EMAIL_PROVIDER: ${{ secrets.EMAIL_PROVIDER }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          REPORT_EMAIL_TO: ${{ secrets.REPORT_EMAIL_TO }}
+          PORTFOLIO_EMAIL_TO: ${{ secrets.PORTFOLIO_EMAIL_TO }}
+          REPORT_EMAIL_FROM: ${{ secrets.REPORT_EMAIL_FROM }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_SECURITY: ${{ secrets.SMTP_SECURITY }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          SMTP_FROM: ${{ secrets.SMTP_FROM }}
+        run: python scripts/send_market_shock_alert.py
+
       - name: Send due private portfolio event reminders
         if: steps.email-mode.outputs.should_run == 'true'
         env:

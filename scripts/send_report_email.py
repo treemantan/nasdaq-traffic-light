@@ -620,21 +620,21 @@ def _short_vol_environment_answer(iron: dict) -> str:
 def _metric_line(payload: dict, key: str) -> str:
     metric = _metric(payload, key)
     value = _fmt(metric.get("value"), metric.get("unit", ""))
-    change_pct = metric.get("change_pct")
+    change_pct = _metric_change_pct(metric)
     pct = f"{change_pct:+.2f}%" if isinstance(change_pct, (int, float)) else "N/A"
     return f"{value} / {pct}"
 
 
 def _metric_pct_line(payload: dict, key: str) -> str:
     metric = _metric(payload, key)
-    change_pct = metric.get("change_pct")
+    change_pct = _metric_change_pct(metric)
     return f"{change_pct:+.2f}%" if isinstance(change_pct, (int, float)) else "N/A"
 
 
 def _metric_value_change_line(payload: dict, key: str) -> str:
     metric = _metric(payload, key)
     value = _fmt(metric.get("value"), metric.get("unit", ""))
-    change = metric.get("change")
+    change = _metric_change(metric)
     unit = metric.get("unit", "")
     change_text = f"{change:+.3f}{unit}" if isinstance(change, (int, float)) else "N/A"
     return f"{value} / {change_text}"
@@ -643,6 +643,28 @@ def _metric_value_change_line(payload: dict, key: str) -> str:
 def _metric(payload: dict, key: str) -> dict:
     scored = (payload.get("metrics") or {}).get(key) or {}
     return scored.get("metric") or {}
+
+
+def _metric_change(metric: dict) -> float | None:
+    raw = metric.get("change")
+    if isinstance(raw, (int, float)):
+        return float(raw)
+    value = metric.get("value")
+    previous = metric.get("previous_value")
+    if not isinstance(value, (int, float)) or not isinstance(previous, (int, float)):
+        return None
+    return float(value) - float(previous)
+
+
+def _metric_change_pct(metric: dict) -> float | None:
+    raw = metric.get("change_pct")
+    if isinstance(raw, (int, float)):
+        return float(raw)
+    value = metric.get("value")
+    previous = metric.get("previous_value")
+    if not isinstance(value, (int, float)) or not isinstance(previous, (int, float)) or previous == 0:
+        return None
+    return (float(value) / float(previous) - 1) * 100
 
 
 def _definition_table(rows: list[tuple[str, str]]) -> str:

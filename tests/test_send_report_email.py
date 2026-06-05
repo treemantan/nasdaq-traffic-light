@@ -15,6 +15,18 @@ def _load_send_report_email_module():
 
 
 class SendReportEmailTests(unittest.TestCase):
+    def test_lightweight_metric_lines_compute_change_from_previous_value(self) -> None:
+        module = _load_send_report_email_module()
+        payload = {
+            "metrics": {
+                "nasdaq": {"metric": {"value": 29120.98, "previous_value": 30407.81, "unit": ""}},
+                "treasury_10y": {"metric": {"value": 4.551, "previous_value": 4.477, "unit": "%"}},
+            }
+        }
+
+        self.assertEqual(module._metric_pct_line(payload, "nasdaq"), "-4.23%")
+        self.assertEqual(module._metric_value_change_line(payload, "treasury_10y"), "4.551% / +0.074%")
+
     def test_full_mode_uses_email_optimized_renderer(self) -> None:
         module = _load_send_report_email_module()
         payload = {

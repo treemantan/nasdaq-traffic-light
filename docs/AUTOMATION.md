@@ -43,6 +43,20 @@ python -m market_report --config config.example.json --dry-run
 
 英国夏令时按固定规则转换：三月最后一个周日进入 BST，十月最后一个周日回到 GMT。GitHub cron 使用 UTC，因此 workflow 配置两组候选 UTC 时间，并在运行时按 `Europe/London` 判断是否执行。GitHub scheduled workflow 可能被平台排队延迟；本项目不会因为 GitHub 延迟而跳过正确的 UK 候选，只会跳过错误的 BST/GMT 候选。为了避免当天最重要的 full 邮件缺失，workflow 额外设置 `21:45` 和 `22:15` full 兜底候选，并通过 `market-report-scheduled-email-sent-...-full` cache marker 确保同一天 scheduled full 邮件只发送一次。手动 `workflow_dispatch` 的 `full` 模式不会读取或写入 scheduled marker，不会影响当天定时 full 邮件；它只用于当天重新发送或验证邮件。
 
+### 紧急市场冲击邮件
+
+GitHub scheduled workflow 不是准点交易风控工具，平台高峰期可能延迟几十分钟甚至更久。因此项目新增独立的 `market shock alert` 检查器：每次报告生成后，无论当前 `EMAIL_MODE` 是 `none`、`pulse`、`volatility` 还是 `full`，都会先检查是否出现权益急跌、VIX/VVIX 快速扩张、美元与成长股压力共振或长端利率冲击。
+
+触发后会发送一封独立的“紧急市场风险警报”，收件人来自 `REPORT_EMAIL_TO` 与 `PORTFOLIO_EMAIL_TO` 去重后的合集。邮件只包含市场冲击与复核动作，不包含私人持仓明细。已发送状态写入 `output/cache/market_shock_alerts.json`，同一天首次触发会发送；若之后风险强度显著升级，也会再次发送，避免在同一风险等级下重复刷屏。
+
+如果需要比 GitHub cron 更及时，可以用外部定时服务调用 GitHub `workflow_dispatch`，并传入：
+
+```text
+email_mode=none
+```
+
+这样 workflow 只生成报告、上传 artifact，并执行紧急冲击检查；普通报告邮件不会发送，只有达到 shock 条件时才会额外报警。这个方案比依赖 GitHub schedule 更适合盘中风控兜底，但仍然不是券商级实时风控。
+
 ## 邮件 secrets
 
 Resend：
