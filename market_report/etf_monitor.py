@@ -89,6 +89,23 @@ class PortfolioPosition:
     yellow_drawdown_threshold_pct: float = 5
     red_drawdown_threshold_pct: float = 10
     drawdown_regime: str = ""
+    implied_trading_cost_gbp: float | None = None
+    account_implied_trading_cost_gbp: float | None = None
+    _closed_trades_json: str = ""
+
+
+@dataclass(frozen=True)
+class PortfolioClosedTrade:
+    symbol: str
+    opened_at: str
+    closed_at: str
+    holding_days: int | None
+    quantity: float
+    cost_basis_gbp: float
+    gross_proceeds_gbp: float
+    net_proceeds_gbp: float
+    implied_trading_cost_gbp: float
+    realized_pnl_gbp: float
 
 
 @dataclass(frozen=True)
@@ -105,8 +122,10 @@ class PortfolioPerformance:
     unrealized_pnl_gbp: float = 0
     realized_pnl_gbp: float = 0
     dividend_income_gbp: float = 0
+    implied_trading_cost_gbp: float = 0
     total_return_gbp: float = 0
     unmatched_sell_proceeds_gbp: float = 0
+    closed_trades: tuple[PortfolioClosedTrade, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -2334,6 +2353,9 @@ def _load_portfolio_summary(
             yellow_drawdown_threshold_pct=_safe_float(row.get("yellow_drawdown_threshold_pct")) or 5,
             red_drawdown_threshold_pct=_safe_float(row.get("red_drawdown_threshold_pct")) or 10,
             drawdown_regime=str(row.get("drawdown_regime") or ""),
+            implied_trading_cost_gbp=_safe_float(row.get("implied_trading_cost_gbp")),
+            account_implied_trading_cost_gbp=_safe_float(row.get("account_implied_trading_cost_gbp")),
+            _closed_trades_json=str(row.get("closed_trades_json") or ""),
         )
         for row in rows
         if str(row.get("symbol") or "").strip()
@@ -2442,7 +2464,8 @@ def _load_portfolio_summary(
             f"可识别总收益 {_fmt_signed_gbp(portfolio_performance.total_return_gbp)}："
             f"未实现盈亏 {_fmt_signed_gbp(portfolio_performance.unrealized_pnl_gbp)}，"
             f"已实现交易盈亏 {_fmt_signed_gbp(portfolio_performance.realized_pnl_gbp)}，"
-            f"股息收入 {_fmt_signed_gbp(portfolio_performance.dividend_income_gbp)}。"
+            f"股息收入 {_fmt_signed_gbp(portfolio_performance.dividend_income_gbp)}，"
+            f"隐含交易成本约 {_fmt_gbp(portfolio_performance.implied_trading_cost_gbp)}。"
         )
     fx_notes = _portfolio_fx_notes(portfolio_positions)
     if fx_notes:
@@ -2488,6 +2511,7 @@ def _portfolio_performance_summary(positions: list[PortfolioPosition]) -> Portfo
     if not positions:
         return None
     first = positions[0]
+    closed_trades = _parse_closed_trades_from_position_row(first)
     return PortfolioPerformance(
         unrealized_pnl_gbp=first.account_unrealized_pnl_gbp
         or sum(item.unrealized_pnl_gbp or 0 for item in positions),
@@ -2497,11 +2521,54 @@ def _portfolio_performance_summary(positions: list[PortfolioPosition]) -> Portfo
         dividend_income_gbp=first.account_dividend_income_gbp
         if first.account_dividend_income_gbp is not None
         else sum(item.dividend_income_gbp or 0 for item in positions),
+        implied_trading_cost_gbp=first.account_implied_trading_cost_gbp
+        if first.account_implied_trading_cost_gbp is not None
+        else sum(item.implied_trading_cost_gbp or 0 for item in positions),
         total_return_gbp=first.account_total_return_gbp
         if first.account_total_return_gbp is not None
         else sum(item.total_return_gbp or 0 for item in positions),
         unmatched_sell_proceeds_gbp=first.unmatched_sell_proceeds_gbp or 0,
+        closed_trades=closed_trades,
     )
+
+
+def _parse_closed_trades_from_position_row(position: PortfolioPosition) -> tuple[PortfolioClosedTrade, ...]:
+    raw = getattr(position, "_closed_trades_json", "")
+    if not raw:
+        return ()
+    try:
+        payload = json.loads(raw)
+    except (TypeError, ValueError):
+        return ()
+    if not isinstance(payload, list):
+        return ()
+    trades = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        symbol = str(item.get("symbol") or "").strip().upper()
+        if not symbol:
+            continue
+        trades.append(
+            PortfolioClosedTrade(
+                symbol=symbol,
+                opened_at=str(item.get("opened_at") or ""),
+                closed_at=str(item.get("closed_at") or ""),
+                holding_days=_safe_int(item.get("holding_days")),
+                quantity=_safe_float(item.get("quantity")) or 0.0,
+                cost_basis_gbp=_safe_float(item.get("cost_basis_gbp")) or 0.0,
+                gross_proceeds_gbp=_safe_float(item.get("gross_proceeds_gbp")) or 0.0,
+                net_proceeds_gbp=_safe_float(item.get("net_proceeds_gbp")) or 0.0,
+                implied_trading_cost_gbp=_safe_float(item.get("implied_trading_cost_gbp")) or 0.0,
+                realized_pnl_gbp=_safe_float(item.get("realized_pnl_gbp")) or 0.0,
+            )
+        )
+    return tuple(trades)
+
+
+def _safe_int(value: object) -> int | None:
+    numeric = _safe_float(value)
+    return int(numeric) if numeric is not None else None
 
 
 def _fmt_signed_pct(value: float | None) -> str:
@@ -2514,6 +2581,12 @@ def _fmt_signed_gbp(value: float | None) -> str:
     if value is None:
         return "N/A"
     return f"{value:+,.2f} GBP"
+
+
+def _fmt_gbp(value: float | None) -> str:
+    if value is None:
+        return "N/A"
+    return f"{value:,.2f} GBP"
 
 
 def _portfolio_exposure_summary(

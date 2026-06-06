@@ -235,6 +235,7 @@ def _report_from_payload(payload: dict):
         ETFBacktestStats,
         ETFMonitor,
         ETFThresholdCalibration,
+        PortfolioClosedTrade,
         PortfolioExposure,
         PortfolioPerformance,
         PortfolioPosition,
@@ -282,7 +283,19 @@ def _report_from_payload(payload: dict):
                     if isinstance(item, dict)
                 ],
                 "portfolio_performance": lambda raw: (
-                    _dataclass_from_dict(PortfolioPerformance, raw) if isinstance(raw, dict) else None
+                    _dataclass_from_dict(
+                        PortfolioPerformance,
+                        raw,
+                        converters={
+                            "closed_trades": lambda trades: tuple(
+                                _dataclass_from_dict(PortfolioClosedTrade, item)
+                                for item in (trades or [])
+                                if isinstance(item, dict)
+                            )
+                        },
+                    )
+                    if isinstance(raw, dict)
+                    else None
                 ),
                 "portfolio_mag7_exposures": lambda raw: [
                     _dataclass_from_dict(PortfolioExposure, item)

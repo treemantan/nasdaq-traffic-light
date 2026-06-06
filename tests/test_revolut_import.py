@@ -69,6 +69,30 @@ class RevolutImportTests(unittest.TestCase):
         self.assertEqual(positions["KO"]["realized_pnl_gbp"], 8)
         self.assertEqual(positions["KO"]["dividend_income_gbp"], 2.5)
 
+    def test_implied_trading_costs_reduce_net_return_and_record_closed_trade(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            statement = Path(directory) / "statement.csv"
+            statement.write_text(
+                "Date,Ticker,Type,Quantity,Price per share,Total Amount,Currency,FX Rate\n"
+                "2026-01-01T00:00:00Z,KO,BUY - MARKET,10,GBP 5,GBP -51,GBP,1.0000\n"
+                "2026-01-01T12:00:00Z,KO,SELL - MARKET,4,GBP 7,GBP 27,GBP,1.0000\n"
+                "2026-03-01T00:00:00Z,KO,DIVIDEND,,,GBP 2.50,GBP,1.0000\n",
+                encoding="utf-8",
+            )
+            positions = _reconstruct_positions([statement])
+
+        self.assertAlmostEqual(positions["KO"]["quantity"], 6)
+        self.assertAlmostEqual(positions["KO"]["cost_gbp"], 30.6)
+        self.assertAlmostEqual(positions["KO"]["realized_pnl_gbp"], 6.6)
+        self.assertAlmostEqual(positions["KO"]["implied_trading_cost_gbp"], 2.0)
+        self.assertEqual(len(positions["KO"]["closed_trades"]), 1)
+        closed_trade = positions["KO"]["closed_trades"][0]
+        self.assertEqual(closed_trade["holding_days"], 0)
+        self.assertAlmostEqual(closed_trade["gross_proceeds_gbp"], 28.0)
+        self.assertAlmostEqual(closed_trade["net_proceeds_gbp"], 27.0)
+        self.assertAlmostEqual(closed_trade["cost_basis_gbp"], 20.4)
+        self.assertAlmostEqual(closed_trade["realized_pnl_gbp"], 6.6)
+
     def test_sale_without_visible_purchase_is_not_treated_as_profit(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             statement = Path(directory) / "statement.csv"
@@ -137,6 +161,44 @@ class RevolutImportTests(unittest.TestCase):
         self.assertEqual(rows[0]["account_realized_pnl_gbp"], "3.0000")
         self.assertEqual(rows[0]["account_dividend_income_gbp"], "1.5000")
         self.assertEqual(rows[0]["account_total_return_gbp"], "9.5000")
+
+    def test_portfolio_rows_include_implied_cost_and_closed_trade_breakdown(self) -> None:
+        quotes = {
+            "GBPUSD=X": (1.25, 1.24, "USD", []),
+            "GBPEUR=X": (1.18, 1.17, "EUR", []),
+            "KO": (10.0, 9.5, "GBP", [(date(2026, 1, 2), 10.0)]),
+        }
+        position = {
+            "quantity": 2.0,
+            "cost_gbp": 15.0,
+            "realized_pnl_gbp": -3.0,
+            "dividend_income_gbp": 1.5,
+            "unmatched_sell_proceeds_gbp": 0.0,
+            "implied_trading_cost_gbp": 2.0,
+            "closed_trades": [
+                {
+                    "symbol": "KO",
+                    "opened_at": "2026-01-01",
+                    "closed_at": "2026-01-01",
+                    "holding_days": 0,
+                    "quantity": 1.0,
+                    "cost_basis_gbp": 8.0,
+                    "gross_proceeds_gbp": 6.0,
+                    "net_proceeds_gbp": 5.0,
+                    "implied_trading_cost_gbp": 1.0,
+                    "realized_pnl_gbp": -3.0,
+                }
+            ],
+        }
+        with patch.object(MODULE, "_latest_quote", side_effect=lambda symbol: quotes[symbol]):
+            rows = MODULE._build_portfolio_rows({"KO": position})
+
+        self.assertEqual(rows[0]["implied_trading_cost_gbp"], "2.0000")
+        self.assertEqual(rows[0]["account_implied_trading_cost_gbp"], "2.0000")
+        closed_trades = MODULE.json.loads(rows[0]["closed_trades_json"])
+        self.assertEqual(closed_trades[0]["symbol"], "KO")
+        self.assertEqual(closed_trades[0]["holding_days"], 0)
+        self.assertEqual(closed_trades[0]["realized_pnl_gbp"], -3.0)
 
     def test_peak_watch_uses_current_calendar_year(self) -> None:
         peak, peak_date, drawdown = MODULE._year_peak_snapshot(

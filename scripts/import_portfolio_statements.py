@@ -5,6 +5,7 @@ import csv
 import importlib.util
 import sys
 from collections import defaultdict
+from typing import Any
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -74,23 +75,32 @@ def main() -> int:
     return 0
 
 
-def _merge_positions(*groups: dict[str, dict[str, float]]) -> dict[str, dict[str, float]]:
-    merged: dict[str, dict[str, float]] = defaultdict(_empty_position)
+def _merge_positions(*groups: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    merged: dict[str, dict[str, Any]] = defaultdict(_empty_position)
     for group in groups:
         for symbol, position in group.items():
             target = merged[symbol]
             for key, value in position.items():
-                target[key] += value
+                if isinstance(value, list):
+                    target.setdefault(key, [])
+                    target[key].extend(value)
+                elif isinstance(value, (int, float)):
+                    target[key] = float(target.get(key) or 0.0) + value
+                elif key not in target:
+                    target[key] = value
     return dict(merged)
 
 
-def _empty_position() -> dict[str, float]:
+def _empty_position() -> dict[str, Any]:
     return {
         "quantity": 0.0,
         "cost_gbp": 0.0,
         "realized_pnl_gbp": 0.0,
         "dividend_income_gbp": 0.0,
         "unmatched_sell_proceeds_gbp": 0.0,
+        "implied_trading_cost_gbp": 0.0,
+        "lots": [],
+        "closed_trades": [],
     }
 
 
@@ -108,8 +118,8 @@ def _is_ibkr_statement(path: Path) -> bool:
     return False
 
 
-def _reconstruct_ibkr_positions(paths: list[Path]) -> dict[str, dict[str, float]]:
-    positions: dict[str, dict[str, float]] = defaultdict(_empty_position)
+def _reconstruct_ibkr_positions(paths: list[Path]) -> dict[str, dict[str, Any]]:
+    positions: dict[str, dict[str, Any]] = defaultdict(_empty_position)
     rows, duplicate_count = _unique_ibkr_rows(paths)
     if duplicate_count:
         print(f"Removed {duplicate_count} duplicate IBKR execution row(s).")
@@ -208,7 +218,7 @@ def _ibkr_cash_amount(row: dict[str, str], *, buy: bool) -> float:
     return abs(gross) + commission + tax if buy else max(abs(gross) - commission - tax, 0.0)
 
 
-def _add_ibkr_dividends(paths: list[Path], positions: dict[str, dict[str, float]]) -> None:
+def _add_ibkr_dividends(paths: list[Path], positions: dict[str, dict[str, Any]]) -> None:
     seen: set[tuple[str, ...]] = set()
     for path in paths:
         for row in _iter_ibkr_rows(path):

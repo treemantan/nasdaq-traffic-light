@@ -451,12 +451,44 @@ def _render_portfolio_performance_email(monitor: ETFMonitor) -> str:
     return (
         '<div style="font-size:12px;color:#d1d5db;margin:6px 0;">'
         '<strong>收益归因（statement 导出窗口内，可识别口径）</strong><br>'
-        f'可识别总收益 {_fmt_signed_gbp(performance.total_return_gbp)} · '
+        f'扣费后可识别总收益 {_fmt_signed_gbp(performance.total_return_gbp)} · '
         f'未实现盈亏 {_fmt_signed_gbp(performance.unrealized_pnl_gbp)} · '
-        f'已实现交易盈亏 {_fmt_signed_gbp(performance.realized_pnl_gbp)} · '
+        f'已实现交易盈亏净额 {_fmt_signed_gbp(performance.realized_pnl_gbp)} · '
         f'股息收入 {_fmt_signed_gbp(performance.dividend_income_gbp)}<br>'
-        '<span style="color:#9ca3af;">Revolut 交易费用未单独纳入；若后续导入 Costs and Charges PDF，可再做成本归因。</span></div>'
+        f'<span style="color:#9ca3af;">隐含交易成本约 {_fmt_gbp(performance.implied_trading_cost_gbp)}；总收益已按实际现金流口径扣除。'
+        '差额可能包含佣金、税费、FX/执行价差与四舍五入。</span>'
+        f'{_render_closed_trade_breakdown_email(performance)}</div>'
     )
+
+
+def _render_closed_trade_breakdown_email(performance) -> str:
+    if not performance.closed_trades:
+        return ""
+    trades = sorted(
+        performance.closed_trades,
+        key=lambda trade: (trade.realized_pnl_gbp < 0, trade.closed_at),
+        reverse=True,
+    )[:6]
+    rows = "".join(
+        f'<li style="margin-top:4px;color:{_pnl_color(trade.realized_pnl_gbp)};">'
+        f'{escape(trade.symbol)} {escape(_fmt_signed_gbp(trade.realized_pnl_gbp))} · '
+        f'{escape(_fmt_holding_days_email(trade.holding_days))} · '
+        f'{escape(trade.opened_at or "N/A")} → {escape(trade.closed_at or "N/A")} · '
+        f'净卖出 {escape(_fmt_gbp(trade.net_proceeds_gbp))} / 成本 {escape(_fmt_gbp(trade.cost_basis_gbp))}'
+        '</li>'
+        for trade in trades
+    )
+    return (
+        '<div style="margin-top:6px;"><strong>已平仓交易归因（FIFO近似）</strong>'
+        '<ul style="padding-left:18px;margin:4px 0;">'
+        f'{rows}</ul></div>'
+    )
+
+
+def _fmt_holding_days_email(value: int | None) -> str:
+    if value is None:
+        return "持有期不可识别"
+    return f"持有{value}天"
 
 
 def _render_portfolio_event_calendar_email(monitor: PortfolioEventMonitor | None) -> str:
@@ -547,8 +579,8 @@ def _render_portfolio_email_card(position: PortfolioPosition) -> str:
                   <td valign="top" width="34%" style="padding:7px 8px;border-top:1px solid #263244;">
                     <span style="color:#9ca3af;">收益</span><br>
                     <strong style="color:{pnl_color};">未实现 {escape(_fmt_signed_gbp(position.unrealized_pnl_gbp))} / {escape(_fmt_pct(position.unrealized_pnl_pct))}</strong><br>
-                    <span style="color:#9ca3af;">已实现 {escape(_fmt_signed_gbp(position.realized_pnl_gbp))}</span><br>
-                    <span style="color:#9ca3af;">股息 {escape(_fmt_signed_gbp(position.dividend_income_gbp))} · 合计 {escape(_fmt_signed_gbp(position.total_return_gbp))}</span>
+                    <span style="color:#9ca3af;">已实现净额 {escape(_fmt_signed_gbp(position.realized_pnl_gbp))}</span><br>
+                    <span style="color:#9ca3af;">股息 {escape(_fmt_signed_gbp(position.dividend_income_gbp))} · 隐含成本 {escape(_fmt_gbp(position.implied_trading_cost_gbp))} · 合计 {escape(_fmt_signed_gbp(position.total_return_gbp))}</span>
                   </td>
                   <td valign="top" width="33%" style="padding:7px 0 7px 8px;border-top:1px solid #263244;">
                     <span style="color:#9ca3af;">价格与风险观察</span><br>

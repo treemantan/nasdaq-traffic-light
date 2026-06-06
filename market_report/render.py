@@ -629,10 +629,11 @@ def _render_portfolio_performance(monitor: ETFMonitor) -> str:
     if performance is None:
         return ""
     cards = (
-        ("可识别总收益", performance.total_return_gbp),
+        ("扣费后可识别总收益", performance.total_return_gbp),
         ("未实现盈亏", performance.unrealized_pnl_gbp),
-        ("已实现交易盈亏", performance.realized_pnl_gbp),
+        ("已实现交易盈亏（净额）", performance.realized_pnl_gbp),
         ("股息收入", performance.dividend_income_gbp),
+        ("隐含交易成本", -performance.implied_trading_cost_gbp),
     )
     rendered = "".join(
         f'<div class="portfolio-exposure"><span class="muted">{escape(label)}</span>'
@@ -642,8 +643,45 @@ def _render_portfolio_performance(monitor: ETFMonitor) -> str:
     return (
         '<div class="portfolio-notes"><strong>收益归因（statement 导出窗口内，可识别口径）</strong></div>'
         f'<div class="portfolio-exposure-grid">{rendered}</div>'
-        '<div class="small-note">Revolut 交易费用未单独纳入；若后续导入 Costs and Charges PDF，可再做成本归因。</div>'
+        '<div class="small-note">Revolut 隐含交易成本按 Total Amount 与 股数×成交价 的差额估算，可能包含佣金、税费、FX/执行价差与四舍五入；总收益已使用实际现金流口径，避免把费用当作利润。</div>'
+        f'{_render_closed_trade_breakdown(performance)}'
     )
+
+
+def _render_closed_trade_breakdown(performance) -> str:
+    if not performance.closed_trades:
+        return ""
+    rows = "".join(
+        f"""<tr>
+          <td>{escape(trade.symbol)}</td>
+          <td>{escape(trade.opened_at or "N/A")} → {escape(trade.closed_at or "N/A")}<br><span class="portfolio-scope">{escape(_fmt_holding_days(trade.holding_days))}</span></td>
+          <td>{escape(_fmt_quantity(trade.quantity))}</td>
+          <td>{escape(_fmt_gbp(trade.cost_basis_gbp))}</td>
+          <td>{escape(_fmt_gbp(trade.net_proceeds_gbp))}<br><span class="portfolio-scope">毛额 {escape(_fmt_gbp(trade.gross_proceeds_gbp))} · 成本 {escape(_fmt_gbp(trade.implied_trading_cost_gbp))}</span></td>
+          <td class="{_pnl_class(trade.realized_pnl_gbp)}">{escape(_fmt_signed_gbp(trade.realized_pnl_gbp))}</td>
+        </tr>"""
+        for trade in performance.closed_trades[:12]
+    )
+    hidden_note = ""
+    if len(performance.closed_trades) > 12:
+        hidden_note = f'<div class="small-note">仅展示最近12笔已平仓记录；其余 {len(performance.closed_trades) - 12} 笔仍计入账户级已实现盈亏。</div>'
+    return f"""<details class="portfolio-notes">
+      <summary>已平仓交易归因（FIFO近似）</summary>
+      <div class="small-note">用于解释 statement 窗口内已实现盈亏来源；持有期按被卖出的 FIFO 买入批次估算，0天表示同日买卖。</div>
+      <div class="portfolio-table-scroll">
+        <table class="portfolio-table">
+          <thead><tr><th>资产</th><th>买入/卖出日期</th><th>数量</th><th>成本基础</th><th>净卖出额</th><th>已实现盈亏</th></tr></thead>
+          <tbody>{rows}</tbody>
+        </table>
+      </div>
+      {hidden_note}
+    </details>"""
+
+
+def _fmt_holding_days(value: int | None) -> str:
+    if value is None:
+        return "持有期不可识别"
+    return f"持有 {value} 天"
 
 
 def _render_portfolio_event_calendar(monitor: PortfolioEventMonitor | None) -> str:
@@ -719,7 +757,7 @@ def _render_portfolio_row(position: PortfolioPosition) -> str:
       <td>{escape(_fmt_gbp(position.market_value_gbp))}</td>
       <td>{escape(_fmt_fx(position))}</td>
       <td class="{pnl_class}">未实现 {escape(_fmt_signed_gbp(position.unrealized_pnl_gbp))}<br>
-        <span class="portfolio-scope">已实现 {escape(_fmt_signed_gbp(position.realized_pnl_gbp))} · 股息 {escape(_fmt_signed_gbp(position.dividend_income_gbp))} · 合计 {escape(_fmt_signed_gbp(position.total_return_gbp))}</span></td>
+        <span class="portfolio-scope">已实现净额 {escape(_fmt_signed_gbp(position.realized_pnl_gbp))} · 股息 {escape(_fmt_signed_gbp(position.dividend_income_gbp))} · 隐含成本 {escape(_fmt_gbp(position.implied_trading_cost_gbp))} · 合计 {escape(_fmt_signed_gbp(position.total_return_gbp))}</span></td>
       <td class="{pnl_class}">{escape(_fmt_pct(position.unrealized_pnl_pct))}</td>
       <td class="{day_class}">{escape(_fmt_pct(position.day_change_pct))}</td>
       <td>{escape(_fmt_peak_watch(position))}</td>

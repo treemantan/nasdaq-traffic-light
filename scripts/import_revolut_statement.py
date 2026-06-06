@@ -80,14 +80,17 @@ def main() -> int:
     return 0
 
 
-def _reconstruct_positions(paths: list[Path]) -> dict[str, dict[str, float]]:
-    positions: dict[str, dict[str, float]] = defaultdict(
+def _reconstruct_positions(paths: list[Path]) -> dict[str, dict[str, object]]:
+    positions: dict[str, dict[str, object]] = defaultdict(
         lambda: {
             "quantity": 0.0,
             "cost_gbp": 0.0,
             "realized_pnl_gbp": 0.0,
             "dividend_income_gbp": 0.0,
             "unmatched_sell_proceeds_gbp": 0.0,
+            "implied_trading_cost_gbp": 0.0,
+            "lots": [],
+            "closed_trades": [],
         }
     )
     rows, duplicate_count = _unique_transaction_rows(paths)
@@ -100,31 +103,147 @@ def _reconstruct_positions(paths: list[Path]) -> dict[str, dict[str, float]]:
         if not ticker:
             continue
         if transaction_type == "DIVIDEND":
-            positions[ticker]["dividend_income_gbp"] += _parse_money(row.get("Total Amount")) or 0
+            positions[ticker]["dividend_income_gbp"] = float(positions[ticker]["dividend_income_gbp"]) + (
+                _parse_money(row.get("Total Amount")) or 0
+            )
             continue
         if quantity is None:
             continue
+        trade_date = _parse_statement_date(row.get("Date"))
         if transaction_type.startswith("BUY"):
             price = _parse_money(row.get("Price per share"))
-            positions[ticker]["quantity"] += quantity
-            positions[ticker]["cost_gbp"] += quantity * (price or 0)
-        elif transaction_type.startswith("SELL"):
-            current_quantity = positions[ticker]["quantity"]
-            average_cost = positions[ticker]["cost_gbp"] / current_quantity if current_quantity else 0
-            price = _parse_money(row.get("Price per share"))
-            proceeds = _parse_money(row.get("Total Amount"))
-            matched_quantity = min(quantity, max(current_quantity, 0))
-            matched_proceeds = matched_quantity * (price or 0)
-            unmatched_quantity = max(quantity - matched_quantity, 0)
-            positions[ticker]["realized_pnl_gbp"] += matched_proceeds - average_cost * matched_quantity
-            positions[ticker]["unmatched_sell_proceeds_gbp"] += (
-                unmatched_quantity * (price or 0) if price is not None else (proceeds or 0)
+            gross_cost = quantity * (price or 0)
+            cash_cost = _buy_cash_cost(row.get("Total Amount"), gross_cost)
+            implied_cost = max(cash_cost - gross_cost, 0.0)
+            positions[ticker]["quantity"] = float(positions[ticker]["quantity"]) + quantity
+            positions[ticker]["cost_gbp"] = float(positions[ticker]["cost_gbp"]) + cash_cost
+            positions[ticker]["implied_trading_cost_gbp"] = (
+                float(positions[ticker]["implied_trading_cost_gbp"]) + implied_cost
             )
-            positions[ticker]["quantity"] -= matched_quantity
-            positions[ticker]["cost_gbp"] -= average_cost * matched_quantity
+            lots = positions[ticker]["lots"]
+            assert isinstance(lots, list)
+            lots.append(
+                {
+                    "quantity": quantity,
+                    "cost_gbp": cash_cost,
+                    "opened_at": trade_date.isoformat() if trade_date else "",
+                }
+            )
+        elif transaction_type.startswith("SELL"):
+            current_quantity = float(positions[ticker]["quantity"])
+            price = _parse_money(row.get("Price per share"))
+            gross_proceeds = quantity * (price or 0)
+            net_proceeds = _sell_cash_proceeds(row.get("Total Amount"), gross_proceeds)
+            implied_cost = max(gross_proceeds - net_proceeds, 0.0)
+            matched_quantity = min(quantity, max(current_quantity, 0))
+            unmatched_quantity = max(quantity - matched_quantity, 0)
+            matched_ratio = matched_quantity / quantity if quantity else 0.0
+            unmatched_ratio = unmatched_quantity / quantity if quantity else 0.0
+            realized_pnl, consumed_cost, closed_trades = _consume_lots_fifo(
+                ticker=ticker,
+                lots=positions[ticker]["lots"],
+                quantity=matched_quantity,
+                gross_proceeds=gross_proceeds * matched_ratio,
+                net_proceeds=net_proceeds * matched_ratio,
+                implied_cost=implied_cost * matched_ratio,
+                closed_at=trade_date,
+            )
+            positions[ticker]["realized_pnl_gbp"] = float(positions[ticker]["realized_pnl_gbp"]) + realized_pnl
+            positions[ticker]["unmatched_sell_proceeds_gbp"] = (
+                float(positions[ticker]["unmatched_sell_proceeds_gbp"]) + net_proceeds * unmatched_ratio
+            )
+            positions[ticker]["implied_trading_cost_gbp"] = (
+                float(positions[ticker]["implied_trading_cost_gbp"]) + implied_cost
+            )
+            positions[ticker]["quantity"] = current_quantity - matched_quantity
+            positions[ticker]["cost_gbp"] = max(float(positions[ticker]["cost_gbp"]) - consumed_cost, 0.0)
+            closed = positions[ticker]["closed_trades"]
+            assert isinstance(closed, list)
+            closed.extend(closed_trades)
         elif transaction_type == "STOCK SPLIT":
-            positions[ticker]["quantity"] += quantity
+            positions[ticker]["quantity"] = float(positions[ticker]["quantity"]) + quantity
     return positions
+
+
+def _buy_cash_cost(total_amount: object, gross_cost: float) -> float:
+    cash_amount = _absolute_money(total_amount)
+    if cash_amount is None:
+        return gross_cost
+    return cash_amount if cash_amount >= gross_cost - 0.01 else gross_cost
+
+
+def _sell_cash_proceeds(total_amount: object, gross_proceeds: float) -> float:
+    cash_amount = _absolute_money(total_amount)
+    return gross_proceeds if cash_amount is None else cash_amount
+
+
+def _absolute_money(raw: object) -> float | None:
+    value = _parse_money(raw)
+    return abs(value) if value is not None else None
+
+
+def _consume_lots_fifo(
+    *,
+    ticker: str,
+    lots: object,
+    quantity: float,
+    gross_proceeds: float,
+    net_proceeds: float,
+    implied_cost: float,
+    closed_at: date | None,
+) -> tuple[float, float, list[dict[str, object]]]:
+    if not isinstance(lots, list) or quantity <= 0:
+        return 0.0, 0.0, []
+    remaining = quantity
+    realized_pnl = 0.0
+    consumed_cost = 0.0
+    closed_trades: list[dict[str, object]] = []
+    while remaining > 1e-10 and lots:
+        lot = lots[0]
+        lot_quantity = float(lot.get("quantity") or 0)
+        lot_cost = float(lot.get("cost_gbp") or 0)
+        if lot_quantity <= 1e-10:
+            lots.pop(0)
+            continue
+        matched = min(remaining, lot_quantity)
+        lot_ratio = matched / lot_quantity
+        sale_ratio = matched / quantity if quantity else 0.0
+        cost_basis = lot_cost * lot_ratio
+        allocated_gross = gross_proceeds * sale_ratio
+        allocated_net = net_proceeds * sale_ratio
+        allocated_implied_cost = implied_cost * sale_ratio
+        pnl = allocated_net - cost_basis
+        opened_at = _parse_statement_date(lot.get("opened_at"))
+        holding_days = (
+            max((closed_at - opened_at).days, 0)
+            if opened_at is not None and closed_at is not None
+            else None
+        )
+        closed_trades.append(
+            {
+                "symbol": ticker,
+                "opened_at": opened_at.isoformat() if opened_at else "",
+                "closed_at": closed_at.isoformat() if closed_at else "",
+                "holding_days": holding_days,
+                "quantity": round(matched, 8),
+                "cost_basis_gbp": round(cost_basis, 4),
+                "gross_proceeds_gbp": round(allocated_gross, 4),
+                "net_proceeds_gbp": round(allocated_net, 4),
+                "implied_trading_cost_gbp": round(allocated_implied_cost, 4),
+                "realized_pnl_gbp": round(pnl, 4),
+            }
+        )
+        realized_pnl += pnl
+        consumed_cost += cost_basis
+        remaining -= matched
+        remaining_quantity = lot_quantity - matched
+        remaining_cost = lot_cost - cost_basis
+        if remaining_quantity <= 1e-10:
+            lots.pop(0)
+        else:
+            lot["quantity"] = remaining_quantity
+            lot["cost_gbp"] = remaining_cost
+    return realized_pnl, consumed_cost, closed_trades
 
 
 def _unique_transaction_rows(paths: list[Path]) -> tuple[list[dict[str, str]], int]:
@@ -158,7 +277,7 @@ def _is_revolut_statement(path: Path) -> bool:
     return valid
 
 
-def _build_portfolio_rows(positions: dict[str, dict[str, float]]) -> list[dict[str, str]]:
+def _build_portfolio_rows(positions: dict[str, dict[str, object]]) -> list[dict[str, str]]:
     monitor_symbols = {spec.symbol[:-2] if spec.symbol.endswith(".L") else spec.symbol: spec.symbol for spec in DEFAULT_ETF_SPECS}
     fx_quotes = {
         "USD": _latest_quote("GBPUSD=X"),
@@ -167,7 +286,7 @@ def _build_portfolio_rows(positions: dict[str, dict[str, float]]) -> list[dict[s
     fx_as_of = datetime.now(timezone.utc).isoformat(timespec="seconds")
     valued = []
     for ticker, position in positions.items():
-        quantity = position["quantity"]
+        quantity = float(position["quantity"])
         if quantity <= 1e-8:
             continue
         monitor_symbol = monitor_symbols.get(ticker) or UK_SYMBOL_OVERRIDES.get(ticker) or _resolve_lse_etf_symbol(ticker)
@@ -182,16 +301,18 @@ def _build_portfolio_rows(positions: dict[str, dict[str, float]]) -> list[dict[s
         price_gbp = price / fx_rate if price is not None and fx_rate not in (None, 0) else None
         if fx_pair:
             price_source += f" | FX:{fx_pair}"
-        average_cost = position["cost_gbp"] / quantity if quantity else 0.0
+        cost_gbp = float(position.get("cost_gbp") or 0.0)
+        average_cost = cost_gbp / quantity if quantity else 0.0
         if price_gbp is None:
             price_gbp = average_cost or None
             price_source = "statement-average-cost fallback"
         market_value_native = quantity * price if price is not None else None
         market_value = quantity * price_gbp if price_gbp is not None else 0.0
-        unrealized = market_value - position["cost_gbp"]
-        unrealized_pct = unrealized / position["cost_gbp"] * 100 if position["cost_gbp"] else None
-        realized_pnl = position.get("realized_pnl_gbp", 0.0)
-        dividend_income = position.get("dividend_income_gbp", 0.0)
+        unrealized = market_value - cost_gbp
+        unrealized_pct = unrealized / cost_gbp * 100 if cost_gbp else None
+        realized_pnl = float(position.get("realized_pnl_gbp") or 0.0)
+        dividend_income = float(position.get("dividend_income_gbp") or 0.0)
+        implied_trading_cost = float(position.get("implied_trading_cost_gbp") or 0.0)
         total_return = unrealized + realized_pnl + dividend_income
         day_change_pct = (price / previous_price - 1) * 100 if price is not None and previous_price not in (None, 0) else None
         peak_price, peak_date, drawdown_from_peak_pct = _year_peak_snapshot(history)
@@ -225,6 +346,7 @@ def _build_portfolio_rows(positions: dict[str, dict[str, float]]) -> list[dict[s
                 "unrealized_pnl_pct": unrealized_pct,
                 "realized_pnl": realized_pnl,
                 "dividend_income": dividend_income,
+                "implied_trading_cost": implied_trading_cost,
                 "total_return": total_return,
                 "day_change_pct": day_change_pct,
                 "year_peak_price_native": peak_price,
@@ -246,11 +368,26 @@ def _build_portfolio_rows(positions: dict[str, dict[str, float]]) -> list[dict[s
             }
         )
     total = sum(item["market_value"] for item in valued)
-    account_realized_pnl = sum(item.get("realized_pnl_gbp", 0.0) for item in positions.values())
-    account_dividend_income = sum(item.get("dividend_income_gbp", 0.0) for item in positions.values())
-    unmatched_sell_proceeds = sum(item.get("unmatched_sell_proceeds_gbp", 0.0) for item in positions.values())
+    account_realized_pnl = sum(float(item.get("realized_pnl_gbp") or 0.0) for item in positions.values())
+    account_dividend_income = sum(float(item.get("dividend_income_gbp") or 0.0) for item in positions.values())
+    account_implied_trading_cost = sum(float(item.get("implied_trading_cost_gbp") or 0.0) for item in positions.values())
+    unmatched_sell_proceeds = sum(float(item.get("unmatched_sell_proceeds_gbp") or 0.0) for item in positions.values())
     account_unrealized_pnl = sum(item["unrealized_pnl"] for item in valued)
     account_total_return = account_unrealized_pnl + account_realized_pnl + account_dividend_income
+    closed_trades = [
+        trade
+        for position in positions.values()
+        for trade in (position.get("closed_trades") if isinstance(position.get("closed_trades"), list) else [])
+    ]
+    closed_trades = sorted(
+        closed_trades,
+        key=lambda item: (
+            str(item.get("closed_at") or ""),
+            str(item.get("symbol") or ""),
+        ),
+        reverse=True,
+    )
+    closed_trades_json = json.dumps(closed_trades, ensure_ascii=False, separators=(",", ":"))
     rows = []
     for item in sorted(valued, key=lambda value: value["market_value"], reverse=True):
         weight = item["market_value"] / total * 100 if total else 0.0
@@ -269,12 +406,15 @@ def _build_portfolio_rows(positions: dict[str, dict[str, float]]) -> list[dict[s
                 "unrealized_pnl_pct": _fmt_number(item["unrealized_pnl_pct"]),
                 "realized_pnl_gbp": _fmt_number(item["realized_pnl"]),
                 "dividend_income_gbp": _fmt_number(item["dividend_income"]),
+                "implied_trading_cost_gbp": _fmt_number(item["implied_trading_cost"]),
                 "total_return_gbp": _fmt_number(item["total_return"]),
                 "account_unrealized_pnl_gbp": _fmt_number(account_unrealized_pnl),
                 "account_realized_pnl_gbp": _fmt_number(account_realized_pnl),
                 "account_dividend_income_gbp": _fmt_number(account_dividend_income),
+                "account_implied_trading_cost_gbp": _fmt_number(account_implied_trading_cost),
                 "account_total_return_gbp": _fmt_number(account_total_return),
                 "unmatched_sell_proceeds_gbp": _fmt_number(unmatched_sell_proceeds),
+                "closed_trades_json": closed_trades_json,
                 "day_change_pct": _fmt_number(item["day_change_pct"]),
                 "year_peak_price_native": _fmt_number(item["year_peak_price_native"]),
                 "year_peak_date": str(item["year_peak_date"]),
@@ -521,6 +661,21 @@ def _parse_money(raw: object) -> float | None:
         return None
     parts = text.replace(",", "").split()
     return _safe_float(parts[-1])
+
+
+def _parse_statement_date(raw: object) -> date | None:
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    normalized = text.replace("Z", "+00:00")
+    try:
+        return datetime.fromisoformat(normalized).date()
+    except ValueError:
+        pass
+    try:
+        return date.fromisoformat(text[:10])
+    except ValueError:
+        return None
 
 
 def _portfolio_drawdown_snapshot(
