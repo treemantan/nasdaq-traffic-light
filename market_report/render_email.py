@@ -464,20 +464,7 @@ def _render_portfolio_performance_email(monitor: ETFMonitor) -> str:
 def _render_closed_trade_breakdown_email(performance) -> str:
     if not performance.closed_trades:
         return ""
-    trades = sorted(
-        performance.closed_trades,
-        key=lambda trade: (trade.realized_pnl_gbp < 0, trade.closed_at),
-        reverse=True,
-    )[:6]
-    rows = "".join(
-        f'<li style="margin-top:4px;color:{_pnl_color(trade.realized_pnl_gbp)};">'
-        f'{escape(trade.symbol)} {escape(_fmt_signed_gbp(trade.realized_pnl_gbp))} · '
-        f'{escape(_fmt_holding_days_email(trade.holding_days))} · '
-        f'{escape(trade.opened_at or "N/A")} → {escape(trade.closed_at or "N/A")} · '
-        f'净卖出 {escape(_fmt_gbp(trade.net_proceeds_gbp))} / 成本 {escape(_fmt_gbp(trade.cost_basis_gbp))}'
-        '</li>'
-        for trade in trades
-    )
+    rows = "".join(_render_closed_trade_group_email(symbol, trades) for symbol, trades in _closed_trade_groups_email(performance.closed_trades))
     return (
         '<div style="margin-top:6px;"><strong>已平仓交易归因（FIFO近似）</strong>'
         '<ul style="padding-left:18px;margin:4px 0;">'
@@ -485,10 +472,48 @@ def _render_closed_trade_breakdown_email(performance) -> str:
     )
 
 
+def _closed_trade_groups_email(trades) -> list[tuple[str, list]]:
+    grouped: dict[str, list] = {}
+    for trade in trades:
+        grouped.setdefault(trade.symbol, []).append(trade)
+    return sorted(
+        grouped.items(),
+        key=lambda item: (
+            max((trade.closed_at or "") for trade in item[1]),
+            abs(sum(trade.realized_pnl_gbp for trade in item[1])),
+            item[0],
+        ),
+        reverse=True,
+    )
+
+
+def _render_closed_trade_group_email(symbol: str, trades: list) -> str:
+    realized_pnl = sum(trade.realized_pnl_gbp for trade in trades)
+    quantity = sum(trade.quantity for trade in trades)
+    cost_basis = sum(trade.cost_basis_gbp for trade in trades)
+    net_proceeds = sum(trade.net_proceeds_gbp for trade in trades)
+    opened_dates = [trade.opened_at for trade in trades if trade.opened_at]
+    closed_dates = [trade.closed_at for trade in trades if trade.closed_at]
+    window = f"{min(opened_dates) if opened_dates else 'N/A'} → {max(closed_dates) if closed_dates else 'N/A'}"
+    return (
+        f'<li style="margin-top:4px;color:{_pnl_color(realized_pnl)};">'
+        f'{escape(symbol)} {escape(_fmt_signed_gbp(realized_pnl))} · {len(trades)}个买入批次 · '
+        f'{escape(window)} · 数量 {escape(_fmt_quantity(quantity))} · '
+        f'净卖出 {escape(_fmt_gbp(net_proceeds))} / 成本 {escape(_fmt_gbp(cost_basis))}'
+        '</li>'
+    )
+
+
 def _fmt_holding_days_email(value: int | None) -> str:
     if value is None:
         return "持有期不可识别"
     return f"持有{value}天"
+
+
+def _fmt_quantity(value: float | None) -> str:
+    if value is None:
+        return "N/A"
+    return f"{value:,.6f}".rstrip("0").rstrip(".")
 
 
 def _render_portfolio_event_calendar_email(monitor: PortfolioEventMonitor | None) -> str:

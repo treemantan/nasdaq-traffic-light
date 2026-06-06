@@ -651,31 +651,61 @@ def _render_portfolio_performance(monitor: ETFMonitor) -> str:
 def _render_closed_trade_breakdown(performance) -> str:
     if not performance.closed_trades:
         return ""
-    rows = "".join(
-        f"""<tr>
-          <td>{escape(trade.symbol)}</td>
-          <td>{escape(trade.opened_at or "N/A")} → {escape(trade.closed_at or "N/A")}<br><span class="portfolio-scope">{escape(_fmt_holding_days(trade.holding_days))}</span></td>
-          <td>{escape(_fmt_quantity(trade.quantity))}</td>
-          <td>{escape(_fmt_gbp(trade.cost_basis_gbp))}</td>
-          <td>{escape(_fmt_gbp(trade.net_proceeds_gbp))}<br><span class="portfolio-scope">毛额 {escape(_fmt_gbp(trade.gross_proceeds_gbp))} · 成本 {escape(_fmt_gbp(trade.implied_trading_cost_gbp))}</span></td>
-          <td class="{_pnl_class(trade.realized_pnl_gbp)}">{escape(_fmt_signed_gbp(trade.realized_pnl_gbp))}</td>
-        </tr>"""
-        for trade in performance.closed_trades[:12]
-    )
-    hidden_note = ""
-    if len(performance.closed_trades) > 12:
-        hidden_note = f'<div class="small-note">仅展示最近12笔已平仓记录；其余 {len(performance.closed_trades) - 12} 笔仍计入账户级已实现盈亏。</div>'
+    rows = "".join(_render_closed_trade_group(symbol, trades) for symbol, trades in _closed_trade_groups(performance.closed_trades))
     return f"""<details class="portfolio-notes">
       <summary>已平仓交易归因（FIFO近似）</summary>
-      <div class="small-note">用于解释 statement 窗口内已实现盈亏来源；持有期按被卖出的 FIFO 买入批次估算，0天表示同日买卖。</div>
+      <div class="small-note">用于解释 statement 窗口内已实现盈亏来源；先按 ticker 聚合，展开后显示所有 FIFO 买入批次，0天表示同日买卖。</div>
       <div class="portfolio-table-scroll">
         <table class="portfolio-table">
-          <thead><tr><th>资产</th><th>买入/卖出日期</th><th>数量</th><th>成本基础</th><th>净卖出额</th><th>已实现盈亏</th></tr></thead>
+          <thead><tr><th>资产</th><th>清算窗口</th><th>数量</th><th>成本基础</th><th>净卖出额</th><th>已实现盈亏</th></tr></thead>
           <tbody>{rows}</tbody>
         </table>
       </div>
-      {hidden_note}
     </details>"""
+
+
+def _closed_trade_groups(trades) -> list[tuple[str, list]]:
+    grouped: dict[str, list] = {}
+    for trade in trades:
+        grouped.setdefault(trade.symbol, []).append(trade)
+    return sorted(
+        grouped.items(),
+        key=lambda item: (
+            max((trade.closed_at or "") for trade in item[1]),
+            abs(sum(trade.realized_pnl_gbp for trade in item[1])),
+            item[0],
+        ),
+        reverse=True,
+    )
+
+
+def _render_closed_trade_group(symbol: str, trades: list) -> str:
+    trades = sorted(trades, key=lambda trade: (trade.closed_at or "", trade.opened_at or ""), reverse=True)
+    quantity = sum(trade.quantity for trade in trades)
+    cost_basis = sum(trade.cost_basis_gbp for trade in trades)
+    gross_proceeds = sum(trade.gross_proceeds_gbp for trade in trades)
+    net_proceeds = sum(trade.net_proceeds_gbp for trade in trades)
+    implied_cost = sum(trade.implied_trading_cost_gbp for trade in trades)
+    realized_pnl = sum(trade.realized_pnl_gbp for trade in trades)
+    opened_dates = [trade.opened_at for trade in trades if trade.opened_at]
+    closed_dates = [trade.closed_at for trade in trades if trade.closed_at]
+    window = f"{min(opened_dates) if opened_dates else 'N/A'} → {max(closed_dates) if closed_dates else 'N/A'}"
+    details = "".join(
+        f"<li>{escape(trade.opened_at or 'N/A')} → {escape(trade.closed_at or 'N/A')} · "
+        f"{escape(_fmt_holding_days(trade.holding_days))} · "
+        f"数量 {escape(_fmt_quantity(trade.quantity))} · 成本 {escape(_fmt_gbp(trade.cost_basis_gbp))} · "
+        f"净卖出 {escape(_fmt_gbp(trade.net_proceeds_gbp))} · "
+        f"<span class=\"{_pnl_class(trade.realized_pnl_gbp)}\">{escape(_fmt_signed_gbp(trade.realized_pnl_gbp))}</span></li>"
+        for trade in trades
+    )
+    return f"""<tr>
+      <td>{escape(symbol)}<br><span class="portfolio-scope">{len(trades)}个买入批次</span></td>
+      <td>{escape(window)}<br><details><summary class="portfolio-scope">查看批次明细</summary><ul class="portfolio-scope">{details}</ul></details></td>
+      <td>{escape(_fmt_quantity(quantity))}</td>
+      <td>{escape(_fmt_gbp(cost_basis))}</td>
+      <td>{escape(_fmt_gbp(net_proceeds))}<br><span class="portfolio-scope">毛额 {escape(_fmt_gbp(gross_proceeds))} · 成本 {escape(_fmt_gbp(implied_cost))}</span></td>
+      <td class="{_pnl_class(realized_pnl)}">{escape(_fmt_signed_gbp(realized_pnl))}</td>
+    </tr>"""
 
 
 def _fmt_holding_days(value: int | None) -> str:
