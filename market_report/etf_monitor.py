@@ -91,7 +91,11 @@ class PortfolioPosition:
     drawdown_regime: str = ""
     implied_trading_cost_gbp: float | None = None
     account_implied_trading_cost_gbp: float | None = None
+    estimated_exit_cost_rate_pct: float | None = None
+    breakeven_price_gbp: float | None = None
+    breakeven_price_native: float | None = None
     _closed_trades_json: str = ""
+    _transaction_costs_json: str = ""
 
 
 @dataclass(frozen=True)
@@ -106,6 +110,19 @@ class PortfolioClosedTrade:
     net_proceeds_gbp: float
     implied_trading_cost_gbp: float
     realized_pnl_gbp: float
+
+
+@dataclass(frozen=True)
+class PortfolioTransactionCost:
+    symbol: str
+    date: str
+    side: str
+    quantity: float
+    price_gbp: float
+    gross_value_gbp: float
+    cash_amount_gbp: float
+    implied_trading_cost_gbp: float
+    cost_rate_pct: float
 
 
 @dataclass(frozen=True)
@@ -126,6 +143,7 @@ class PortfolioPerformance:
     total_return_gbp: float = 0
     unmatched_sell_proceeds_gbp: float = 0
     closed_trades: tuple[PortfolioClosedTrade, ...] = ()
+    transaction_costs: tuple[PortfolioTransactionCost, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -2355,7 +2373,11 @@ def _load_portfolio_summary(
             drawdown_regime=str(row.get("drawdown_regime") or ""),
             implied_trading_cost_gbp=_safe_float(row.get("implied_trading_cost_gbp")),
             account_implied_trading_cost_gbp=_safe_float(row.get("account_implied_trading_cost_gbp")),
+            estimated_exit_cost_rate_pct=_safe_float(row.get("estimated_exit_cost_rate_pct")),
+            breakeven_price_gbp=_safe_float(row.get("breakeven_price_gbp")),
+            breakeven_price_native=_safe_float(row.get("breakeven_price_native")),
             _closed_trades_json=str(row.get("closed_trades_json") or ""),
+            _transaction_costs_json=str(row.get("transaction_costs_json") or ""),
         )
         for row in rows
         if str(row.get("symbol") or "").strip()
@@ -2512,6 +2534,7 @@ def _portfolio_performance_summary(positions: list[PortfolioPosition]) -> Portfo
         return None
     first = positions[0]
     closed_trades = _parse_closed_trades_from_position_row(first)
+    transaction_costs = _parse_transaction_costs_from_position_row(first)
     return PortfolioPerformance(
         unrealized_pnl_gbp=first.account_unrealized_pnl_gbp
         or sum(item.unrealized_pnl_gbp or 0 for item in positions),
@@ -2529,6 +2552,7 @@ def _portfolio_performance_summary(positions: list[PortfolioPosition]) -> Portfo
         else sum(item.total_return_gbp or 0 for item in positions),
         unmatched_sell_proceeds_gbp=first.unmatched_sell_proceeds_gbp or 0,
         closed_trades=closed_trades,
+        transaction_costs=transaction_costs,
     )
 
 
@@ -2564,6 +2588,39 @@ def _parse_closed_trades_from_position_row(position: PortfolioPosition) -> tuple
             )
         )
     return tuple(trades)
+
+
+def _parse_transaction_costs_from_position_row(position: PortfolioPosition) -> tuple[PortfolioTransactionCost, ...]:
+    raw = getattr(position, "_transaction_costs_json", "")
+    if not raw:
+        return ()
+    try:
+        payload = json.loads(raw)
+    except (TypeError, ValueError):
+        return ()
+    if not isinstance(payload, list):
+        return ()
+    events = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        symbol = str(item.get("symbol") or "").strip().upper()
+        if not symbol:
+            continue
+        events.append(
+            PortfolioTransactionCost(
+                symbol=symbol,
+                date=str(item.get("date") or ""),
+                side=str(item.get("side") or "").upper(),
+                quantity=_safe_float(item.get("quantity")) or 0.0,
+                price_gbp=_safe_float(item.get("price_gbp")) or 0.0,
+                gross_value_gbp=_safe_float(item.get("gross_value_gbp")) or 0.0,
+                cash_amount_gbp=_safe_float(item.get("cash_amount_gbp")) or 0.0,
+                implied_trading_cost_gbp=_safe_float(item.get("implied_trading_cost_gbp")) or 0.0,
+                cost_rate_pct=_safe_float(item.get("cost_rate_pct")) or 0.0,
+            )
+        )
+    return tuple(events)
 
 
 def _safe_int(value: object) -> int | None:

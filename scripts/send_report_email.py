@@ -239,6 +239,7 @@ def _report_from_payload(payload: dict):
         PortfolioExposure,
         PortfolioPerformance,
         PortfolioPosition,
+        PortfolioTransactionCost,
     )
     from market_report.scoring import (
         IronCondorAssessment,
@@ -291,7 +292,12 @@ def _report_from_payload(payload: dict):
                                 _dataclass_from_dict(PortfolioClosedTrade, item)
                                 for item in (trades or [])
                                 if isinstance(item, dict)
-                            )
+                            ),
+                            "transaction_costs": lambda events: tuple(
+                                _dataclass_from_dict(PortfolioTransactionCost, item)
+                                for item in (events or [])
+                                if isinstance(item, dict)
+                            ),
                         },
                     )
                     if isinstance(raw, dict)

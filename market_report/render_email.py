@@ -457,7 +457,8 @@ def _render_portfolio_performance_email(monitor: ETFMonitor) -> str:
         f'股息收入 {_fmt_signed_gbp(performance.dividend_income_gbp)}<br>'
         f'<span style="color:#9ca3af;">隐含交易成本约 {_fmt_gbp(performance.implied_trading_cost_gbp)}；总收益已按实际现金流口径扣除。'
         '差额可能包含佣金、税费、FX/执行价差与四舍五入。</span>'
-        f'{_render_closed_trade_breakdown_email(performance)}</div>'
+        f'{_render_closed_trade_breakdown_email(performance)}'
+        f'{_render_transaction_cost_breakdown_email(performance)}</div>'
     )
 
 
@@ -508,6 +509,57 @@ def _fmt_holding_days_email(value: int | None) -> str:
     if value is None:
         return "持有期不可识别"
     return f"持有{value}天"
+
+
+def _render_transaction_cost_breakdown_email(performance) -> str:
+    if not performance.transaction_costs:
+        return ""
+    groups = _transaction_cost_groups_email(performance.transaction_costs)
+    rows = "".join(_render_transaction_cost_group_email(symbol, events) for symbol, events in groups[:8])
+    allowance = _trade_allowance_summary_email(performance.transaction_costs)
+    return (
+        '<div style="margin-top:6px;"><strong>隐含交易成本归因（估算）</strong>'
+        f'{allowance}'
+        '<ul style="padding-left:18px;margin:4px 0;">'
+        f'{rows}</ul></div>'
+    )
+
+
+def _transaction_cost_groups_email(events) -> list[tuple[str, list]]:
+    grouped: dict[str, list] = {}
+    for event in events:
+        grouped.setdefault(event.symbol, []).append(event)
+    return sorted(
+        grouped.items(),
+        key=lambda item: (sum(event.implied_trading_cost_gbp for event in item[1]), item[0]),
+        reverse=True,
+    )
+
+
+def _render_transaction_cost_group_email(symbol: str, events: list) -> str:
+    buy_cost = sum(event.implied_trading_cost_gbp for event in events if event.side == "BUY")
+    sell_cost = sum(event.implied_trading_cost_gbp for event in events if event.side == "SELL")
+    sell_gross = sum(event.gross_value_gbp for event in events if event.side == "SELL")
+    sell_rate = sell_cost / sell_gross * 100 if sell_gross else None
+    return (
+        f'<li style="margin-top:4px;color:#d1d5db;">{escape(symbol)}：{len(events)}笔，'
+        f'买入成本 {escape(_fmt_gbp(buy_cost))}，卖出成本 {escape(_fmt_gbp(sell_cost))}，'
+        f'历史卖出成本率 {escape(_fmt_pct(sell_rate))}</li>'
+    )
+
+
+def _trade_allowance_summary_email(events) -> str:
+    monthly: dict[str, int] = {}
+    for event in events:
+        if event.date:
+            monthly[event.date[:7]] = monthly.get(event.date[:7], 0) + 1
+    if not monthly:
+        return ""
+    latest_month, count = sorted(monthly.items(), reverse=True)[0]
+    return (
+        f'<div style="color:#9ca3af;margin-top:3px;">{escape(latest_month)} 共 {count} 笔交易；'
+        f'Premium 5次额度后超出 {max(count - 5, 0)} 笔；10次额度后超出 {max(count - 10, 0)} 笔。</div>'
+    )
 
 
 def _fmt_quantity(value: float | None) -> str:
@@ -605,7 +657,8 @@ def _render_portfolio_email_card(position: PortfolioPosition) -> str:
                     <span style="color:#9ca3af;">收益</span><br>
                     <strong style="color:{pnl_color};">未实现 {escape(_fmt_signed_gbp(position.unrealized_pnl_gbp))} / {escape(_fmt_pct(position.unrealized_pnl_pct))}</strong><br>
                     <span style="color:#9ca3af;">已实现净额 {escape(_fmt_signed_gbp(position.realized_pnl_gbp))}</span><br>
-                    <span style="color:#9ca3af;">股息 {escape(_fmt_signed_gbp(position.dividend_income_gbp))} · 隐含成本 {escape(_fmt_gbp(position.implied_trading_cost_gbp))} · 合计 {escape(_fmt_signed_gbp(position.total_return_gbp))}</span>
+                    <span style="color:#9ca3af;">股息 {escape(_fmt_signed_gbp(position.dividend_income_gbp))} · 隐含成本 {escape(_fmt_gbp(position.implied_trading_cost_gbp))} · 合计 {escape(_fmt_signed_gbp(position.total_return_gbp))}</span><br>
+                    <span style="color:#9ca3af;">卖出不亏平衡价 {escape(_fmt_breakeven(position))}</span>
                   </td>
                   <td valign="top" width="33%" style="padding:7px 0 7px 8px;border-top:1px solid #263244;">
                     <span style="color:#9ca3af;">价格与风险观察</span><br>
@@ -966,6 +1019,19 @@ def _fmt_fx(position) -> str:
     if position.fx_rate is None:
         return f"{position.fx_pair} N/A"
     return f"{position.fx_pair} {position.fx_rate:.4f}"
+
+
+def _fmt_breakeven(position: PortfolioPosition) -> str:
+    if position.breakeven_price_gbp is None:
+        return "N/A"
+    rate = (
+        f"；估算卖出成本率 {position.estimated_exit_cost_rate_pct:.4f}%"
+        if position.estimated_exit_cost_rate_pct is not None
+        else ""
+    )
+    if position.native_currency and position.native_currency != "GBP":
+        return f"{_fmt_native(position.breakeven_price_native, position.native_currency)} / {_fmt_gbp(position.breakeven_price_gbp)}{rate}"
+    return f"{_fmt_gbp(position.breakeven_price_gbp)}{rate}"
 
 
 def _fmt_peak_watch(position: PortfolioPosition) -> str:

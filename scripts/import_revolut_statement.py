@@ -89,6 +89,7 @@ def _reconstruct_positions(paths: list[Path]) -> dict[str, dict[str, object]]:
             "dividend_income_gbp": 0.0,
             "unmatched_sell_proceeds_gbp": 0.0,
             "implied_trading_cost_gbp": 0.0,
+            "transaction_costs": [],
             "lots": [],
             "closed_trades": [],
         }
@@ -115,6 +116,17 @@ def _reconstruct_positions(paths: list[Path]) -> dict[str, dict[str, object]]:
             gross_cost = quantity * (price or 0)
             cash_cost = _buy_cash_cost(row.get("Total Amount"), gross_cost)
             implied_cost = max(cash_cost - gross_cost, 0.0)
+            _append_transaction_cost(
+                positions[ticker],
+                symbol=ticker,
+                trade_date=trade_date,
+                side="BUY",
+                quantity=quantity,
+                price_gbp=price,
+                gross_value_gbp=gross_cost,
+                cash_amount_gbp=cash_cost,
+                implied_cost_gbp=implied_cost,
+            )
             positions[ticker]["quantity"] = float(positions[ticker]["quantity"]) + quantity
             positions[ticker]["cost_gbp"] = float(positions[ticker]["cost_gbp"]) + cash_cost
             positions[ticker]["implied_trading_cost_gbp"] = (
@@ -135,6 +147,17 @@ def _reconstruct_positions(paths: list[Path]) -> dict[str, dict[str, object]]:
             gross_proceeds = quantity * (price or 0)
             net_proceeds = _sell_cash_proceeds(row.get("Total Amount"), gross_proceeds)
             implied_cost = max(gross_proceeds - net_proceeds, 0.0)
+            _append_transaction_cost(
+                positions[ticker],
+                symbol=ticker,
+                trade_date=trade_date,
+                side="SELL",
+                quantity=quantity,
+                price_gbp=price,
+                gross_value_gbp=gross_proceeds,
+                cash_amount_gbp=net_proceeds,
+                implied_cost_gbp=implied_cost,
+            )
             matched_quantity = min(quantity, max(current_quantity, 0))
             unmatched_quantity = max(quantity - matched_quantity, 0)
             matched_ratio = matched_quantity / quantity if quantity else 0.0
@@ -175,6 +198,37 @@ def _buy_cash_cost(total_amount: object, gross_cost: float) -> float:
 def _sell_cash_proceeds(total_amount: object, gross_proceeds: float) -> float:
     cash_amount = _absolute_money(total_amount)
     return gross_proceeds if cash_amount is None else cash_amount
+
+
+def _append_transaction_cost(
+    position: dict[str, object],
+    *,
+    symbol: str,
+    trade_date: date | None,
+    side: str,
+    quantity: float,
+    price_gbp: float | None,
+    gross_value_gbp: float,
+    cash_amount_gbp: float,
+    implied_cost_gbp: float,
+) -> None:
+    events = position.setdefault("transaction_costs", [])
+    if not isinstance(events, list):
+        return
+    cost_rate_pct = implied_cost_gbp / gross_value_gbp * 100 if gross_value_gbp > 0 else 0.0
+    events.append(
+        {
+            "symbol": symbol,
+            "date": trade_date.isoformat() if trade_date else "",
+            "side": side,
+            "quantity": round(quantity, 8),
+            "price_gbp": round(price_gbp or 0.0, 4),
+            "gross_value_gbp": round(gross_value_gbp, 4),
+            "cash_amount_gbp": round(cash_amount_gbp, 4),
+            "implied_trading_cost_gbp": round(implied_cost_gbp, 4),
+            "cost_rate_pct": round(cost_rate_pct, 10),
+        }
+    )
 
 
 def _absolute_money(raw: object) -> float | None:
@@ -388,9 +442,43 @@ def _build_portfolio_rows(positions: dict[str, dict[str, object]]) -> list[dict[
         reverse=True,
     )
     closed_trades_json = json.dumps(closed_trades, ensure_ascii=False, separators=(",", ":"))
+    transaction_costs = [
+        event
+        for position in positions.values()
+        for event in (position.get("transaction_costs") if isinstance(position.get("transaction_costs"), list) else [])
+    ]
+    transaction_costs = sorted(
+        transaction_costs,
+        key=lambda item: (
+            str(item.get("date") or ""),
+            str(item.get("symbol") or ""),
+            str(item.get("side") or ""),
+        ),
+        reverse=True,
+    )
+    transaction_costs_json = json.dumps(transaction_costs, ensure_ascii=False, separators=(",", ":"))
+    account_sell_cost_rate_pct = _weighted_sell_cost_rate(transaction_costs)
     rows = []
     for item in sorted(valued, key=lambda value: value["market_value"], reverse=True):
         weight = item["market_value"] / total * 100 if total else 0.0
+        symbol_transaction_costs = [
+            event
+            for event in transaction_costs
+            if _base_symbol(event.get("symbol")) == _base_symbol(item["symbol"])
+        ]
+        exit_cost_rate_pct = _weighted_sell_cost_rate(symbol_transaction_costs)
+        if exit_cost_rate_pct is None:
+            exit_cost_rate_pct = account_sell_cost_rate_pct or 0.0
+        breakeven_price_gbp = _breakeven_price(
+            cost_gbp=float(item["average_cost"]) * float(item["quantity"]),
+            quantity=float(item["quantity"]),
+            exit_cost_rate_pct=exit_cost_rate_pct,
+        )
+        breakeven_price_native = (
+            breakeven_price_gbp * item["fx_rate"]
+            if breakeven_price_gbp is not None and item["fx_rate"] not in (None, 0)
+            else breakeven_price_gbp
+        )
         rows.append(
             {
                 "symbol": str(item["symbol"]),
@@ -415,6 +503,10 @@ def _build_portfolio_rows(positions: dict[str, dict[str, object]]) -> list[dict[
                 "account_total_return_gbp": _fmt_number(account_total_return),
                 "unmatched_sell_proceeds_gbp": _fmt_number(unmatched_sell_proceeds),
                 "closed_trades_json": closed_trades_json,
+                "transaction_costs_json": transaction_costs_json,
+                "estimated_exit_cost_rate_pct": _fmt_number(exit_cost_rate_pct),
+                "breakeven_price_gbp": _fmt_number(breakeven_price_gbp),
+                "breakeven_price_native": _fmt_number(breakeven_price_native),
                 "day_change_pct": _fmt_number(item["day_change_pct"]),
                 "year_peak_price_native": _fmt_number(item["year_peak_price_native"]),
                 "year_peak_date": str(item["year_peak_date"]),
@@ -436,6 +528,33 @@ def _build_portfolio_rows(positions: dict[str, dict[str, object]]) -> list[dict[
         )
     _save_portfolio_quote_cache()
     return rows
+
+
+def _base_symbol(symbol: object) -> str:
+    normalized = str(symbol or "").strip().upper()
+    return normalized[:-2] if normalized.endswith(".L") else normalized
+
+
+def _weighted_sell_cost_rate(events: list[dict[str, object]]) -> float | None:
+    sell_events = [
+        event
+        for event in events
+        if str(event.get("side") or "").upper() == "SELL" and _safe_float(event.get("gross_value_gbp"))
+    ]
+    gross_total = sum(_safe_float(event.get("gross_value_gbp")) or 0.0 for event in sell_events)
+    if gross_total <= 0:
+        return None
+    cost_total = sum(_safe_float(event.get("implied_trading_cost_gbp")) or 0.0 for event in sell_events)
+    return cost_total / gross_total * 100
+
+
+def _breakeven_price(*, cost_gbp: float, quantity: float, exit_cost_rate_pct: float | None) -> float | None:
+    if quantity <= 0:
+        return None
+    exit_rate = max((exit_cost_rate_pct or 0.0) / 100, 0.0)
+    if exit_rate >= 0.95:
+        return None
+    return cost_gbp / quantity / (1 - exit_rate)
 
 
 def _latest_quote(symbol: str) -> tuple[float | None, float | None, str, list[tuple[date, float]]]:

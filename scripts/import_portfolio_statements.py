@@ -99,6 +99,7 @@ def _empty_position() -> dict[str, Any]:
         "dividend_income_gbp": 0.0,
         "unmatched_sell_proceeds_gbp": 0.0,
         "implied_trading_cost_gbp": 0.0,
+        "transaction_costs": [],
         "lots": [],
         "closed_trades": [],
     }

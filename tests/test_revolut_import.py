@@ -92,6 +92,14 @@ class RevolutImportTests(unittest.TestCase):
         self.assertAlmostEqual(closed_trade["net_proceeds_gbp"], 27.0)
         self.assertAlmostEqual(closed_trade["cost_basis_gbp"], 20.4)
         self.assertAlmostEqual(closed_trade["realized_pnl_gbp"], 6.6)
+        cost_events = positions["KO"]["transaction_costs"]
+        self.assertEqual(len(cost_events), 2)
+        self.assertEqual(cost_events[0]["side"], "BUY")
+        self.assertAlmostEqual(cost_events[0]["implied_trading_cost_gbp"], 1.0)
+        self.assertAlmostEqual(cost_events[0]["cost_rate_pct"], 2.0)
+        self.assertEqual(cost_events[1]["side"], "SELL")
+        self.assertAlmostEqual(cost_events[1]["implied_trading_cost_gbp"], 1.0)
+        self.assertAlmostEqual(cost_events[1]["cost_rate_pct"], 3.5714285714)
 
     def test_sale_without_visible_purchase_is_not_treated_as_profit(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -175,6 +183,30 @@ class RevolutImportTests(unittest.TestCase):
             "dividend_income_gbp": 1.5,
             "unmatched_sell_proceeds_gbp": 0.0,
             "implied_trading_cost_gbp": 2.0,
+            "transaction_costs": [
+                {
+                    "symbol": "KO",
+                    "date": "2026-01-01",
+                    "side": "BUY",
+                    "quantity": 2.0,
+                    "price_gbp": 7.0,
+                    "gross_value_gbp": 14.0,
+                    "cash_amount_gbp": 15.0,
+                    "implied_trading_cost_gbp": 1.0,
+                    "cost_rate_pct": 7.142857,
+                },
+                {
+                    "symbol": "KO",
+                    "date": "2026-01-02",
+                    "side": "SELL",
+                    "quantity": 1.0,
+                    "price_gbp": 6.0,
+                    "gross_value_gbp": 6.0,
+                    "cash_amount_gbp": 5.0,
+                    "implied_trading_cost_gbp": 1.0,
+                    "cost_rate_pct": 16.666667,
+                },
+            ],
             "closed_trades": [
                 {
                     "symbol": "KO",
@@ -195,6 +227,11 @@ class RevolutImportTests(unittest.TestCase):
 
         self.assertEqual(rows[0]["implied_trading_cost_gbp"], "2.0000")
         self.assertEqual(rows[0]["account_implied_trading_cost_gbp"], "2.0000")
+        self.assertEqual(rows[0]["estimated_exit_cost_rate_pct"], "16.6667")
+        self.assertEqual(rows[0]["breakeven_price_gbp"], "9.0000")
+        costs = MODULE.json.loads(rows[0]["transaction_costs_json"])
+        self.assertEqual(costs[0]["symbol"], "KO")
+        self.assertEqual(len(costs), 2)
         closed_trades = MODULE.json.loads(rows[0]["closed_trades_json"])
         self.assertEqual(closed_trades[0]["symbol"], "KO")
         self.assertEqual(closed_trades[0]["holding_days"], 0)

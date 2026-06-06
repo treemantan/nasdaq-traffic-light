@@ -645,6 +645,7 @@ def _render_portfolio_performance(monitor: ETFMonitor) -> str:
         f'<div class="portfolio-exposure-grid">{rendered}</div>'
         '<div class="small-note">Revolut 隐含交易成本按 Total Amount 与 股数×成交价 的差额估算，可能包含佣金、税费、FX/执行价差与四舍五入；总收益已使用实际现金流口径，避免把费用当作利润。</div>'
         f'{_render_closed_trade_breakdown(performance)}'
+        f'{_render_transaction_cost_breakdown(performance)}'
     )
 
 
@@ -712,6 +713,77 @@ def _fmt_holding_days(value: int | None) -> str:
     if value is None:
         return "持有期不可识别"
     return f"持有 {value} 天"
+
+
+def _render_transaction_cost_breakdown(performance) -> str:
+    if not performance.transaction_costs:
+        return ""
+    rows = "".join(
+        _render_transaction_cost_group(symbol, events)
+        for symbol, events in _transaction_cost_groups(performance.transaction_costs)
+    )
+    return f"""<details class="portfolio-notes">
+      <summary>隐含交易成本归因（估算）</summary>
+      <div class="small-note">按 statement 中 Total Amount 与成交名义金额的差额估算；差额可能包含佣金、税费、FX/执行价差与四舍五入。Premium 账户每月 5 次免费交易若覆盖当月交易，实际隐含成本可能接近 0。</div>
+      {_render_trade_allowance_summary(performance.transaction_costs)}
+      <div class="portfolio-table-scroll">
+        <table class="portfolio-table">
+          <thead><tr><th>资产</th><th>交易次数</th><th>买入成本</th><th>卖出成本</th><th>历史卖出成本率</th><th>逐笔明细</th></tr></thead>
+          <tbody>{rows}</tbody>
+        </table>
+      </div>
+    </details>"""
+
+
+def _transaction_cost_groups(events) -> list[tuple[str, list]]:
+    grouped: dict[str, list] = {}
+    for event in events:
+        grouped.setdefault(event.symbol, []).append(event)
+    return sorted(
+        grouped.items(),
+        key=lambda item: (sum(event.implied_trading_cost_gbp for event in item[1]), item[0]),
+        reverse=True,
+    )
+
+
+def _render_transaction_cost_group(symbol: str, events: list) -> str:
+    events = sorted(events, key=lambda event: (event.date or "", event.side), reverse=True)
+    buy_cost = sum(event.implied_trading_cost_gbp for event in events if event.side == "BUY")
+    sell_cost = sum(event.implied_trading_cost_gbp for event in events if event.side == "SELL")
+    sell_gross = sum(event.gross_value_gbp for event in events if event.side == "SELL")
+    sell_rate = sell_cost / sell_gross * 100 if sell_gross else None
+    details = "".join(
+        f"<li>{escape(event.date or 'N/A')} · {escape(event.side)} · "
+        f"数量 {escape(_fmt_quantity(event.quantity))} · 名义 {escape(_fmt_gbp(event.gross_value_gbp))} · "
+        f"现金 {escape(_fmt_gbp(event.cash_amount_gbp))} · 成本 {escape(_fmt_gbp(event.implied_trading_cost_gbp))} · "
+        f"费率 {event.cost_rate_pct:.4f}%</li>"
+        for event in events
+    )
+    return f"""<tr>
+      <td><strong>{escape(symbol)}</strong></td>
+      <td>{len(events)}</td>
+      <td>{escape(_fmt_gbp(buy_cost))}</td>
+      <td>{escape(_fmt_gbp(sell_cost))}</td>
+      <td>{escape(_fmt_pct(sell_rate))}</td>
+      <td><details><summary class="portfolio-scope">查看逐笔成本</summary><ul class="portfolio-scope">{details}</ul></details></td>
+    </tr>"""
+
+
+def _render_trade_allowance_summary(events) -> str:
+    monthly: dict[str, int] = {}
+    for event in events:
+        if event.date:
+            monthly[event.date[:7]] = monthly.get(event.date[:7], 0) + 1
+    if not monthly:
+        return ""
+    rows = "".join(
+        f"<li>{escape(month)}：{count}笔；Premium 5次额度后超出 {max(count - 5, 0)} 笔；10次额度后超出 {max(count - 10, 0)} 笔。</li>"
+        for month, count in sorted(monthly.items(), reverse=True)[:12]
+    )
+    return (
+        '<div class="small-note"><strong>账户额度观察：</strong>用于判断 Premium 每月 5 次免费交易是否足够，'
+        f'以及更高账户每月 10 次免费交易是否可能有节省价值。<ul>{rows}</ul></div>'
+    )
 
 
 def _render_portfolio_event_calendar(monitor: PortfolioEventMonitor | None) -> str:
@@ -787,7 +859,8 @@ def _render_portfolio_row(position: PortfolioPosition) -> str:
       <td>{escape(_fmt_gbp(position.market_value_gbp))}</td>
       <td>{escape(_fmt_fx(position))}</td>
       <td class="{pnl_class}">未实现 {escape(_fmt_signed_gbp(position.unrealized_pnl_gbp))}<br>
-        <span class="portfolio-scope">已实现净额 {escape(_fmt_signed_gbp(position.realized_pnl_gbp))} · 股息 {escape(_fmt_signed_gbp(position.dividend_income_gbp))} · 隐含成本 {escape(_fmt_gbp(position.implied_trading_cost_gbp))} · 合计 {escape(_fmt_signed_gbp(position.total_return_gbp))}</span></td>
+        <span class="portfolio-scope">已实现净额 {escape(_fmt_signed_gbp(position.realized_pnl_gbp))} · 股息 {escape(_fmt_signed_gbp(position.dividend_income_gbp))} · 隐含成本 {escape(_fmt_gbp(position.implied_trading_cost_gbp))} · 合计 {escape(_fmt_signed_gbp(position.total_return_gbp))}</span><br>
+        <span class="portfolio-scope">卖出不亏平衡价 {escape(_fmt_breakeven(position))}</span></td>
       <td class="{pnl_class}">{escape(_fmt_pct(position.unrealized_pnl_pct))}</td>
       <td class="{day_class}">{escape(_fmt_pct(position.day_change_pct))}</td>
       <td>{escape(_fmt_peak_watch(position))}</td>
@@ -1427,6 +1500,20 @@ def _fmt_fx(position) -> str:
     if position.fx_rate is None:
         return f"{position.fx_pair} N/A"
     return f"{position.fx_pair} {position.fx_rate:.4f}"
+
+
+def _fmt_breakeven(position: PortfolioPosition) -> str:
+    if position.breakeven_price_gbp is None:
+        return "N/A"
+    rate = (
+        f"；估算卖出成本率 {position.estimated_exit_cost_rate_pct:.4f}%"
+        if position.estimated_exit_cost_rate_pct is not None
+        else ""
+    )
+    if position.native_currency and position.native_currency != "GBP":
+        native = _fmt_native(position.breakeven_price_native, position.native_currency)
+        return f"{native} / {_fmt_gbp(position.breakeven_price_gbp)}{rate}"
+    return f"{_fmt_gbp(position.breakeven_price_gbp)}{rate}"
 
 
 def _fmt_peak_watch(position: PortfolioPosition) -> str:
