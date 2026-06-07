@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "download_ibkr_flex.py"
@@ -45,6 +47,63 @@ class DownloadIbkrFlexTests(unittest.TestCase):
 </FlexStatementResponse>"""
 
         self.assertTrue(MODULE._looks_like_pending_response(xml))
+
+    def test_rate_limit_error_is_detected(self) -> None:
+        self.assertTrue(MODULE._looks_like_rate_limit_error("Too many requests have been made from this token."))
+        self.assertTrue(MODULE._looks_like_rate_limit_error("IBKR rate limit exceeded."))
+        self.assertFalse(MODULE._looks_like_rate_limit_error("IBKR Flex request did not return a ReferenceCode."))
+
+    def test_main_continues_when_one_query_is_rate_limited_after_success(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+
+            def fake_request(_token: str, query_id: str) -> str:
+                if query_id == "activity-id":
+                    return "activity-reference"
+                raise RuntimeError("IBKR Flex request failed: Fail Too many requests have been made from this token.")
+
+            argv = [
+                "download_ibkr_flex.py",
+                "--token",
+                "secret-token",
+                "--activity-query-id",
+                "activity-id",
+                "--trade-confirm-query-id",
+                "trade-confirm-id",
+                "--output-dir",
+                str(output_dir),
+                "--query-delay-seconds",
+                "0",
+                "--rate-limit-retries",
+                "0",
+            ]
+
+            with patch.object(sys, "argv", argv), patch.object(MODULE, "request_flex_statement", fake_request), patch.object(
+                MODULE, "download_flex_statement", return_value=b"<FlexQueryResponse />"
+            ):
+                self.assertEqual(MODULE.main(), 0)
+
+            self.assertTrue((output_dir / "ibkr-activity-activity-id.xml").exists())
+            self.assertFalse((output_dir / "ibkr-trade-confirm-trade-confirm-id.xml").exists())
+
+    def test_main_fails_when_all_queries_fail(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            argv = [
+                "download_ibkr_flex.py",
+                "--token",
+                "secret-token",
+                "--activity-query-id",
+                "activity-id",
+                "--output-dir",
+                tmpdir,
+                "--rate-limit-retries",
+                "0",
+            ]
+
+            with patch.object(sys, "argv", argv), patch.object(
+                MODULE, "request_flex_statement", side_effect=RuntimeError("IBKR Flex request failed")
+            ), self.assertRaises(SystemExit):
+                MODULE.main()
 
 
 if __name__ == "__main__":

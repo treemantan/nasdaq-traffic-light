@@ -209,7 +209,7 @@ jobs:
             echo "IBKR Flex Web Service is not configured; skipping IBKR download."
             exit 0
           fi
-          python scripts/download_ibkr_flex.py --output-dir .cloud-statements
+          python scripts/download_ibkr_flex.py --output-dir .cloud-statements --query-delay-seconds 30
 
       - name: Import downloaded portfolio statements
         if: steps.email-mode.outputs.should_run == 'true'

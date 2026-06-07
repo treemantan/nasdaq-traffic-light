@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 import time
 from pathlib import Path
-from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -22,6 +22,9 @@ def main() -> int:
     parser.add_argument("--activity-query-id", default=os.getenv("IBKR_ACTIVITY_QUERY_ID", "").strip())
     parser.add_argument("--trade-confirm-query-id", default=os.getenv("IBKR_TRADE_CONFIRM_QUERY_ID", "").strip())
     parser.add_argument("--max-wait-seconds", type=int, default=60)
+    parser.add_argument("--query-delay-seconds", type=int, default=30)
+    parser.add_argument("--rate-limit-retries", type=int, default=1)
+    parser.add_argument("--rate-limit-wait-seconds", type=int, default=60)
     args = parser.parse_args()
 
     if not args.token:
@@ -37,15 +40,66 @@ def main() -> int:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     downloaded = []
-    for label, query_id in queries:
-        reference = request_flex_statement(args.token, query_id)
-        content = download_flex_statement(args.token, reference, max_wait_seconds=args.max_wait_seconds)
-        destination = output_dir / f"ibkr-{label}-{query_id}.xml"
-        destination.write_bytes(content)
+    failures = []
+    for index, (label, query_id) in enumerate(queries):
+        if index and args.query_delay_seconds > 0:
+            time.sleep(args.query_delay_seconds)
+        try:
+            destination = _download_query_with_retry(
+                token=args.token,
+                label=label,
+                query_id=query_id,
+                output_dir=output_dir,
+                max_wait_seconds=args.max_wait_seconds,
+                rate_limit_retries=args.rate_limit_retries,
+                rate_limit_wait_seconds=args.rate_limit_wait_seconds,
+            )
+        except RuntimeError as exc:
+            failures.append(f"{label}: {exc}")
+            print(f"IBKR Flex {label} query failed; continuing if another query succeeded: {exc}", file=sys.stderr)
+            continue
         downloaded.append(destination)
         print(f"IBKR Flex {label} statement downloaded: {destination.name}")
+    if not downloaded:
+        details = " | ".join(failures) if failures else "No files were downloaded."
+        raise SystemExit(f"IBKR Flex download failed; no statement files available. {details}")
+    if failures:
+        print(f"Downloaded {len(downloaded)} IBKR Flex statement file(s); {len(failures)} query failed.")
+        for failure in failures:
+            print(f"IBKR Flex partial failure: {failure}", file=sys.stderr)
+        return 0
     print(f"Downloaded {len(downloaded)} IBKR Flex statement file(s).")
     return 0
+
+
+def _download_query_with_retry(
+    *,
+    token: str,
+    label: str,
+    query_id: str,
+    output_dir: Path,
+    max_wait_seconds: int,
+    rate_limit_retries: int,
+    rate_limit_wait_seconds: int,
+) -> Path:
+    attempts = max(0, rate_limit_retries) + 1
+    for attempt in range(1, attempts + 1):
+        try:
+            reference = request_flex_statement(token, query_id)
+            content = download_flex_statement(token, reference, max_wait_seconds=max_wait_seconds)
+            destination = output_dir / f"ibkr-{label}-{query_id}.xml"
+            destination.write_bytes(content)
+            return destination
+        except RuntimeError as exc:
+            if attempt < attempts and _looks_like_rate_limit_error(str(exc)):
+                print(
+                    f"IBKR Flex {label} query was rate limited; retrying in {rate_limit_wait_seconds}s.",
+                    file=sys.stderr,
+                )
+                time.sleep(max(0, rate_limit_wait_seconds))
+                continue
+            raise
+    raise RuntimeError("IBKR Flex query failed unexpectedly.")
 
 
 def request_flex_statement(token: str, query_id: str) -> str:
@@ -108,6 +162,11 @@ def _looks_like_pending_response(content: bytes) -> bool:
         return True
     message = (_xml_text(root, "ErrorMessage") or _xml_text(root, "Message")).lower()
     return "not ready" in message or "please try again" in message
+
+
+def _looks_like_rate_limit_error(message: str) -> bool:
+    text = message.lower()
+    return "too many requests" in text or "rate limit" in text
 
 
 if __name__ == "__main__":
