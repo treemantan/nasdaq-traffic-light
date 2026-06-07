@@ -34,6 +34,33 @@ class ImportPortfolioStatementsTests(unittest.TestCase):
         self.assertAlmostEqual(positions["VWRL"]["quantity"], 28.857)
         self.assertAlmostEqual(positions["VWRL"]["cost_gbp"], 4001.994)
 
+    def test_ibkr_flex_xml_activity_and_trade_confirmation_are_supported(self) -> None:
+        content = """<?xml version="1.0" encoding="UTF-8"?>
+<FlexQueryResponse>
+  <FlexStatements>
+    <FlexStatement accountId="U1" fromDate="20260603" toDate="20260603">
+      <Trades>
+        <Trade accountId="U1" symbol="VWRL" tradeID="t-summary" tradeDate="20260603" buySell="BUY" quantity="28.857" tradePrice="138.579" netCash="-4001.994" ibCommission="-3" levelOfDetail="SYMBOL_SUMMARY" />
+        <Trade accountId="U1" symbol="VWRL" tradeID="t1" ibExecID="exec-a" tradeDate="20260603" buySell="BUY" quantity="0.857" tradePrice="138.57" netCash="-119.754" ibCommission="-1" levelOfDetail="EXECUTION" />
+        <Trade accountId="U1" symbol="VWRL" tradeID="t2" ibExecID="exec-b" tradeDate="20260603" buySell="BUY" quantity="28" tradePrice="138.58" netCash="-3882.24" ibCommission="-2" levelOfDetail="EXECUTION" />
+      </Trades>
+      <CashTransactions>
+        <CashTransaction symbol="VWRL" type="Dividends" reportDate="20260604" amount="1.50" levelOfDetail="DETAIL" />
+      </CashTransactions>
+    </FlexStatement>
+  </FlexStatements>
+</FlexQueryResponse>
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "ibkr-flex.xml"
+            path.write_text(content, encoding="utf-8")
+            self.assertTrue(MODULE._is_ibkr_statement(path))
+            positions = MODULE._reconstruct_ibkr_positions([path])
+
+        self.assertAlmostEqual(positions["VWRL"]["quantity"], 28.857)
+        self.assertAlmostEqual(positions["VWRL"]["cost_gbp"], 4001.994)
+        self.assertAlmostEqual(positions["VWRL"]["dividend_income_gbp"], 1.5)
+
     def test_revolut_and_ibkr_positions_merge_by_symbol(self) -> None:
         revolut = {"VWRL": {"quantity": 1.0, "cost_gbp": 100.0, "realized_pnl_gbp": 0.0, "dividend_income_gbp": 0.0}}
         ibkr = {"VWRL": {"quantity": 2.0, "cost_gbp": 210.0, "realized_pnl_gbp": 0.0, "dividend_income_gbp": 1.5}}

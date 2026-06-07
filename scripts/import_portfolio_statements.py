@@ -4,6 +4,7 @@ import argparse
 import csv
 import importlib.util
 import sys
+import xml.etree.ElementTree as ET
 from collections import defaultdict
 from typing import Any
 from pathlib import Path
@@ -26,8 +27,8 @@ _to_csv = _REVOLUT._to_csv
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Convert broker statement CSV files into portfolio.csv.")
-    parser.add_argument("statement", nargs="+", help="One or more Revolut or IBKR statement CSV paths.")
+    parser = argparse.ArgumentParser(description="Convert broker statement CSV/XML files into portfolio.csv.")
+    parser.add_argument("statement", nargs="+", help="One or more Revolut CSV or IBKR CSV/XML statement paths.")
     parser.add_argument("--output", default="portfolio.csv", help="Output portfolio CSV path.")
     args = parser.parse_args()
 
@@ -106,6 +107,8 @@ def _empty_position() -> dict[str, Any]:
 
 
 def _is_ibkr_statement(path: Path) -> bool:
+    if path.suffix.lower() == ".xml":
+        return _is_ibkr_flex_xml(path)
     try:
         with path.open("r", encoding="utf-8-sig", newline="") as handle:
             for row in csv.reader(handle):
@@ -117,6 +120,15 @@ def _is_ibkr_statement(path: Path) -> bool:
     except (OSError, UnicodeDecodeError, csv.Error):
         return False
     return False
+
+
+def _is_ibkr_flex_xml(path: Path) -> bool:
+    try:
+        root = ET.parse(path).getroot()
+        tag = _xml_tag(root)
+        return tag in {"FlexQueryResponse", "FlexStatement"}
+    except (OSError, UnicodeDecodeError, ET.ParseError):
+        return False
 
 
 def _reconstruct_ibkr_positions(paths: list[Path]) -> dict[str, dict[str, Any]]:
@@ -171,6 +183,9 @@ def _unique_ibkr_rows(paths: list[Path]) -> tuple[list[dict[str, str]], int]:
 
 
 def _iter_ibkr_rows(path: Path):
+    if path.suffix.lower() == ".xml":
+        yield from _iter_ibkr_xml_rows(path)
+        return
     with path.open("r", encoding="utf-8-sig", newline="") as handle:
         header: list[str] | None = None
         for raw in csv.reader(handle):
@@ -182,6 +197,79 @@ def _iter_ibkr_rows(path: Path):
             if header is None or len(raw) != len(header):
                 continue
             yield dict(zip(header, raw))
+
+
+def _iter_ibkr_xml_rows(path: Path):
+    try:
+        context = ET.iterparse(path, events=("end",))
+        for _event, element in context:
+            tag = _xml_tag(element)
+            if tag == "Trade":
+                yield _normalize_ibkr_xml_row(element.attrib, row_kind="TRADE")
+                element.clear()
+            elif tag == "CashTransaction":
+                yield _normalize_ibkr_xml_row(element.attrib, row_kind="CASH")
+                element.clear()
+    except ET.ParseError as exc:
+        raise RuntimeError(f"Invalid IBKR Flex XML file {path}: {exc}") from exc
+
+
+def _normalize_ibkr_xml_row(attrs: dict[str, str], *, row_kind: str) -> dict[str, str]:
+    normalized = {key: str(value) for key, value in attrs.items()}
+    lower = {key.lower(): value for key, value in normalized.items()}
+
+    def pick(*names: str) -> str:
+        for name in names:
+            value = lower.get(name.lower())
+            if value not in (None, ""):
+                return value
+        return ""
+
+    if row_kind == "TRADE":
+        level = pick("levelOfDetail") or "EXECUTION"
+        return {
+            **normalized,
+            "ClientAccountID": pick("accountId", "acctId", "account"),
+            "LevelOfDetail": level.upper(),
+            "Symbol": pick("symbol", "underlyingSymbol"),
+            "UnderlyingSymbol": pick("underlyingSymbol"),
+            "TradeID": pick("tradeID", "tradeId"),
+            "OrderID": pick("orderID", "orderId"),
+            "ExecID": pick("ibExecID", "execID", "executionID"),
+            "TradeDate": pick("tradeDate", "dateTime", "date"),
+            "Date/Time": pick("dateTime", "tradeDate", "date"),
+            "Buy/Sell": pick("buySell", "side"),
+            "Quantity": pick("quantity", "tradeQuantity"),
+            "TradeQuantity": pick("tradeQuantity", "quantity"),
+            "Price": pick("price", "tradePrice"),
+            "TradePrice": pick("tradePrice", "price"),
+            "Amount": pick("tradeMoney", "amount", "proceeds"),
+            "TradeMoney": pick("tradeMoney", "amount"),
+            "Proceeds": pick("proceeds"),
+            "NetCash": pick("netCash", "netCashWithBillable"),
+            "Commission": pick("commission", "ibCommission"),
+            "IBCommission": pick("ibCommission", "commission"),
+            "Tax": pick("tax", "taxes"),
+            "Currency": pick("currency", "currencyPrimary"),
+        }
+    return {
+        **normalized,
+        "ClientAccountID": pick("accountId", "acctId", "account"),
+        "LevelOfDetail": (pick("levelOfDetail") or "DETAIL").upper(),
+        "Symbol": pick("symbol", "underlyingSymbol"),
+        "UnderlyingSymbol": pick("underlyingSymbol"),
+        "Type": pick("type", "transactionType", "description"),
+        "DividendType": pick("type", "transactionType", "description"),
+        "TransactionID": pick("transactionID", "transactionId"),
+        "ReportDate": pick("reportDate", "dateTime", "date"),
+        "Date/Time": pick("dateTime", "reportDate", "date"),
+        "Amount": pick("amount", "netCash"),
+        "Currency": pick("currency", "currencyPrimary"),
+    }
+
+
+def _xml_tag(element: ET.Element) -> str:
+    return element.tag.rsplit("}", 1)[-1]
 
 
 def _ibkr_fingerprint(row: dict[str, str]) -> tuple[str, ...]:

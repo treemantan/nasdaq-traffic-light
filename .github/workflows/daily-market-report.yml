@@ -178,7 +178,7 @@ jobs:
           restore-keys: |
             market-report-cache-${{ runner.os }}-
 
-      - name: Import latest portfolio statements from OneDrive
+      - name: Download latest portfolio statements from OneDrive
         if: steps.email-mode.outputs.should_run == 'true'
         shell: bash
         env:
@@ -192,10 +192,39 @@ jobs:
           ONEDRIVE_USE_LATEST_PER_ACCOUNT_FOLDER: ${{ vars.ONEDRIVE_USE_LATEST_PER_ACCOUNT_FOLDER }}
         run: |
           if [ -z "$ONEDRIVE_CLIENT_ID" ]; then
-            echo "OneDrive cloud portfolio import is not configured; generating the market report without portfolio.csv."
+            echo "OneDrive cloud portfolio import is not configured; skipping OneDrive download."
             exit 0
           fi
-          python scripts/download_onedrive_statements.py --output-dir .cloud-statements --import-portfolio
+          python scripts/download_onedrive_statements.py --output-dir .cloud-statements
+
+      - name: Download IBKR Flex XML statements
+        if: steps.email-mode.outputs.should_run == 'true'
+        shell: bash
+        env:
+          IBKR_FLEX_TOKEN: ${{ secrets.IBKR_FLEX_TOKEN }}
+          IBKR_ACTIVITY_QUERY_ID: ${{ secrets.IBKR_ACTIVITY_QUERY_ID }}
+          IBKR_TRADE_CONFIRM_QUERY_ID: ${{ secrets.IBKR_TRADE_CONFIRM_QUERY_ID }}
+        run: |
+          if [ -z "$IBKR_FLEX_TOKEN" ]; then
+            echo "IBKR Flex Web Service is not configured; skipping IBKR download."
+            exit 0
+          fi
+          python scripts/download_ibkr_flex.py --output-dir .cloud-statements
+
+      - name: Import downloaded portfolio statements
+        if: steps.email-mode.outputs.should_run == 'true'
+        shell: bash
+        run: |
+          if [ ! -d ".cloud-statements" ]; then
+            echo "No cloud statement directory found; generating the market report without portfolio.csv."
+            exit 0
+          fi
+          mapfile -t statements < <(find .cloud-statements -maxdepth 1 -type f \( -iname '*.csv' -o -iname '*.xml' \) | sort)
+          if [ "${#statements[@]}" -eq 0 ]; then
+            echo "No supported cloud statements were downloaded; generating the market report without portfolio.csv."
+            exit 0
+          fi
+          python scripts/import_portfolio_statements.py "${statements[@]}"
 
       - name: Generate report
         if: steps.email-mode.outputs.should_run == 'true'

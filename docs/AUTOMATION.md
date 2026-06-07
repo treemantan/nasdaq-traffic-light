@@ -119,7 +119,8 @@ OneDrive inbox 可以保留历史导出，无需每次手工清理。导入器�
 GitHub Actions 可以在本地电脑关机时通过 Microsoft Graph 下载 CSV：
 
 ```text
-python scripts/download_onedrive_statements.py --output-dir .cloud-statements --import-portfolio
+python scripts/download_onedrive_statements.py --output-dir .cloud-statements
+python scripts/import_portfolio_statements.py .cloud-statements/*.csv
 ```
 
 推荐最小权限 delegated refresh token 模式：
@@ -137,7 +138,28 @@ ONEDRIVE_IBKR_FOLDER_PATH=Trading/IBKR Transaction Statement
 ONEDRIVE_USE_LATEST_PER_ACCOUNT_FOLDER=false
 ```
 
-云端导入会先读取 Revolut CSV，再尝试读取 IBKR CSV。IBKR Trade Confirmation 会只使用 `LevelOfDetail=EXECUTION` 的成交明细，避免把 summary/order/execution 重复计入持仓；如果 IBKR 文件夹不存在，会跳过该辅助来源并继续生成报告。
+云端导入会先下载 OneDrive 中的 Revolut/IBKR 手动 statement，再尝试下载 IBKR Flex Web Service XML，最后统一导入 `.cloud-statements` 目录下的 CSV/XML。IBKR Trade Confirmation 会只使用 `LevelOfDetail=EXECUTION` 的成交明细，避免把 summary/order/execution 重复计入持仓；如果某个来源不存在，会跳过该辅助来源并继续生成报告。
+
+## IBKR Flex Web Service 云端导入
+
+IBKR Flex Query 推荐使用 XML。GitHub Actions 支持以下 secrets：
+
+```text
+IBKR_FLEX_TOKEN
+IBKR_ACTIVITY_QUERY_ID=1531778
+IBKR_TRADE_CONFIRM_QUERY_ID=1535495
+```
+
+- `IBKR_ACTIVITY_QUERY_ID` 对应 `PastTradesTransacInfo`，用于历史交易、持仓、现金、股息、费用和表现。
+- `IBKR_TRADE_CONFIRM_QUERY_ID` 对应 `TodayTradesTransacInfo`，用于当天/近期成交确认，补充 Activity statement 的延迟。
+- token 不应写入代码、日志或聊天记录，只放在 GitHub Secrets。
+
+本地测试可运行：
+
+```text
+python scripts/download_ibkr_flex.py --output-dir .cloud-statements
+python scripts/import_portfolio_statements.py .cloud-statements/*.xml
+```
 
 该路径只使用免费 App Registration 和标准 Graph 文件读取接口，不创建 Azure VM、Storage、Functions、数据库或其他计费资源。CSV、refresh token 和 `portfolio.csv` 不应提交到 GitHub。
 
