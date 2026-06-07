@@ -53,6 +53,47 @@ class DownloadIbkrFlexTests(unittest.TestCase):
         self.assertTrue(MODULE._looks_like_rate_limit_error("IBKR rate limit exceeded."))
         self.assertFalse(MODULE._looks_like_rate_limit_error("IBKR Flex request did not return a ReferenceCode."))
 
+    def test_transient_generation_error_is_detected(self) -> None:
+        self.assertTrue(
+            MODULE._looks_like_transient_generation_error(
+                "Statement could not be generated at this time. Please try again shortly."
+            )
+        )
+        self.assertTrue(MODULE._looks_like_transient_generation_error("Service temporarily unavailable."))
+        self.assertFalse(MODULE._looks_like_transient_generation_error("Invalid token."))
+
+    def test_download_query_retries_transient_generation_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            calls = 0
+
+            def fake_request(_token: str, _query_id: str) -> str:
+                nonlocal calls
+                calls += 1
+                if calls == 1:
+                    raise RuntimeError(
+                        "IBKR Flex request failed: Fail Statement could not be generated at this time. Please try again shortly."
+                    )
+                return "activity-reference"
+
+            with patch.object(MODULE, "request_flex_statement", fake_request), patch.object(
+                MODULE, "download_flex_statement", return_value=b"<FlexQueryResponse />"
+            ), patch.object(MODULE.time, "sleep"):
+                destination = MODULE._download_query_with_retry(
+                    token="secret-token",
+                    label="activity",
+                    query_id="activity-id",
+                    output_dir=Path(tmpdir),
+                    max_wait_seconds=60,
+                    rate_limit_retries=0,
+                    rate_limit_wait_seconds=0,
+                    transient_retries=1,
+                    transient_wait_seconds=0,
+                )
+
+            self.assertEqual(calls, 2)
+            self.assertEqual(destination.name, "ibkr-activity-activity-id.xml")
+            self.assertTrue(destination.exists())
+
     def test_main_continues_when_one_query_is_rate_limited_after_success(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             output_dir = Path(tmpdir)
@@ -76,6 +117,8 @@ class DownloadIbkrFlexTests(unittest.TestCase):
                 "0",
                 "--rate-limit-retries",
                 "0",
+                "--transient-retries",
+                "0",
             ]
 
             with patch.object(sys, "argv", argv), patch.object(MODULE, "request_flex_statement", fake_request), patch.object(
@@ -97,6 +140,8 @@ class DownloadIbkrFlexTests(unittest.TestCase):
                 "--output-dir",
                 tmpdir,
                 "--rate-limit-retries",
+                "0",
+                "--transient-retries",
                 "0",
             ]
 

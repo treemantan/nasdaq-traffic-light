@@ -25,6 +25,8 @@ def main() -> int:
     parser.add_argument("--query-delay-seconds", type=int, default=30)
     parser.add_argument("--rate-limit-retries", type=int, default=1)
     parser.add_argument("--rate-limit-wait-seconds", type=int, default=60)
+    parser.add_argument("--transient-retries", type=int, default=2)
+    parser.add_argument("--transient-wait-seconds", type=int, default=90)
     args = parser.parse_args()
 
     if not args.token:
@@ -53,6 +55,8 @@ def main() -> int:
                 max_wait_seconds=args.max_wait_seconds,
                 rate_limit_retries=args.rate_limit_retries,
                 rate_limit_wait_seconds=args.rate_limit_wait_seconds,
+                transient_retries=args.transient_retries,
+                transient_wait_seconds=args.transient_wait_seconds,
             )
         except RuntimeError as exc:
             failures.append(f"{label}: {exc}")
@@ -81,9 +85,13 @@ def _download_query_with_retry(
     max_wait_seconds: int,
     rate_limit_retries: int,
     rate_limit_wait_seconds: int,
+    transient_retries: int,
+    transient_wait_seconds: int,
 ) -> Path:
-    attempts = max(0, rate_limit_retries) + 1
-    for attempt in range(1, attempts + 1):
+    max_attempts = max(0, rate_limit_retries, transient_retries) + 1
+    rate_limit_retry_count = 0
+    transient_retry_count = 0
+    for attempt in range(1, max_attempts + 1):
         try:
             reference = request_flex_statement(token, query_id)
             content = download_flex_statement(token, reference, max_wait_seconds=max_wait_seconds)
@@ -91,12 +99,22 @@ def _download_query_with_retry(
             destination.write_bytes(content)
             return destination
         except RuntimeError as exc:
-            if attempt < attempts and _looks_like_rate_limit_error(str(exc)):
+            message = str(exc)
+            if rate_limit_retry_count < max(0, rate_limit_retries) and _looks_like_rate_limit_error(message):
+                rate_limit_retry_count += 1
                 print(
                     f"IBKR Flex {label} query was rate limited; retrying in {rate_limit_wait_seconds}s.",
                     file=sys.stderr,
                 )
                 time.sleep(max(0, rate_limit_wait_seconds))
+                continue
+            if transient_retry_count < max(0, transient_retries) and _looks_like_transient_generation_error(message):
+                transient_retry_count += 1
+                print(
+                    f"IBKR Flex {label} query was not ready to generate; retrying in {transient_wait_seconds}s.",
+                    file=sys.stderr,
+                )
+                time.sleep(max(0, transient_wait_seconds))
                 continue
             raise
     raise RuntimeError("IBKR Flex query failed unexpectedly.")
@@ -167,6 +185,15 @@ def _looks_like_pending_response(content: bytes) -> bool:
 def _looks_like_rate_limit_error(message: str) -> bool:
     text = message.lower()
     return "too many requests" in text or "rate limit" in text
+
+
+def _looks_like_transient_generation_error(message: str) -> bool:
+    text = message.lower()
+    return (
+        "could not be generated at this time" in text
+        or "please try again shortly" in text
+        or "temporarily unavailable" in text
+    )
 
 
 if __name__ == "__main__":
