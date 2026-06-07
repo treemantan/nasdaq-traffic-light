@@ -142,6 +142,8 @@ ONEDRIVE_USE_LATEST_PER_ACCOUNT_FOLDER=false
 
 IBKR Flex token 对短时间连续请求可能触发限流，Activity statement 也可能临时返回 `Statement could not be generated at this time`。Activity statement 比 Trade Confirmation 更重，主要用于 full 报告中的历史账户、持仓、现金、股息和费用信息；pulse/volatility 等盘中轻量邮件默认只下载 Trade Confirmation，避免一天多次触发 Activity 生成。工作流会在两个 Flex Query 之间等待 30 秒；对限流和“稍后重试”的生成失败会自动重试。如果其中一个 query 已成功下载、另一个 query 最终仍失败，流程会记录 partial failure 并继续导入已下载的 XML。只有所有 IBKR Flex query 都失败时，才会中断该下载步骤。
 
+每次 IBKR Flex 下载都会生成 `.cloud-statements/ibkr-flex-diagnostics.json` 并随 GitHub Actions artifact 上传。该文件不包含 token 或 ReferenceCode，只记录 query label、attempt、IBKR 返回的 status/error、运行模式和耗时。若 Activity 在 Actions 中反复失败但网页手动生成成功，优先下载该诊断文件，对比是否一直停在 `send_request` 阶段、是否只发生在 full 模式、以及是否与同一天多次运行有关。
+
 ## IBKR Flex Web Service 云端导入
 
 IBKR Flex Query 推荐使用 XML。GitHub Actions 支持以下 secrets：

@@ -78,6 +78,7 @@ class DownloadIbkrFlexTests(unittest.TestCase):
             with patch.object(MODULE, "request_flex_statement", fake_request), patch.object(
                 MODULE, "download_flex_statement", return_value=b"<FlexQueryResponse />"
             ), patch.object(MODULE.time, "sleep"):
+                diagnostics = {"events": []}
                 destination = MODULE._download_query_with_retry(
                     token="secret-token",
                     label="activity",
@@ -88,11 +89,14 @@ class DownloadIbkrFlexTests(unittest.TestCase):
                     rate_limit_wait_seconds=0,
                     transient_retries=1,
                     transient_wait_seconds=0,
+                    diagnostics=diagnostics,
+                    diagnostics_file=Path(tmpdir) / "diagnostics.json",
                 )
 
             self.assertEqual(calls, 2)
             self.assertEqual(destination.name, "ibkr-activity-activity-id.xml")
             self.assertTrue(destination.exists())
+            self.assertIn("transient_generation", (Path(tmpdir) / "diagnostics.json").read_text(encoding="utf-8"))
 
     def test_main_continues_when_one_query_is_rate_limited_after_success(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

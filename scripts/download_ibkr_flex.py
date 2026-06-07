@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -13,6 +15,14 @@ import xml.etree.ElementTree as ET
 
 FLEX_BASE_URL = "https://gdcdyn.interactivebrokers.com/Universal/servlet"
 DEFAULT_OUTPUT_DIR = ".cloud-statements"
+
+
+class IbkrFlexError(RuntimeError):
+    def __init__(self, message: str, *, status: str = "", error_message: str = "", phase: str = "") -> None:
+        super().__init__(message)
+        self.status = status
+        self.error_message = error_message
+        self.phase = phase
 
 
 def main() -> int:
@@ -27,6 +37,7 @@ def main() -> int:
     parser.add_argument("--rate-limit-wait-seconds", type=int, default=60)
     parser.add_argument("--transient-retries", type=int, default=2)
     parser.add_argument("--transient-wait-seconds", type=int, default=90)
+    parser.add_argument("--diagnostics-file", default="")
     args = parser.parse_args()
 
     if not args.token:
@@ -41,6 +52,9 @@ def main() -> int:
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    diagnostics_file = Path(args.diagnostics_file) if args.diagnostics_file else output_dir / "ibkr-flex-diagnostics.json"
+    diagnostics = _diagnostic_context(args, queries)
+    _write_diagnostics(diagnostics_file, diagnostics)
     downloaded = []
     failures = []
     for index, (label, query_id) in enumerate(queries):
@@ -57,22 +71,49 @@ def main() -> int:
                 rate_limit_wait_seconds=args.rate_limit_wait_seconds,
                 transient_retries=args.transient_retries,
                 transient_wait_seconds=args.transient_wait_seconds,
+                diagnostics=diagnostics,
+                diagnostics_file=diagnostics_file,
             )
         except RuntimeError as exc:
             failures.append(f"{label}: {exc}")
+            _append_diagnostic(
+                diagnostics,
+                diagnostics_file,
+                {"event": "query_final_failure", "label": label, "message": str(exc)},
+            )
             print(f"IBKR Flex {label} query failed; continuing if another query succeeded: {exc}", file=sys.stderr)
             continue
         downloaded.append(destination)
+        _append_diagnostic(
+            diagnostics,
+            diagnostics_file,
+            {"event": "query_downloaded", "label": label, "file": destination.name},
+        )
         print(f"IBKR Flex {label} statement downloaded: {destination.name}")
     if not downloaded:
         details = " | ".join(failures) if failures else "No files were downloaded."
+        _append_diagnostic(
+            diagnostics,
+            diagnostics_file,
+            {"event": "download_failed", "downloaded_count": 0, "failure_count": len(failures)},
+        )
         raise SystemExit(f"IBKR Flex download failed; no statement files available. {details}")
     if failures:
+        _append_diagnostic(
+            diagnostics,
+            diagnostics_file,
+            {"event": "download_partial_success", "downloaded_count": len(downloaded), "failure_count": len(failures)},
+        )
         print(f"Downloaded {len(downloaded)} IBKR Flex statement file(s); {len(failures)} query failed.")
         for failure in failures:
             print(f"IBKR Flex partial failure: {failure}", file=sys.stderr)
         return 0
     print(f"Downloaded {len(downloaded)} IBKR Flex statement file(s).")
+    _append_diagnostic(
+        diagnostics,
+        diagnostics_file,
+        {"event": "download_success", "downloaded_count": len(downloaded), "failure_count": 0},
+    )
     return 0
 
 
@@ -87,21 +128,42 @@ def _download_query_with_retry(
     rate_limit_wait_seconds: int,
     transient_retries: int,
     transient_wait_seconds: int,
+    diagnostics: dict,
+    diagnostics_file: Path,
 ) -> Path:
     max_attempts = max(0, rate_limit_retries, transient_retries) + 1
     rate_limit_retry_count = 0
     transient_retry_count = 0
     for attempt in range(1, max_attempts + 1):
+        started = time.monotonic()
         try:
             reference = request_flex_statement(token, query_id)
             content = download_flex_statement(token, reference, max_wait_seconds=max_wait_seconds)
             destination = output_dir / f"ibkr-{label}-{query_id}.xml"
             destination.write_bytes(content)
+            _append_diagnostic(
+                diagnostics,
+                diagnostics_file,
+                {
+                    "event": "attempt_success",
+                    "label": label,
+                    "attempt": attempt,
+                    "elapsed_seconds": round(time.monotonic() - started, 3),
+                    "bytes": len(content),
+                },
+            )
             return destination
         except RuntimeError as exc:
             message = str(exc)
+            retry_reason = ""
             if rate_limit_retry_count < max(0, rate_limit_retries) and _looks_like_rate_limit_error(message):
                 rate_limit_retry_count += 1
+                retry_reason = "rate_limit"
+                _append_diagnostic(
+                    diagnostics,
+                    diagnostics_file,
+                    _attempt_failure_event(label, attempt, started, exc, retry=True, retry_reason=retry_reason),
+                )
                 print(
                     f"IBKR Flex {label} query was rate limited; retrying in {rate_limit_wait_seconds}s.",
                     file=sys.stderr,
@@ -110,12 +172,23 @@ def _download_query_with_retry(
                 continue
             if transient_retry_count < max(0, transient_retries) and _looks_like_transient_generation_error(message):
                 transient_retry_count += 1
+                retry_reason = "transient_generation"
+                _append_diagnostic(
+                    diagnostics,
+                    diagnostics_file,
+                    _attempt_failure_event(label, attempt, started, exc, retry=True, retry_reason=retry_reason),
+                )
                 print(
                     f"IBKR Flex {label} query was not ready to generate; retrying in {transient_wait_seconds}s.",
                     file=sys.stderr,
                 )
                 time.sleep(max(0, transient_wait_seconds))
                 continue
+            _append_diagnostic(
+                diagnostics,
+                diagnostics_file,
+                _attempt_failure_event(label, attempt, started, exc, retry=False, retry_reason=retry_reason),
+            )
             raise
     raise RuntimeError("IBKR Flex query failed unexpectedly.")
 
@@ -125,10 +198,16 @@ def request_flex_statement(token: str, query_id: str) -> str:
     payload = _request_xml(f"{FLEX_BASE_URL}/FlexStatementService.SendRequest?{urlencode(params)}")
     status = _xml_text(payload, "Status")
     if status and status.lower() != "success":
-        raise RuntimeError(f"IBKR Flex request failed: {status} {_xml_text(payload, 'ErrorMessage')}")
+        error = _xml_text(payload, "ErrorMessage")
+        raise IbkrFlexError(
+            f"IBKR Flex request failed: {status} {error}",
+            status=status,
+            error_message=error,
+            phase="send_request",
+        )
     reference = _xml_text(payload, "ReferenceCode")
     if not reference:
-        raise RuntimeError("IBKR Flex request did not return a ReferenceCode.")
+        raise IbkrFlexError("IBKR Flex request did not return a ReferenceCode.", status=status, phase="send_request")
     return reference
 
 
@@ -151,7 +230,7 @@ def _request_xml(url: str) -> ET.Element:
     try:
         return ET.fromstring(content)
     except ET.ParseError as exc:
-        raise RuntimeError("IBKR Flex service returned invalid XML.") from exc
+        raise IbkrFlexError("IBKR Flex service returned invalid XML.", phase="parse_xml") from exc
 
 
 def _request_bytes(url: str) -> bytes:
@@ -160,7 +239,7 @@ def _request_bytes(url: str) -> bytes:
         with urlopen(request, timeout=30) as response:
             return response.read()
     except (HTTPError, URLError) as exc:
-        raise RuntimeError(f"IBKR Flex request failed: {exc}") from exc
+        raise IbkrFlexError(f"IBKR Flex request failed: {exc}", phase="http") from exc
 
 
 def _xml_text(root: ET.Element, tag: str) -> str:
@@ -194,6 +273,69 @@ def _looks_like_transient_generation_error(message: str) -> bool:
         or "please try again shortly" in text
         or "temporarily unavailable" in text
     )
+
+
+def _diagnostic_context(args: argparse.Namespace, queries: list[tuple[str, str]]) -> dict:
+    return {
+        "created_at_utc": _utc_now(),
+        "github": {
+            "run_id": os.getenv("GITHUB_RUN_ID", ""),
+            "event_name": os.getenv("GITHUB_EVENT_NAME", ""),
+            "event_schedule": os.getenv("GITHUB_EVENT_SCHEDULE", ""),
+        },
+        "email_mode": os.getenv("EMAIL_MODE", ""),
+        "settings": {
+            "query_delay_seconds": args.query_delay_seconds,
+            "rate_limit_retries": args.rate_limit_retries,
+            "rate_limit_wait_seconds": args.rate_limit_wait_seconds,
+            "transient_retries": args.transient_retries,
+            "transient_wait_seconds": args.transient_wait_seconds,
+            "max_wait_seconds": args.max_wait_seconds,
+        },
+        "queries": [{"label": label, "query_id_present": bool(query_id)} for label, query_id in queries],
+        "events": [],
+    }
+
+
+def _attempt_failure_event(
+    label: str,
+    attempt: int,
+    started: float,
+    exc: RuntimeError,
+    *,
+    retry: bool,
+    retry_reason: str,
+) -> dict:
+    event = {
+        "event": "attempt_failure",
+        "label": label,
+        "attempt": attempt,
+        "elapsed_seconds": round(time.monotonic() - started, 3),
+        "message": str(exc),
+        "retry": retry,
+        "retry_reason": retry_reason,
+    }
+    if isinstance(exc, IbkrFlexError):
+        event["phase"] = exc.phase
+        event["status"] = exc.status
+        event["error_message"] = exc.error_message
+    return event
+
+
+def _append_diagnostic(diagnostics: dict, diagnostics_file: Path, event: dict) -> None:
+    enriched = dict(event)
+    enriched["at_utc"] = _utc_now()
+    diagnostics.setdefault("events", []).append(enriched)
+    _write_diagnostics(diagnostics_file, diagnostics)
+
+
+def _write_diagnostics(path: Path, diagnostics: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(diagnostics, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
 if __name__ == "__main__":
