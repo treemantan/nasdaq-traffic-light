@@ -140,7 +140,7 @@ ONEDRIVE_USE_LATEST_PER_ACCOUNT_FOLDER=false
 
 云端导入会先下载 OneDrive 中的 Revolut/IBKR 手动 statement，再尝试下载 IBKR Flex Web Service XML，最后统一导入 `.cloud-statements` 目录下的 CSV/XML。IBKR Trade Confirmation 会只使用 `LevelOfDetail=EXECUTION` 的成交明细，避免把 summary/order/execution 重复计入持仓；如果某个来源不存在，会跳过该辅助来源并继续生成报告。
 
-IBKR Flex token 对短时间连续请求可能触发限流，Activity statement 也可能临时返回 `Statement could not be generated at this time`。工作流会在两个 Flex Query 之间等待 30 秒；对限流和“稍后重试”的生成失败会自动重试。如果其中一个 query 已成功下载、另一个 query 最终仍失败，流程会记录 partial failure 并继续导入已下载的 XML。只有所有 IBKR Flex query 都失败时，才会中断该下载步骤。
+IBKR Flex token 对短时间连续请求可能触发限流，Activity statement 也可能临时返回 `Statement could not be generated at this time`。Activity statement 比 Trade Confirmation 更重，主要用于 full 报告中的历史账户、持仓、现金、股息和费用信息；pulse/volatility 等盘中轻量邮件默认只下载 Trade Confirmation，避免一天多次触发 Activity 生成。工作流会在两个 Flex Query 之间等待 30 秒；对限流和“稍后重试”的生成失败会自动重试。如果其中一个 query 已成功下载、另一个 query 最终仍失败，流程会记录 partial failure 并继续导入已下载的 XML。只有所有 IBKR Flex query 都失败时，才会中断该下载步骤。
 
 ## IBKR Flex Web Service 云端导入
 
