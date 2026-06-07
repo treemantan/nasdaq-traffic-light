@@ -203,6 +203,7 @@ jobs:
         env:
           IBKR_FLEX_TOKEN: ${{ secrets.IBKR_FLEX_TOKEN }}
           IBKR_ACTIVITY_QUERY_ID: ${{ secrets.IBKR_ACTIVITY_QUERY_ID }}
+          IBKR_ACTIVITY_LIGHT_QUERY_ID: ${{ secrets.IBKR_ACTIVITY_LIGHT_QUERY_ID }}
           IBKR_TRADE_CONFIRM_QUERY_ID: ${{ secrets.IBKR_TRADE_CONFIRM_QUERY_ID }}
         run: |
           if [ -z "$IBKR_FLEX_TOKEN" ]; then
@@ -210,17 +211,20 @@ jobs:
             exit 0
           fi
           activity_query_id="$IBKR_ACTIVITY_QUERY_ID"
+          activity_light_query_id="$IBKR_ACTIVITY_LIGHT_QUERY_ID"
           if [ "$EMAIL_MODE" != "full" ]; then
             echo "EMAIL_MODE=$EMAIL_MODE; skipping heavyweight IBKR Activity query and downloading Trade Confirmation only."
             activity_query_id=""
+            activity_light_query_id=""
           fi
           python scripts/download_ibkr_flex.py \
             --output-dir .cloud-statements \
             --activity-query-id "$activity_query_id" \
+            --activity-light-query-id "$activity_light_query_id" \
             --trade-confirm-query-id "$IBKR_TRADE_CONFIRM_QUERY_ID" \
             --query-delay-seconds 30 \
-            --transient-retries 2 \
-            --transient-wait-seconds 90
+            --transient-retries 0 \
+            --transient-wait-seconds 0
 
       - name: Import downloaded portfolio statements
         if: steps.email-mode.outputs.should_run == 'true'

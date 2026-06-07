@@ -140,7 +140,7 @@ ONEDRIVE_USE_LATEST_PER_ACCOUNT_FOLDER=false
 
 云端导入会先下载 OneDrive 中的 Revolut/IBKR 手动 statement，再尝试下载 IBKR Flex Web Service XML，最后统一导入 `.cloud-statements` 目录下的 CSV/XML。IBKR Trade Confirmation 会只使用 `LevelOfDetail=EXECUTION` 的成交明细，避免把 summary/order/execution 重复计入持仓；如果某个来源不存在，会跳过该辅助来源并继续生成报告。
 
-IBKR Flex token 对短时间连续请求可能触发限流，Activity statement 也可能临时返回 `Statement could not be generated at this time`。Activity statement 比 Trade Confirmation 更重，主要用于 full 报告中的历史账户、持仓、现金、股息和费用信息；pulse/volatility 等盘中轻量邮件默认只下载 Trade Confirmation，避免一天多次触发 Activity 生成。工作流会在两个 Flex Query 之间等待 30 秒；对限流和“稍后重试”的生成失败会自动重试。如果其中一个 query 已成功下载、另一个 query 最终仍失败，流程会记录 partial failure 并继续导入已下载的 XML。只有所有 IBKR Flex query 都失败时，才会中断该下载步骤。
+IBKR Flex token 对短时间连续请求可能触发限流，Activity statement 也可能临时返回 `Statement could not be generated at this time`。Activity statement 比 Trade Confirmation 更重，主要用于 full 报告中的历史账户、持仓、现金、股息和费用信息；pulse/volatility 等盘中轻量邮件默认只下载 Trade Confirmation，避免一天多次触发 Activity 生成。full 模式会先尝试完整 Activity query；如果 IBKR 在 `SendRequest` 阶段拒绝生成，会立刻尝试 `IBKR_ACTIVITY_LIGHT_QUERY_ID`，不再等待 90 秒重试。工作流仍会在不同 Flex Query 之间等待 30 秒，以降低 token 限流概率。如果其中一个 query 已成功下载、另一个 query 最终仍失败，流程会记录 partial failure 并继续导入已下载的 XML。只有所有 IBKR Flex query 都失败时，才会中断该下载步骤。
 
 每次 IBKR Flex 下载都会生成 `.cloud-statements/ibkr-flex-diagnostics.json` 并随 GitHub Actions artifact 上传。该文件不包含 token 或 ReferenceCode，只记录 query label、attempt、IBKR 返回的 status/error、运行模式和耗时。若 Activity 在 Actions 中反复失败但网页手动生成成功，优先下载该诊断文件，对比是否一直停在 `send_request` 阶段、是否只发生在 full 模式、以及是否与同一天多次运行有关。
 
@@ -151,17 +151,19 @@ IBKR Flex Query 推荐使用 XML。GitHub Actions 支持以下 secrets：
 ```text
 IBKR_FLEX_TOKEN
 IBKR_ACTIVITY_QUERY_ID=1531778
+IBKR_ACTIVITY_LIGHT_QUERY_ID=<轻量 Activity query，可选但推荐>
 IBKR_TRADE_CONFIRM_QUERY_ID=1535495
 ```
 
 - `IBKR_ACTIVITY_QUERY_ID` 对应 `PastTradesTransacInfo`，用于历史交易、持仓、现金、股息、费用和表现。
+- `IBKR_ACTIVITY_LIGHT_QUERY_ID` 对应轻量 Activity query，作为完整 Activity 被 IBKR Web Service 拒绝生成时的 fallback。
 - `IBKR_TRADE_CONFIRM_QUERY_ID` 对应 `TodayTradesTransacInfo`，用于当天/近期成交确认，补充 Activity statement 的延迟。
 - token 不应写入代码、日志或聊天记录，只放在 GitHub Secrets。
 
 本地测试可运行：
 
 ```text
-python scripts/download_ibkr_flex.py --output-dir .cloud-statements --query-delay-seconds 30 --transient-retries 2 --transient-wait-seconds 90
+python scripts/download_ibkr_flex.py --output-dir .cloud-statements --query-delay-seconds 30 --transient-retries 0 --transient-wait-seconds 0
 python scripts/import_portfolio_statements.py .cloud-statements/*.xml
 ```
 

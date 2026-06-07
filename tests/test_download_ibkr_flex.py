@@ -133,6 +133,49 @@ class DownloadIbkrFlexTests(unittest.TestCase):
             self.assertTrue((output_dir / "ibkr-activity-activity-id.xml").exists())
             self.assertFalse((output_dir / "ibkr-trade-confirm-trade-confirm-id.xml").exists())
 
+    def test_main_falls_back_to_light_activity_query_when_full_activity_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            requested_query_ids: list[str] = []
+
+            def fake_request(_token: str, query_id: str) -> str:
+                requested_query_ids.append(query_id)
+                if query_id == "full-activity-id":
+                    raise RuntimeError(
+                        "IBKR Flex request failed: Fail Statement could not be generated at this time. Please try again shortly."
+                    )
+                return f"{query_id}-reference"
+
+            argv = [
+                "download_ibkr_flex.py",
+                "--token",
+                "secret-token",
+                "--activity-query-id",
+                "full-activity-id",
+                "--activity-light-query-id",
+                "light-activity-id",
+                "--trade-confirm-query-id",
+                "trade-confirm-id",
+                "--output-dir",
+                str(output_dir),
+                "--query-delay-seconds",
+                "0",
+                "--rate-limit-retries",
+                "0",
+                "--transient-retries",
+                "0",
+            ]
+
+            with patch.object(sys, "argv", argv), patch.object(MODULE, "request_flex_statement", fake_request), patch.object(
+                MODULE, "download_flex_statement", return_value=b"<FlexQueryResponse />"
+            ):
+                self.assertEqual(MODULE.main(), 0)
+
+            self.assertIn("full-activity-id", requested_query_ids)
+            self.assertIn("light-activity-id", requested_query_ids)
+            self.assertTrue((output_dir / "ibkr-activity-light-light-activity-id.xml").exists())
+            self.assertTrue((output_dir / "ibkr-trade-confirm-trade-confirm-id.xml").exists())
+
     def test_main_fails_when_all_queries_fail(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             argv = [

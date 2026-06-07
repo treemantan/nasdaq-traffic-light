@@ -30,13 +30,14 @@ def main() -> int:
     parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--token", default=os.getenv("IBKR_FLEX_TOKEN", "").strip())
     parser.add_argument("--activity-query-id", default=os.getenv("IBKR_ACTIVITY_QUERY_ID", "").strip())
+    parser.add_argument("--activity-light-query-id", default=os.getenv("IBKR_ACTIVITY_LIGHT_QUERY_ID", "").strip())
     parser.add_argument("--trade-confirm-query-id", default=os.getenv("IBKR_TRADE_CONFIRM_QUERY_ID", "").strip())
     parser.add_argument("--max-wait-seconds", type=int, default=60)
     parser.add_argument("--query-delay-seconds", type=int, default=30)
     parser.add_argument("--rate-limit-retries", type=int, default=1)
     parser.add_argument("--rate-limit-wait-seconds", type=int, default=60)
-    parser.add_argument("--transient-retries", type=int, default=2)
-    parser.add_argument("--transient-wait-seconds", type=int, default=90)
+    parser.add_argument("--transient-retries", type=int, default=0)
+    parser.add_argument("--transient-wait-seconds", type=int, default=0)
     parser.add_argument("--diagnostics-file", default="")
     args = parser.parse_args()
 
@@ -44,6 +45,7 @@ def main() -> int:
         raise SystemExit("IBKR_FLEX_TOKEN is required.")
     queries = [
         ("activity", args.activity_query_id),
+        ("activity-light", args.activity_light_query_id),
         ("trade-confirm", args.trade_confirm_query_id),
     ]
     queries = [(label, query_id) for label, query_id in queries if query_id]
@@ -57,7 +59,15 @@ def main() -> int:
     _write_diagnostics(diagnostics_file, diagnostics)
     downloaded = []
     failures = []
+    activity_downloaded = False
     for index, (label, query_id) in enumerate(queries):
+        if label == "activity-light" and activity_downloaded:
+            _append_diagnostic(
+                diagnostics,
+                diagnostics_file,
+                {"event": "query_skipped", "label": label, "reason": "full_activity_already_downloaded"},
+            )
+            continue
         if index and args.query_delay_seconds > 0:
             time.sleep(args.query_delay_seconds)
         try:
@@ -84,6 +94,8 @@ def main() -> int:
             print(f"IBKR Flex {label} query failed; continuing if another query succeeded: {exc}", file=sys.stderr)
             continue
         downloaded.append(destination)
+        if label in {"activity", "activity-light"}:
+            activity_downloaded = True
         _append_diagnostic(
             diagnostics,
             diagnostics_file,
