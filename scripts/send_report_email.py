@@ -27,7 +27,7 @@ from market_report.time_utils import _timezone_for
 REQUIRED_RESEND_ENV = ("RESEND_API_KEY", "REPORT_EMAIL_TO", "REPORT_EMAIL_FROM")
 REQUIRED_SMTP_ENV = ("SMTP_USERNAME", "SMTP_PASSWORD", "REPORT_EMAIL_TO")
 VALID_PROVIDERS = {"resend", "smtp"}
-VALID_MODES = {"none", "pulse", "volatility", "full", "auto"}
+VALID_MODES = {"none", "pulse", "volatility", "full", "serenity", "auto"}
 LONDON = ZoneInfo("Europe/London") if ZoneInfo else None
 
 
@@ -47,7 +47,12 @@ def main() -> int:
         print("EMAIL_MODE=none; report email skipped successfully.")
         return 0
 
-    required_env = REQUIRED_SMTP_ENV if provider == "smtp" else REQUIRED_RESEND_ENV
+    recipient_env = "PORTFOLIO_EMAIL_TO" if mode == "serenity" else "REPORT_EMAIL_TO"
+    required_env = (
+        ("SMTP_USERNAME", "SMTP_PASSWORD", recipient_env)
+        if provider == "smtp"
+        else ("RESEND_API_KEY", recipient_env, "REPORT_EMAIL_FROM")
+    )
     missing = [name for name in required_env if not os.environ.get(name)]
     if missing:
         print(f"Missing required environment variable(s): {', '.join(missing)}", file=sys.stderr)
@@ -65,20 +70,44 @@ def main() -> int:
         return 6
 
     payload = _load_payload(report_path)
-    if mode in {"pulse", "volatility", "full"} and payload is None:
+    if mode in {"pulse", "volatility", "full", "serenity"} and payload is None:
         print(f"Structured report payload not found for EMAIL_MODE={mode}: {report_path.with_suffix('.json')}", file=sys.stderr)
         return 7
 
-    recipients = _parse_recipients(os.environ["REPORT_EMAIL_TO"])
+    recipients = _parse_recipients(os.environ[recipient_env])
     if not recipients:
-        print("REPORT_EMAIL_TO does not contain any valid recipient address.", file=sys.stderr)
+        print(f"{recipient_env} does not contain any valid recipient address.", file=sys.stderr)
         return 8
 
-    subject, message_html, message_text = _render_message(mode, report_path, html, payload)
+    attachments = None
+    if mode == "serenity":
+        subject, message_html, message_text, attachments = _render_serenity_package(
+            payload or {}, output_dir
+        )
+    else:
+        subject, message_html, message_text = _render_message(
+            mode, report_path, html, payload
+        )
 
     if provider == "smtp":
-        return _send_smtp(subject, message_html, message_text, recipients, mode, report_path)
-    return _send_resend(subject, message_html, message_text, recipients, mode, report_path)
+        return _send_smtp(
+            subject,
+            message_html,
+            message_text,
+            recipients,
+            mode,
+            report_path,
+            attachments=attachments,
+        )
+    return _send_resend(
+        subject,
+        message_html,
+        message_text,
+        recipients,
+        mode,
+        report_path,
+        attachments=attachments,
+    )
 
 
 def _send_resend(
@@ -226,6 +255,29 @@ def _render_message(mode: str, report_path: Path, full_html: str, payload: dict 
     if mode == "volatility":
         return _render_volatility(payload or {})
     raise ValueError(f"Unsupported email mode: {mode}")
+
+
+def _render_serenity_package(
+    payload: dict, output_dir: Path
+) -> tuple[str, str, str, list[dict[str, str | bytes]]]:
+    from market_report.serenity_report import (
+        build_serenity_report,
+        render_serenity_email,
+        render_serenity_html,
+        write_serenity_report,
+    )
+
+    report = build_serenity_report(payload)
+    report_path, _ = write_serenity_report(report, output_dir)
+    subject, html, text = render_serenity_email(report)
+    attachment = {
+        "filename": f"serenity-portfolio-report-{report.report_date}.html",
+        "content": render_serenity_html(report),
+        "mime_type": "text/html",
+    }
+    if not report_path.exists():
+        raise RuntimeError("Serenity report attachment was not written.")
+    return subject, html, text, [attachment]
 
 
 def _report_from_payload(payload: dict):

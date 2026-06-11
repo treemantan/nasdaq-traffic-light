@@ -22,10 +22,13 @@ on:
     - cron: "45 20 * * 1-5"  # 21:45 UK full-email backup when BST
     - cron: "45 21 * * 1-5"  # 21:45 UK full-email backup when GMT
     - cron: "15 22 * * 1-5"  # 22:15 UK full-email backup when GMT
+    - cron: "0 8 * * 6"      # 09:00 UK Saturday Serenity report when BST
+    - cron: "0 9 * * 6"      # 09:00 UK when GMT / 10:00 UK backup when BST
+    - cron: "0 10 * * 6"     # 10:00 UK Saturday Serenity backup when GMT
   workflow_dispatch:
     inputs:
       email_mode:
-        description: "Email mode: none, pulse, volatility, full, auto"
+        description: "Email mode: none, pulse, volatility, full, serenity, auto"
         required: false
         default: "full"
 
@@ -68,7 +71,7 @@ jobs:
                       env.write(f"TARGET_UK_DATE={target_date}\n")
               print(notice)
 
-          valid_modes = {"none", "pulse", "volatility", "full", "auto"}
+          valid_modes = {"none", "pulse", "volatility", "full", "serenity", "auto"}
           if os.environ["EVENT_NAME"] == "workflow_dispatch":
               mode = os.environ.get("DISPATCH_EMAIL_MODE") or "full"
               if mode not in valid_modes:
@@ -91,6 +94,9 @@ jobs:
               "45 20 * * 1-5": [("21:45", "full")],
               "45 21 * * 1-5": [("21:45", "full"), ("22:45", "full")],
               "15 22 * * 1-5": [("22:15", "full")],
+              "0 8 * * 6": [("09:00", "serenity")],
+              "0 9 * * 6": [("09:00", "serenity"), ("10:00", "serenity")],
+              "0 10 * * 6": [("10:00", "serenity")],
           }
           if schedule not in mapping:
               emit("auto", True, "unknown schedule, fallback to auto")
@@ -165,6 +171,14 @@ jobs:
           path: output/email-markers
           key: market-report-scheduled-email-sent-${{ runner.os }}-${{ steps.report-date.outputs.report_date }}-full
 
+      - name: Restore Serenity email send marker
+        id: serenity-email-marker
+        if: steps.email-mode.outputs.should_run == 'true' && steps.email-mode.outputs.email_mode == 'serenity'
+        uses: actions/cache/restore@v4
+        with:
+          path: output/email-markers
+          key: market-report-scheduled-email-sent-${{ runner.os }}-${{ steps.report-date.outputs.report_date }}-serenity
+
       - name: Install dependencies
         if: steps.email-mode.outputs.should_run == 'true'
         run: pip install -r requirements.txt
@@ -212,7 +226,7 @@ jobs:
           fi
           activity_query_id="$IBKR_ACTIVITY_QUERY_ID"
           activity_light_query_id="$IBKR_ACTIVITY_LIGHT_QUERY_ID"
-          if [ "$EMAIL_MODE" != "full" ]; then
+          if [ "$EMAIL_MODE" != "full" ] && [ "$EMAIL_MODE" != "serenity" ]; then
             echo "EMAIL_MODE=$EMAIL_MODE; skipping heavyweight IBKR Activity query and downloading Trade Confirmation only."
             activity_query_id=""
             activity_light_query_id=""
@@ -244,6 +258,10 @@ jobs:
       - name: Generate report
         if: steps.email-mode.outputs.should_run == 'true'
         run: python -m market_report --config config.example.json --dry-run
+
+      - name: Generate Serenity weekly report
+        if: steps.email-mode.outputs.should_run == 'true' && steps.email-mode.outputs.email_mode == 'serenity'
+        run: python scripts/generate_serenity_report.py
 
       - name: Send emergency market shock alert
         if: steps.email-mode.outputs.should_run == 'true'
@@ -317,6 +335,10 @@ jobs:
             echo "Full report email already sent for ${REPORT_LOCAL_DATE}; skipping duplicate full email."
             exit 0
           fi
+          if [ "${{ github.event_name }}" = "schedule" ] && [ "$EMAIL_MODE" = "serenity" ] && [ "${{ steps.serenity-email-marker.outputs.cache-hit }}" = "true" ]; then
+            echo "Serenity report email already sent for ${REPORT_LOCAL_DATE}; skipping duplicate weekly email."
+            exit 0
+          fi
           python scripts/send_cloud_report_email.py
 
       - name: Mark full report email sent
@@ -332,3 +354,17 @@ jobs:
         with:
           path: output/email-markers
           key: market-report-scheduled-email-sent-${{ runner.os }}-${{ steps.report-date.outputs.report_date }}-full
+
+      - name: Mark Serenity report email sent
+        if: github.event_name == 'schedule' && steps.email-mode.outputs.should_run == 'true' && steps.email-mode.outputs.email_mode == 'serenity' && steps.serenity-email-marker.outputs.cache-hit != 'true' && steps.send-report-email.outcome == 'success'
+        shell: bash
+        run: |
+          mkdir -p output/email-markers
+          printf 'sent_at=%s\nrun_id=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${{ github.run_id }}" > "output/email-markers/${REPORT_LOCAL_DATE}-serenity.txt"
+
+      - name: Save Serenity email send marker
+        if: github.event_name == 'schedule' && steps.email-mode.outputs.should_run == 'true' && steps.email-mode.outputs.email_mode == 'serenity' && steps.serenity-email-marker.outputs.cache-hit != 'true' && steps.send-report-email.outcome == 'success'
+        uses: actions/cache/save@v4
+        with:
+          path: output/email-markers
+          key: market-report-scheduled-email-sent-${{ runner.os }}-${{ steps.report-date.outputs.report_date }}-serenity

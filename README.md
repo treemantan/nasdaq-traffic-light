@@ -9,6 +9,7 @@
 - Iron Condor 环境过滤器，仅评估区间型卖波动环境，不提供交易指令
 - UK 可交易 ETF 的估值、趋势、拥挤度、流动性、相关性和 beta 面板
 - Revolut statement 组合导入、GBP 参考估值、AI/HBM 持仓穿透和回撤风险复核
+- Serenity 私人持仓周报：每周从红色预警、核心仓位、AI/半导体链和临近事件中筛选重点复核对象
 - MAG7 企业资本关系图谱，区分具名股权投资、附条件投资权利、战略合作与聚合披露
 - GitHub Actions 每次运行后独立检查市场冲击，触发急跌/波动率扩张时发送紧急风险警报
 - 本地、Windows Task Scheduler、GitHub Actions、OneDrive Graph 导入和邮件发送
@@ -35,6 +36,7 @@ output/market-report-YYYY-MM-DD.json
 - [数据源、缓存与回退机制](docs/DATA_SOURCES.md)
 - [组合行情缓存与降级机制](docs/PORTFOLIO_QUOTE_CACHE.md)
 - [MAG7 企业资本关系图谱与后续地缘政治辅助分](docs/MAG7_CAPITAL_NETWORK.md)
+- [Serenity 私人持仓周报](docs/SERENITY_WEEKLY.md)
 
 点击下方链接可打开对应文档。Codex 本地预览可能会调用系统默认 Markdown 应用；GitHub 中可直接跳转。
 

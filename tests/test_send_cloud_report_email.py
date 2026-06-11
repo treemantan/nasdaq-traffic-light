@@ -17,6 +17,46 @@ def _load_module():
 
 
 class SendCloudReportEmailTests(unittest.TestCase):
+    def test_serenity_mode_sends_private_weekly_report_with_attachment_only(self) -> None:
+        module = _load_module()
+        report = Path("output/market-report-2026-06-06.html")
+        serenity_path = Path("output/serenity-report-2026-06-06.html")
+        with patch.object(module.Path, "exists", return_value=True), patch.object(
+            module,
+            "_prepare_serenity_report",
+            return_value=(
+                "resend",
+                report,
+                {"report_date": "2026-06-06"},
+                ["private@example.com"],
+            ),
+        ), patch.object(
+            module,
+            "_build_serenity_email",
+            return_value=(
+                "Serenity Portfolio Weekly - 2026-06-06",
+                "<html>weekly summary</html>",
+                "weekly summary",
+                serenity_path,
+                "<html>full weekly report</html>",
+            ),
+        ), patch.object(module, "_send", return_value=0) as send, patch.dict(
+            os.environ,
+            {
+                "EMAIL_MODE": "serenity",
+                "PORTFOLIO_EMAIL_TO": "private@example.com",
+                "REPORT_EMAIL_TO": "group@example.com",
+            },
+            clear=False,
+        ):
+            self.assertEqual(module.main(), 0)
+            self.assertEqual(send.call_count, 1)
+            self.assertEqual(send.call_args.args[4], ["private@example.com"])
+            self.assertEqual(
+                send.call_args.kwargs["attachments"][0]["filename"],
+                "serenity-portfolio-report-2026-06-06.html",
+            )
+
     def test_without_portfolio_removes_private_fields(self) -> None:
         module = _load_module()
         payload = {

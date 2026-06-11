@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+from tempfile import TemporaryDirectory
 import unittest
 
 
@@ -141,6 +142,39 @@ class SendReportEmailTests(unittest.TestCase):
         self.assertIn("市场冲击历史类比", html)
         self.assertIn("2024-01-09", html)
         self.assertIn("email-optimized HTML", text)
+
+    def test_serenity_package_includes_full_html_attachment(self) -> None:
+        module = _load_send_report_email_module()
+        payload = {
+            "report_date": "2026-06-06",
+            "regime": {"label": "Goldilocks", "summary": "测试。"},
+            "etf_monitor": {
+                "portfolio_positions": [
+                    {
+                        "symbol": "NVDA",
+                        "weight_pct": 10,
+                        "unrealized_pnl_pct": 5,
+                        "drawdown_from_year_peak_pct": -3,
+                        "distance_sma200_pct": 12,
+                        "drawdown_regime": "常态波动",
+                    }
+                ]
+            },
+        }
+
+        with TemporaryDirectory() as temp_dir:
+            subject, html, text, attachments = module._render_serenity_package(
+                payload, Path(temp_dir)
+            )
+
+        self.assertEqual(subject, "Serenity Portfolio Weekly - 2026-06-06")
+        self.assertIn("私人持仓周度复核", html)
+        self.assertIn("HTML附件", text)
+        self.assertEqual(
+            attachments[0]["filename"],
+            "serenity-portfolio-report-2026-06-06.html",
+        )
+        self.assertIn("主要风险与反证", attachments[0]["content"])
 
 
 if __name__ == "__main__":
