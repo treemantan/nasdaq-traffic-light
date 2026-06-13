@@ -99,6 +99,7 @@ def _empty_position() -> dict[str, Any]:
         "realized_pnl_gbp": 0.0,
         "dividend_income_gbp": 0.0,
         "unmatched_sell_proceeds_gbp": 0.0,
+        "unmatched_sells": [],
         "implied_trading_cost_gbp": 0.0,
         "transaction_costs": [],
         "lots": [],
@@ -155,10 +156,35 @@ def _reconstruct_ibkr_positions(paths: list[Path]) -> dict[str, dict[str, Any]]:
             proceeds = _ibkr_cash_amount(row, buy=False)
             matched_proceeds = proceeds * (matched_quantity / quantity) if quantity else 0.0
             unmatched_quantity = max(quantity - matched_quantity, 0.0)
+            currency = str(
+                row.get("Currency")
+                or row.get("CommissionCurrency")
+                or row.get("IBCommissionCurrency")
+                or row.get("CurrencyPrimary")
+                or ""
+            ).strip().upper()
             positions[symbol]["realized_pnl_gbp"] += matched_proceeds - average_cost * matched_quantity
-            positions[symbol]["unmatched_sell_proceeds_gbp"] += (
-                proceeds * (unmatched_quantity / quantity) if quantity else 0.0
-            )
+            unmatched_proceeds = proceeds * (unmatched_quantity / quantity) if quantity else 0.0
+            if currency in {"", "GBP"}:
+                positions[symbol]["unmatched_sell_proceeds_gbp"] += unmatched_proceeds
+            if unmatched_quantity > 1e-8:
+                positions[symbol]["unmatched_sells"].append(
+                    {
+                        "symbol": symbol,
+                        "date": str(row.get("TradeDate") or row.get("Date/Time") or ""),
+                        "transaction_type": str(row.get("TransactionType") or "SELL"),
+                        "sell_quantity": quantity,
+                        "matched_quantity": matched_quantity,
+                        "unmatched_quantity": unmatched_quantity,
+                        "price_native": _safe_float(row.get("Price") or row.get("TradePrice")) or 0.0,
+                        "net_proceeds_native": unmatched_proceeds,
+                        "currency": currency,
+                        "net_proceeds_gbp": unmatched_proceeds if currency in {"", "GBP"} else None,
+                        "reason": "missing_visible_cost_basis",
+                        "broker": "IBKR",
+                        "account_id": str(row.get("ClientAccountID") or ""),
+                    }
+                )
             positions[symbol]["quantity"] -= matched_quantity
             positions[symbol]["cost_gbp"] -= average_cost * matched_quantity
     _add_ibkr_dividends(paths, positions)

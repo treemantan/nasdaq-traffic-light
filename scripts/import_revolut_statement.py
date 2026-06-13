@@ -28,6 +28,18 @@ from market_report.etf_monitor import (
 
 
 UK_SYMBOL_OVERRIDES = {"IGTM": "IGTM.L", "ISF": "ISF.L", "ERNS": "ERNS.L"}
+KNOWN_US_EQUITIES = {
+    "AVGO",
+    "GOOGL",
+    "KO",
+    "LITE",
+    "META",
+    "MSFT",
+    "NFLX",
+    "NVDA",
+    "QBTS",
+    "RKLB",
+}
 REVOLUT_TRANSACTION_FIELDS = (
     "Date",
     "Ticker",
@@ -38,6 +50,7 @@ REVOLUT_TRANSACTION_FIELDS = (
     "Currency",
     "FX Rate",
 )
+REVOLUT_TRANSACTION_ID_FIELDS = ("Date", "Ticker", "Type", "Quantity")
 REVOLUT_STATEMENT_COLUMNS = set(REVOLUT_TRANSACTION_FIELDS)
 PORTFOLIO_QUOTE_CACHE_PATH = Path("output") / "cache" / "portfolio_quote_cache.json"
 PORTFOLIO_QUOTE_CACHE_MAX_AGE = timedelta(days=7)
@@ -89,6 +102,7 @@ def _reconstruct_positions(paths: list[Path]) -> dict[str, dict[str, object]]:
             "realized_pnl_gbp": 0.0,
             "dividend_income_gbp": 0.0,
             "unmatched_sell_proceeds_gbp": 0.0,
+            "unmatched_sells": [],
             "implied_trading_cost_gbp": 0.0,
             "transaction_costs": [],
             "lots": [],
@@ -176,6 +190,23 @@ def _reconstruct_positions(paths: list[Path]) -> dict[str, dict[str, object]]:
             positions[ticker]["unmatched_sell_proceeds_gbp"] = (
                 float(positions[ticker]["unmatched_sell_proceeds_gbp"]) + net_proceeds * unmatched_ratio
             )
+            if unmatched_quantity > 1e-8:
+                unmatched_sells = positions[ticker]["unmatched_sells"]
+                assert isinstance(unmatched_sells, list)
+                unmatched_sells.append(
+                    {
+                        "symbol": ticker,
+                        "date": trade_date.isoformat() if trade_date else "",
+                        "transaction_type": transaction_type,
+                        "sell_quantity": quantity,
+                        "matched_quantity": matched_quantity,
+                        "unmatched_quantity": unmatched_quantity,
+                        "price_gbp": price or 0.0,
+                        "net_proceeds_gbp": net_proceeds * unmatched_ratio,
+                        "reason": "missing_visible_cost_basis",
+                        "broker": "Revolut",
+                    }
+                )
             positions[ticker]["implied_trading_cost_gbp"] = (
                 float(positions[ticker]["implied_trading_cost_gbp"]) + implied_cost
             )
@@ -302,17 +333,27 @@ def _consume_lots_fifo(
 
 
 def _unique_transaction_rows(paths: list[Path]) -> tuple[list[dict[str, str]], int]:
-    rows_by_fingerprint: dict[tuple[str, ...], dict[str, str]] = {}
+    rows_by_identity: dict[tuple[str, ...], dict[str, str]] = {}
     duplicate_count = 0
-    for path in paths:
+    # Revolut can revise price or cash amount for an already exported trade.
+    # Process older statements first so the newest export replaces that revision.
+    ordered_paths = sorted(paths, key=lambda path: (path.stat().st_mtime, str(path)))
+    for path in ordered_paths:
         with path.open("r", encoding="utf-8-sig", newline="") as handle:
             for row in csv.DictReader(handle):
-                fingerprint = tuple(_normalize_statement_cell(row.get(field)) for field in REVOLUT_TRANSACTION_FIELDS)
-                if fingerprint in rows_by_fingerprint:
+                identity = tuple(
+                    _normalize_statement_cell(row.get(field))
+                    for field in REVOLUT_TRANSACTION_ID_FIELDS
+                )
+                if not any(identity):
+                    identity = tuple(
+                        _normalize_statement_cell(row.get(field))
+                        for field in REVOLUT_TRANSACTION_FIELDS
+                    )
+                if identity in rows_by_identity:
                     duplicate_count += 1
-                    continue
-                rows_by_fingerprint[fingerprint] = row
-    rows = sorted(rows_by_fingerprint.values(), key=lambda row: _normalize_statement_cell(row.get("Date")))
+                rows_by_identity[identity] = row
+    rows = sorted(rows_by_identity.values(), key=lambda row: _normalize_statement_cell(row.get("Date")))
     return rows, duplicate_count
 
 
@@ -344,20 +385,39 @@ def _build_portfolio_rows(positions: dict[str, dict[str, object]]) -> list[dict[
         quantity = float(position["quantity"])
         if quantity <= 1e-8:
             continue
+        cost_gbp = float(position.get("cost_gbp") or 0.0)
+        average_cost = cost_gbp / quantity if quantity else 0.0
         monitor_symbol = monitor_symbols.get(ticker) or UK_SYMBOL_OVERRIDES.get(ticker) or _resolve_lse_etf_symbol(ticker)
         yahoo_symbol = monitor_symbol or ticker
         price, previous_price, native_currency, history = _latest_quote(yahoo_symbol)
+        price_gbp, fx_pair, fx_rate = _quote_in_gbp(price, native_currency, fx_quotes)
+        if (
+            monitor_symbol
+            and monitor_symbol != ticker
+            and not _price_matches_cost_basis(price_gbp, average_cost)
+        ):
+            raw_price, raw_previous, raw_currency, raw_history = _latest_quote(ticker)
+            raw_price_gbp, raw_fx_pair, raw_fx_rate = _quote_in_gbp(
+                raw_price, raw_currency, fx_quotes
+            )
+            if _price_matches_cost_basis(raw_price_gbp, average_cost):
+                print(
+                    f"Rejected ticker collision {monitor_symbol} for {ticker}; "
+                    "the original ticker quote is consistent with statement cost.",
+                    file=sys.stderr,
+                )
+                monitor_symbol = None
+                yahoo_symbol = ticker
+                price, previous_price, native_currency, history = (
+                    raw_price,
+                    raw_previous,
+                    raw_currency,
+                    raw_history,
+                )
+                price_gbp, fx_pair, fx_rate = raw_price_gbp, raw_fx_pair, raw_fx_rate
         price_source = _QUOTE_SOURCES.get(yahoo_symbol, f"Yahoo:{yahoo_symbol}")
-        fx_pair = ""
-        fx_rate = 1.0 if native_currency == "GBP" else None
-        if native_currency in fx_quotes:
-            fx_pair = f"GBP/{native_currency}"
-            fx_rate = fx_quotes[native_currency][0]
-        price_gbp = price / fx_rate if price is not None and fx_rate not in (None, 0) else None
         if fx_pair:
             price_source += f" | FX:{fx_pair}"
-        cost_gbp = float(position.get("cost_gbp") or 0.0)
-        average_cost = cost_gbp / quantity if quantity else 0.0
         if price_gbp is None:
             price_gbp = average_cost or None
             price_source = "statement-average-cost fallback"
@@ -436,6 +496,20 @@ def _build_portfolio_rows(positions: dict[str, dict[str, object]]) -> list[dict[
     account_dividend_income = sum(float(item.get("dividend_income_gbp") or 0.0) for item in positions.values())
     account_implied_trading_cost = sum(float(item.get("implied_trading_cost_gbp") or 0.0) for item in positions.values())
     unmatched_sell_proceeds = sum(float(item.get("unmatched_sell_proceeds_gbp") or 0.0) for item in positions.values())
+    unmatched_sells = [
+        event
+        for position in positions.values()
+        for event in (position.get("unmatched_sells") if isinstance(position.get("unmatched_sells"), list) else [])
+    ]
+    unmatched_sells = sorted(
+        unmatched_sells,
+        key=lambda item: (
+            str(item.get("date") or ""),
+            str(item.get("symbol") or ""),
+        ),
+        reverse=True,
+    )
+    unmatched_sells_json = json.dumps(unmatched_sells, ensure_ascii=False, separators=(",", ":"))
     account_unrealized_pnl = sum(item["unrealized_pnl"] for item in valued)
     account_total_return = account_unrealized_pnl + account_realized_pnl + account_dividend_income
     closed_trades = [
@@ -512,6 +586,7 @@ def _build_portfolio_rows(positions: dict[str, dict[str, object]]) -> list[dict[
                 "account_implied_trading_cost_gbp": _fmt_number(account_implied_trading_cost),
                 "account_total_return_gbp": _fmt_number(account_total_return),
                 "unmatched_sell_proceeds_gbp": _fmt_number(unmatched_sell_proceeds),
+                "unmatched_sells_json": unmatched_sells_json,
                 "closed_trades_json": closed_trades_json,
                 "transaction_costs_json": transaction_costs_json,
                 "estimated_exit_cost_rate_pct": _fmt_number(exit_cost_rate_pct),
@@ -546,6 +621,26 @@ def _build_portfolio_rows(positions: dict[str, dict[str, object]]) -> list[dict[
         )
     _save_portfolio_quote_cache()
     return rows
+
+
+def _quote_in_gbp(
+    price: float | None,
+    native_currency: str,
+    fx_quotes: dict[str, tuple[float | None, float | None, str, list[tuple[date, float]]]],
+) -> tuple[float | None, str, float | None]:
+    fx_pair = ""
+    fx_rate = 1.0 if native_currency == "GBP" else None
+    if native_currency in fx_quotes:
+        fx_pair = f"GBP/{native_currency}"
+        fx_rate = fx_quotes[native_currency][0]
+    price_gbp = price / fx_rate if price is not None and fx_rate not in (None, 0) else None
+    return price_gbp, fx_pair, fx_rate
+
+
+def _price_matches_cost_basis(price_gbp: float | None, average_cost_gbp: float) -> bool:
+    if price_gbp is None or average_cost_gbp <= 0:
+        return False
+    return 0.25 <= price_gbp / average_cost_gbp <= 4.0
 
 
 def _base_symbol(symbol: object) -> str:
@@ -655,6 +750,8 @@ def _portfolio_quote_day(quote: dict[str, object]) -> date | None:
 def _resolve_lse_etf_symbol(ticker: str) -> str | None:
     if "." in ticker:
         return ticker if ticker.endswith(".L") else None
+    if ticker.upper() in KNOWN_US_EQUITIES:
+        return None
     candidate = f"{ticker}.L"
     try:
         data = _fetch_yahoo_price_data(candidate, timeout=5, attempts=1)

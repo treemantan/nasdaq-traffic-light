@@ -457,9 +457,36 @@ def _render_portfolio_performance_email(monitor: ETFMonitor) -> str:
         f'股息收入 {_fmt_signed_gbp(performance.dividend_income_gbp)}<br>'
         f'<span style="color:#9ca3af;">隐含交易成本约 {_fmt_gbp(performance.implied_trading_cost_gbp)}；总收益已按实际现金流口径扣除。'
         '差额可能包含佣金、税费、FX/执行价差与四舍五入。</span>'
+        f'{_render_unmatched_sell_breakdown_email(performance)}'
         f'{_render_closed_trade_breakdown_email(performance)}'
         f'{_render_transaction_cost_breakdown_email(performance)}</div>'
     )
+
+
+def _render_unmatched_sell_breakdown_email(performance) -> str:
+    if not performance.unmatched_sells:
+        return ""
+    items = "".join(
+        "<li>"
+        f"{escape(item.broker or 'N/A')} {escape(item.symbol)} · "
+        f"{escape(item.date or 'N/A')} · 未匹配数量 {escape(_fmt_quantity(item.unmatched_quantity))} · "
+        f"净卖出额 {escape(_unmatched_proceeds_email(item))}"
+        "</li>"
+        for item in performance.unmatched_sells
+    )
+    return (
+        '<div style="margin-top:6px;color:#fca5a5;"><strong>成本基础不完整的卖出</strong>'
+        '<div style="color:#9ca3af;">来自 SELL 交易行，不是现金转账；未纳入已实现盈亏。</div>'
+        f'<ul style="padding-left:18px;margin:4px 0;">{items}</ul></div>'
+    )
+
+
+def _unmatched_proceeds_email(item) -> str:
+    if item.net_proceeds_gbp is not None:
+        return f"£{item.net_proceeds_gbp:,.2f}"
+    if item.net_proceeds_native is not None:
+        return f"{item.currency} {item.net_proceeds_native:,.2f}"
+    return "N/A"
 
 
 def _render_closed_trade_breakdown_email(performance) -> str:

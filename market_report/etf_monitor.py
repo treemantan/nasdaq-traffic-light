@@ -104,6 +104,7 @@ class PortfolioPosition:
     breakeven_price_native: float | None = None
     _closed_trades_json: str = ""
     _transaction_costs_json: str = ""
+    _unmatched_sells_json: str = ""
 
 
 @dataclass(frozen=True)
@@ -134,6 +135,23 @@ class PortfolioTransactionCost:
 
 
 @dataclass(frozen=True)
+class PortfolioUnmatchedSell:
+    symbol: str
+    date: str
+    transaction_type: str
+    sell_quantity: float
+    matched_quantity: float
+    unmatched_quantity: float
+    broker: str
+    account_id: str = ""
+    currency: str = "GBP"
+    price_native: float | None = None
+    net_proceeds_native: float | None = None
+    net_proceeds_gbp: float | None = None
+    reason: str = ""
+
+
+@dataclass(frozen=True)
 class PortfolioExposure:
     symbol: str
     label: str
@@ -152,6 +170,7 @@ class PortfolioPerformance:
     unmatched_sell_proceeds_gbp: float = 0
     closed_trades: tuple[PortfolioClosedTrade, ...] = ()
     transaction_costs: tuple[PortfolioTransactionCost, ...] = ()
+    unmatched_sells: tuple[PortfolioUnmatchedSell, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -2394,6 +2413,7 @@ def _load_portfolio_summary(
             breakeven_price_native=_safe_float(row.get("breakeven_price_native")),
             _closed_trades_json=str(row.get("closed_trades_json") or ""),
             _transaction_costs_json=str(row.get("transaction_costs_json") or ""),
+            _unmatched_sells_json=str(row.get("unmatched_sells_json") or ""),
         )
         for row in rows
         if str(row.get("symbol") or "").strip()
@@ -2467,10 +2487,15 @@ def _load_portfolio_summary(
             + "、".join(high_beta_pullbacks)
             + "。"
         )
-    if portfolio_performance and portfolio_performance.unmatched_sell_proceeds_gbp > 0:
+    if portfolio_performance and portfolio_performance.unmatched_sells:
+        details = "；".join(
+            _format_unmatched_sell(item)
+            for item in portfolio_performance.unmatched_sells[:4]
+        )
         warnings.append(
-            f"已实现交易盈亏仅统计成本基础可识别的卖出。导出窗口内另有 "
-            f"£{portfolio_performance.unmatched_sell_proceeds_gbp:,.2f} 卖出收入缺少对应买入成本，未计入总收益。"
+            "成本基础不完整：以下 SELL 交易在当前 statement 窗口找不到足够的对应买入批次，"
+            f"因此未计入已实现盈亏：{details}。这不是 CASH WITHDRAWAL 或 internal transfer；"
+            "常见原因是买入早于导出起点，或重叠 statement 对同一成交给出修订值。"
         )
     positions = []
     uncovered = []
@@ -2501,8 +2526,13 @@ def _load_portfolio_summary(
         f"组合加权TER约{weighted_ter / total:.2f}%。",
     ]
     if portfolio_performance:
+        return_label = (
+            "部分成本基础下的可识别收益（不是完整账户收益）"
+            if portfolio_performance.unmatched_sells
+            else "可识别总收益"
+        )
         summary.append(
-            f"可识别总收益 {_fmt_signed_gbp(portfolio_performance.total_return_gbp)}："
+            f"{return_label} {_fmt_signed_gbp(portfolio_performance.total_return_gbp)}："
             f"未实现盈亏 {_fmt_signed_gbp(portfolio_performance.unrealized_pnl_gbp)}，"
             f"已实现交易盈亏 {_fmt_signed_gbp(portfolio_performance.realized_pnl_gbp)}，"
             f"股息收入 {_fmt_signed_gbp(portfolio_performance.dividend_income_gbp)}，"
@@ -2562,6 +2592,7 @@ def _portfolio_performance_summary(positions: list[PortfolioPosition]) -> Portfo
     first = positions[0]
     closed_trades = _parse_closed_trades_from_position_row(first)
     transaction_costs = _parse_transaction_costs_from_position_row(first)
+    unmatched_sells = _parse_unmatched_sells_from_position_row(first)
     return PortfolioPerformance(
         unrealized_pnl_gbp=first.account_unrealized_pnl_gbp
         or sum(item.unrealized_pnl_gbp or 0 for item in positions),
@@ -2580,6 +2611,7 @@ def _portfolio_performance_summary(positions: list[PortfolioPosition]) -> Portfo
         unmatched_sell_proceeds_gbp=first.unmatched_sell_proceeds_gbp or 0,
         closed_trades=closed_trades,
         transaction_costs=transaction_costs,
+        unmatched_sells=unmatched_sells,
     )
 
 
@@ -2648,6 +2680,61 @@ def _parse_transaction_costs_from_position_row(position: PortfolioPosition) -> t
             )
         )
     return tuple(events)
+
+
+def _parse_unmatched_sells_from_position_row(
+    position: PortfolioPosition,
+) -> tuple[PortfolioUnmatchedSell, ...]:
+    raw = getattr(position, "_unmatched_sells_json", "")
+    if not raw:
+        return ()
+    try:
+        payload = json.loads(raw)
+    except (TypeError, ValueError):
+        return ()
+    if not isinstance(payload, list):
+        return ()
+    events = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        symbol = str(item.get("symbol") or "").strip().upper()
+        if not symbol:
+            continue
+        events.append(
+            PortfolioUnmatchedSell(
+                symbol=symbol,
+                date=str(item.get("date") or ""),
+                transaction_type=str(item.get("transaction_type") or "SELL"),
+                sell_quantity=_safe_float(item.get("sell_quantity")) or 0.0,
+                matched_quantity=_safe_float(item.get("matched_quantity")) or 0.0,
+                unmatched_quantity=_safe_float(item.get("unmatched_quantity")) or 0.0,
+                broker=str(item.get("broker") or ""),
+                account_id=str(item.get("account_id") or ""),
+                currency=str(item.get("currency") or "GBP").upper(),
+                price_native=_safe_float(item.get("price_native") or item.get("price_gbp")),
+                net_proceeds_native=_safe_float(
+                    item.get("net_proceeds_native") or item.get("net_proceeds_gbp")
+                ),
+                net_proceeds_gbp=_safe_float(item.get("net_proceeds_gbp")),
+                reason=str(item.get("reason") or ""),
+            )
+        )
+    return tuple(events)
+
+
+def _format_unmatched_sell(item: PortfolioUnmatchedSell) -> str:
+    if item.net_proceeds_gbp is not None:
+        proceeds = f"£{item.net_proceeds_gbp:,.2f}"
+    elif item.net_proceeds_native is not None:
+        proceeds = f"{item.currency} {item.net_proceeds_native:,.2f}"
+    else:
+        proceeds = "金额待确认"
+    broker = item.broker or "来源待确认"
+    return (
+        f"{broker} {item.symbol} {item.date or '日期待确认'}，"
+        f"未匹配数量 {item.unmatched_quantity:g}，净卖出额 {proceeds}"
+    )
 
 
 def _safe_int(value: object) -> int | None:

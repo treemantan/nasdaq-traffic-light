@@ -89,6 +89,26 @@ class ImportPortfolioStatementsTests(unittest.TestCase):
         self.assertEqual(merged["VWRL"]["cost_gbp"], 310.0)
         self.assertEqual(merged["VWRL"]["dividend_income_gbp"], 1.5)
 
+    def test_ibkr_sale_without_visible_purchase_keeps_auditable_source_detail(self) -> None:
+        header = (
+            "ClientAccountID,Symbol,TradeID,ExecID,TradeDate,Buy/Sell,Quantity,Price,"
+            "NetCash,Commission,CommissionCurrency,CurrencyPrimary,LevelOfDetail\n"
+        )
+        content = (
+            header
+            + "U1,TESTX,t1,exec-1,20260612,SELL,5,465,2325.46,-1,USD,GBP,EXECUTION\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "ibkr-trade-confirm.csv"
+            path.write_text(content, encoding="utf-8")
+            positions = MODULE._reconstruct_ibkr_positions([path])
+
+        self.assertEqual(positions["TESTX"]["unmatched_sell_proceeds_gbp"], 0)
+        self.assertEqual(positions["TESTX"]["unmatched_sells"][0]["broker"], "IBKR")
+        self.assertEqual(positions["TESTX"]["unmatched_sells"][0]["account_id"], "U1")
+        self.assertEqual(positions["TESTX"]["unmatched_sells"][0]["currency"], "USD")
+        self.assertEqual(positions["TESTX"]["unmatched_sells"][0]["net_proceeds_native"], 2325.46)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -161,6 +161,23 @@ def build_serenity_report(payload: dict[str, Any], focus_limit: int = 5) -> Sere
     macro_context = f"{regime_label}。{regime_summary}".strip("。") + "。"
     warnings = [str(item) for item in (monitor.get("portfolio_warnings") or []) if item]
     summary = [str(item) for item in (monitor.get("portfolio_summary") or []) if item]
+    incomplete_cost_basis = any(
+        "成本基础不完整" in item or "缺少对应买入成本" in item
+        for item in warnings
+    )
+    if incomplete_cost_basis:
+        summary = [
+            item.replace(
+                "可识别总收益",
+                "部分成本基础下的可识别收益（不是完整账户收益）",
+            )
+            for item in summary
+        ]
+        warnings.insert(
+            0,
+            "数据完整性限制：当前 statement 未覆盖全部买入成本，收益拆分仅用于审计已识别现金流，"
+            "不得解读为完整账户盈亏。",
+        )
     exposures = [
         item for item in (monitor.get("portfolio_exposures") or []) if isinstance(item, dict)
     ]

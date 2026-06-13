@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from datetime import date
@@ -66,6 +67,33 @@ class RevolutImportTests(unittest.TestCase):
         self.assertEqual(positions["VUAG"]["quantity"], 2)
         self.assertEqual(positions["VUAG"]["cost_gbp"], 200)
 
+    def test_later_statement_revision_replaces_same_transaction(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            old = Path(directory) / "old.csv"
+            revised = Path(directory) / "revised.csv"
+            header = "Date,Ticker,Type,Quantity,Price per share,Total Amount,Currency,FX Rate\n"
+            old.write_text(
+                header
+                + "2026-06-05T19:24:53.488Z,QBTS,SELL - MARKET,132.11847577,"
+                "GBP 17.57,GBP 2315.21,GBP,1.0000\n",
+                encoding="utf-8",
+            )
+            revised.write_text(
+                header
+                + "2026-06-05T19:24:53.488Z,QBTS,SELL - MARKET,132.11847577,"
+                "GBP 17.64,GBP 2325.46,GBP,1.0000\n",
+                encoding="utf-8",
+            )
+            os.utime(old, (1_700_000_000, 1_700_000_000))
+            os.utime(revised, (1_800_000_000, 1_800_000_000))
+
+            rows, duplicate_count = MODULE._unique_transaction_rows([revised, old])
+
+        self.assertEqual(duplicate_count, 1)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["Price per share"], "GBP 17.64")
+        self.assertEqual(rows[0]["Total Amount"], "GBP 2325.46")
+
     def test_dividends_and_known_cost_sales_are_included_in_return_attribution(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             statement = Path(directory) / "statement.csv"
@@ -127,6 +155,89 @@ class RevolutImportTests(unittest.TestCase):
 
         self.assertEqual(positions["GOOGL"]["realized_pnl_gbp"], 0)
         self.assertEqual(positions["GOOGL"]["unmatched_sell_proceeds_gbp"], 200)
+        self.assertEqual(
+            positions["GOOGL"]["unmatched_sells"],
+            [
+                {
+                    "symbol": "GOOGL",
+                    "date": "2026-01-01",
+                    "transaction_type": "SELL - MARKET",
+                    "sell_quantity": 2.0,
+                    "matched_quantity": 0.0,
+                    "unmatched_quantity": 2.0,
+                    "price_gbp": 100.0,
+                    "net_proceeds_gbp": 200.0,
+                    "reason": "missing_visible_cost_basis",
+                    "broker": "Revolut",
+                }
+            ],
+        )
+
+    def test_portfolio_rows_include_unmatched_sell_audit_trail(self) -> None:
+        quotes = {
+            "GBPUSD=X": (1.25, 1.24, "USD", []),
+            "GBPEUR=X": (1.18, 1.17, "EUR", []),
+            "KO": (10.0, 9.5, "GBP", [(date(2026, 1, 2), 10.0)]),
+        }
+        position = {
+            "quantity": 2.0,
+            "cost_gbp": 15.0,
+            "unmatched_sell_proceeds_gbp": 200.0,
+            "unmatched_sells": [
+                {
+                    "symbol": "GOOGL",
+                    "date": "2026-01-01",
+                    "transaction_type": "SELL - MARKET",
+                    "sell_quantity": 2.0,
+                    "matched_quantity": 0.0,
+                    "unmatched_quantity": 2.0,
+                    "price_gbp": 100.0,
+                    "net_proceeds_gbp": 200.0,
+                    "reason": "missing_visible_cost_basis",
+                    "broker": "Revolut",
+                }
+            ],
+        }
+        with patch.object(MODULE, "_latest_quote", side_effect=lambda symbol: quotes[symbol]):
+            rows = MODULE._build_portfolio_rows({"KO": position})
+
+        unmatched = MODULE.json.loads(rows[0]["unmatched_sells_json"])
+        self.assertEqual(unmatched[0]["symbol"], "GOOGL")
+        self.assertEqual(unmatched[0]["broker"], "Revolut")
+
+    def test_us_equity_rejects_wrong_lse_ticker_when_price_conflicts_with_cost(self) -> None:
+        quotes = {
+            "GBPUSD=X": (1.35, 1.34, "USD", []),
+            "GBPEUR=X": (1.18, 1.17, "EUR", []),
+            "MSFT.L": (5.92, 5.90, "GBP", [(date(2026, 6, 12), 5.92)]),
+            "MSFT": (405.0, 400.0, "USD", [(date(2026, 6, 12), 405.0)]),
+        }
+        position = {
+            "quantity": 2.5557406,
+            "cost_gbp": 746.53,
+            "realized_pnl_gbp": 0.0,
+            "dividend_income_gbp": 0.0,
+            "unmatched_sell_proceeds_gbp": 0.0,
+            "unmatched_sells": [],
+            "implied_trading_cost_gbp": 0.0,
+            "transaction_costs": [],
+            "closed_trades": [],
+        }
+        with patch.object(MODULE, "_resolve_lse_etf_symbol", return_value="MSFT.L"):
+            with patch.object(MODULE, "_latest_quote", side_effect=lambda symbol: quotes[symbol]):
+                rows = MODULE._build_portfolio_rows({"MSFT": position})
+
+        self.assertEqual(rows[0]["symbol"], "MSFT")
+        self.assertEqual(rows[0]["native_currency"], "USD")
+        self.assertAlmostEqual(float(rows[0]["current_price_gbp"]), 300.0, places=4)
+        self.assertIn("Yahoo", rows[0]["price_source"])
+
+    def test_known_us_equity_is_never_auto_mapped_to_london(self) -> None:
+        with patch.object(MODULE, "_fetch_yahoo_price_data") as fetch:
+            resolved = MODULE._resolve_lse_etf_symbol("MSFT")
+
+        self.assertIsNone(resolved)
+        fetch.assert_not_called()
 
     def test_uuid_named_iphone_export_is_recognized_by_header(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

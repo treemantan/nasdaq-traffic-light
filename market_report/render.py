@@ -644,9 +644,44 @@ def _render_portfolio_performance(monitor: ETFMonitor) -> str:
         '<div class="portfolio-notes"><strong>收益归因（statement 导出窗口内，可识别口径）</strong></div>'
         f'<div class="portfolio-exposure-grid">{rendered}</div>'
         '<div class="small-note">Revolut 隐含交易成本按 Total Amount 与 股数×成交价 的差额估算，可能包含佣金、税费、FX/执行价差与四舍五入；总收益已使用实际现金流口径，避免把费用当作利润。</div>'
+        f'{_render_unmatched_sell_breakdown(performance)}'
         f'{_render_closed_trade_breakdown(performance)}'
         f'{_render_transaction_cost_breakdown(performance)}'
     )
+
+
+def _render_unmatched_sell_breakdown(performance) -> str:
+    if not performance.unmatched_sells:
+        return ""
+    rows = "".join(
+        "<tr>"
+        f"<td>{escape(item.broker or 'N/A')}</td>"
+        f"<td>{escape(item.symbol)}</td>"
+        f"<td>{escape(item.date or 'N/A')}</td>"
+        f"<td>{escape(_fmt_quantity(item.sell_quantity))}</td>"
+        f"<td>{escape(_fmt_quantity(item.unmatched_quantity))}</td>"
+        f"<td>{escape(_unmatched_proceeds(item))}</td>"
+        "</tr>"
+        for item in performance.unmatched_sells
+    )
+    return f"""<details class="portfolio-notes" open>
+      <summary>成本基础不完整的卖出明细</summary>
+      <div class="small-note">这些记录来自 SELL 交易行，不是现金转账。对应买入批次缺失时，不计入已实现盈亏。</div>
+      <div class="portfolio-table-scroll">
+        <table class="portfolio-table">
+          <thead><tr><th>来源</th><th>资产</th><th>日期</th><th>卖出数量</th><th>未匹配数量</th><th>净卖出额</th></tr></thead>
+          <tbody>{rows}</tbody>
+        </table>
+      </div>
+    </details>"""
+
+
+def _unmatched_proceeds(item) -> str:
+    if item.net_proceeds_gbp is not None:
+        return f"£{item.net_proceeds_gbp:,.2f}"
+    if item.net_proceeds_native is not None:
+        return f"{item.currency} {item.net_proceeds_native:,.2f}"
+    return "N/A"
 
 
 def _render_closed_trade_breakdown(performance) -> str:

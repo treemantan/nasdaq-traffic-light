@@ -48,6 +48,13 @@ class OneDriveCloudImportTests(unittest.TestCase):
         ]
         self.assertEqual(MODULE._latest(files)["name"], "new.csv")
 
+    def test_graph_modified_time_can_be_preserved_on_downloaded_file(self) -> None:
+        timestamp = MODULE._graph_modified_timestamp(
+            {"lastModifiedDateTime": "2026-06-13T19:25:42Z"}
+        )
+
+        self.assertEqual(timestamp, 1781378742.0)
+
     def test_duplicate_download_names_get_unique_destinations(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory)

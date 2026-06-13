@@ -141,6 +141,21 @@ def _payload() -> dict:
 
 
 class SerenityReportTests(unittest.TestCase):
+    def test_incomplete_cost_basis_is_described_as_partial_not_total_portfolio_pnl(self) -> None:
+        payload = _payload()
+        payload["etf_monitor"]["portfolio_summary"].append(
+            "可识别总收益 +808.19 GBP：未实现盈亏 -14.86 GBP。"
+        )
+        payload["etf_monitor"]["portfolio_warnings"].append(
+            "成本基础不完整：Revolut QBTS 于2026-06-05卖出 £2,325.46，当前账单窗口缺少对应买入成本。"
+        )
+
+        report = build_serenity_report(payload)
+
+        observations = " ".join(report.portfolio_observations)
+        self.assertIn("不是完整账户收益", observations)
+        self.assertIn("QBTS", observations)
+
     def test_cash_like_holding_is_not_treated_as_red_drawdown(self) -> None:
         payload = _payload()
         payload["etf_monitor"]["portfolio_positions"].append(

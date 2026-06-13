@@ -7,6 +7,7 @@ import os
 import subprocess
 import sys
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -204,9 +205,22 @@ def _download_item(token: str, config: GraphConfig, item: dict[str, Any], output
         # storage host must not receive the Graph bearer token.
         with build_opener(_PreauthenticatedDownloadRedirectHandler()).open(request, timeout=30) as response:
             destination.write_bytes(response.read())
+        modified_at = _graph_modified_timestamp(item)
+        if modified_at is not None:
+            os.utime(destination, (modified_at, modified_at))
     except (HTTPError, URLError) as exc:
         raise RuntimeError(f"Failed to download OneDrive item {item.get('name')!r}: {exc}") from exc
     return destination
+
+
+def _graph_modified_timestamp(item: dict[str, Any]) -> float | None:
+    raw = str(item.get("lastModifiedDateTime") or "").strip()
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
 
 
 def _unique_destination(output_dir: Path, file_name: str) -> Path:

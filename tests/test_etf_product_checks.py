@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import csv
+import json
 import tempfile
 import unittest
 import os
@@ -210,6 +212,53 @@ class ETFProductCheckTests(unittest.TestCase):
             _, warnings, _, _ = _load_portfolio_summary([self._asset("A.L", ())], path)
 
         self.assertTrue(any("statement 平均成本降级估值" in item and "A.L" in item for item in warnings))
+
+    def test_portfolio_summary_explains_unmatched_sell_source_and_partial_return(self) -> None:
+        unmatched = [
+            {
+                "symbol": "QBTS",
+                "date": "2026-06-05",
+                "transaction_type": "SELL - MARKET",
+                "sell_quantity": 132.11847577,
+                "matched_quantity": 0,
+                "unmatched_quantity": 132.11847577,
+                "net_proceeds_gbp": 2325.46,
+                "broker": "Revolut",
+            }
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "portfolio.csv"
+            with path.open("w", encoding="utf-8", newline="") as handle:
+                writer = csv.DictWriter(
+                    handle,
+                    fieldnames=[
+                        "symbol",
+                        "weight_pct",
+                        "account_total_return_gbp",
+                        "unmatched_sell_proceeds_gbp",
+                        "unmatched_sells_json",
+                    ],
+                )
+                writer.writeheader()
+                writer.writerow(
+                    {
+                        "symbol": "A.L",
+                        "weight_pct": "100",
+                        "account_total_return_gbp": "808.19",
+                        "unmatched_sell_proceeds_gbp": "2325.46",
+                        "unmatched_sells_json": json.dumps(unmatched),
+                    }
+                )
+            summary, warnings, _, _ = _load_portfolio_summary(
+                [self._asset("A.L", ())],
+                path,
+            )
+
+        self.assertTrue(any("不是完整账户收益" in item for item in summary))
+        warning = " ".join(warnings)
+        self.assertIn("Revolut QBTS", warning)
+        self.assertIn("£2,325.46", warning)
+        self.assertIn("不是 CASH WITHDRAWAL", warning)
 
     def test_portfolio_exposure_combines_direct_and_etf_top_holdings(self) -> None:
         asset = self._asset("A.L", (ETFHolding("NVDA", "NVIDIA", 10), ETFHolding("AVGO", "Broadcom", 5)))
