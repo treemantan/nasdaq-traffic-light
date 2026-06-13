@@ -34,7 +34,18 @@ def without_portfolio(payload: dict) -> dict:
     monitor["portfolio_mag7_notes"] = []
 
     if removed_symbols:
-        for field in ("summary", "warnings", "change_summary"):
+        summary = monitor.get("summary")
+        if isinstance(summary, str):
+            for symbol in removed_symbols:
+                summary = summary.replace(symbol, "已隐藏组合补充标的")
+            monitor["summary"] = summary
+        else:
+            monitor["summary"] = [
+                item
+                for item in (summary or [])
+                if not _mentions_any_symbol(item, removed_symbols)
+            ]
+        for field in ("warnings", "change_summary"):
             monitor[field] = [
                 item
                 for item in (monitor.get(field) or [])

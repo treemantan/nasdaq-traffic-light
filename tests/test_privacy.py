@@ -6,6 +6,31 @@ from market_report.privacy import without_portfolio
 
 
 class ReportPrivacyTests(unittest.TestCase):
+    def test_without_portfolio_keeps_etf_summary_as_text(self) -> None:
+        payload = {
+            "etf_monitor": {
+                "assets": [
+                    {"key": "vuag", "symbol": "VUAG.L", "provider": "Vanguard"},
+                    {
+                        "key": "portfolio-secret-l",
+                        "symbol": "SECRET.L",
+                        "provider": "Portfolio",
+                        "theme": "Portfolio Supplement",
+                    },
+                ],
+                "summary": "Public ETF summary; strong assets include VUAG.L and SECRET.L.",
+                "warnings": [],
+                "change_summary": [],
+            }
+        }
+
+        sanitized = without_portfolio(payload)
+
+        summary = sanitized["etf_monitor"]["summary"]
+        self.assertIsInstance(summary, str)
+        self.assertIn("VUAG.L", summary)
+        self.assertNotIn("SECRET.L", summary)
+
     def test_without_portfolio_removes_private_fields_and_dynamic_assets(self) -> None:
         payload = {
             "portfolio_event_monitor": {"events": [{"event_id": "private-event"}]},
