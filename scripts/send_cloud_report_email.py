@@ -118,7 +118,7 @@ def _prepare_serenity_report() -> tuple[str, Path, dict, list[str]] | int:
     if missing:
         print(f"Missing required environment variable(s): {', '.join(missing)}", file=sys.stderr)
         return 4
-    report_path = emailer._latest_html_report(
+    report_path = _latest_market_report(
         Path(os.environ.get("REPORT_OUTPUT_DIR", "output"))
     )
     if report_path is None:
@@ -169,7 +169,9 @@ def _prepare_full_report() -> tuple[str, Path, str, dict, list[str]] | int:
         print(f"Missing required environment variable(s): {', '.join(missing)}", file=sys.stderr)
         return 4
 
-    report_path = emailer._latest_html_report(Path(os.environ.get("REPORT_OUTPUT_DIR", "output")))
+    report_path = _latest_market_report(
+        Path(os.environ.get("REPORT_OUTPUT_DIR", "output"))
+    )
     if report_path is None:
         print("No HTML market report found in output directory.", file=sys.stderr)
         return 5
@@ -190,6 +192,17 @@ def _prepare_full_report() -> tuple[str, Path, str, dict, list[str]] | int:
 
 def _without_portfolio(payload: dict) -> dict:
     return without_portfolio(payload)
+
+
+def _latest_market_report(output_dir: Path) -> Path | None:
+    if not output_dir.exists():
+        return None
+    reports = sorted(
+        output_dir.glob("market-report-*.html"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    return reports[0] if reports else None
 
 
 def _recipient_key(address: str) -> str:

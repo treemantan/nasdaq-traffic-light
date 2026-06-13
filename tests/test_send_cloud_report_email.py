@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -17,6 +19,53 @@ def _load_module():
 
 
 class SendCloudReportEmailTests(unittest.TestCase):
+    def test_serenity_preparation_uses_market_report_when_serenity_report_is_newer(self) -> None:
+        module = _load_module()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir)
+            market_html = output_dir / "market-report-2026-06-13.html"
+            market_html.write_text("<html>market</html>", encoding="utf-8")
+            market_html.with_suffix(".json").write_text(
+                json.dumps(
+                    {
+                        "etf_monitor": {
+                            "portfolio_positions": [{"symbol": "VUAG.L"}],
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            serenity_html = output_dir / "serenity-report-2026-06-13.html"
+            serenity_html.write_text("<html>serenity</html>", encoding="utf-8")
+            serenity_html.with_suffix(".json").write_text(
+                json.dumps({"report_date": "2026-06-13"}),
+                encoding="utf-8",
+            )
+            newer = market_html.stat().st_mtime + 10
+            os.utime(serenity_html, (newer, newer))
+            os.utime(serenity_html.with_suffix(".json"), (newer, newer))
+
+            with patch.dict(
+                os.environ,
+                {
+                    "EMAIL_PROVIDER": "resend",
+                    "RESEND_API_KEY": "test-key",
+                    "REPORT_EMAIL_FROM": "reports@example.com",
+                    "PORTFOLIO_EMAIL_TO": "private@example.com",
+                    "REPORT_OUTPUT_DIR": str(output_dir),
+                },
+                clear=False,
+            ):
+                prepared = module._prepare_serenity_report()
+
+            self.assertNotIsInstance(prepared, int)
+            assert not isinstance(prepared, int)
+            self.assertEqual(prepared[1], market_html)
+            self.assertEqual(
+                prepared[2]["etf_monitor"]["portfolio_positions"],
+                [{"symbol": "VUAG.L"}],
+            )
+
     def test_serenity_mode_sends_private_weekly_report_with_attachment_only(self) -> None:
         module = _load_module()
         report = Path("output/market-report-2026-06-06.html")
