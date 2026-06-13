@@ -204,7 +204,7 @@ def _iter_ibkr_xml_rows(path: Path):
         context = ET.iterparse(path, events=("end",))
         for _event, element in context:
             tag = _xml_tag(element)
-            if tag == "Trade":
+            if tag in {"Trade", "TradeConfirm"}:
                 yield _normalize_ibkr_xml_row(element.attrib, row_kind="TRADE")
                 element.clear()
             elif tag == "CashTransaction":

@@ -87,10 +87,9 @@ class SendCloudReportEmailTests(unittest.TestCase):
         with patch.object(module.Path, "exists", return_value=True), patch.object(
             module, "_prepare_full_report", return_value=("resend", report, "<html>report</html>", {}, ["group@example.com"])
         ), patch.object(
-            module.emailer, "_render_message", side_effect=[
-                ("Public", "<html>public sanitized</html>", "public"),
-                ("Private", "<html>private portfolio</html>", "private"),
-            ]
+            module.emailer,
+            "_render_message",
+            return_value=("Public", "<html>public sanitized</html>", "public"),
         ), patch.object(module, "_send", return_value=0) as send, patch.dict(
             os.environ,
             {"EMAIL_MODE": "full", "PORTFOLIO_EMAIL_TO": "private@example.com"},
@@ -103,6 +102,8 @@ class SendCloudReportEmailTests(unittest.TestCase):
             self.assertEqual(attachments[0]["filename"], "private-portfolio-report-2026-05-27.html")
             self.assertEqual(attachments[0]["content"], b"<html>report</html>")
             self.assertEqual(attachments[0]["mime_type"], "text/html")
+            self.assertEqual(send.call_args_list[1].args[2], "<html>public sanitized</html>")
+            self.assertIn("not embedded", send.call_args_list[1].args[3])
 
     def test_full_portfolio_run_without_private_recipient_sends_sanitized_group_only(self) -> None:
         module = _load_module()

@@ -26,7 +26,7 @@ class IbkrFlexError(RuntimeError):
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Download IBKR Flex Query XML reports.")
+    parser = argparse.ArgumentParser(description="Download IBKR Flex Query CSV or XML reports.")
     parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--token", default=os.getenv("IBKR_FLEX_TOKEN", "").strip())
     parser.add_argument("--activity-query-id", default=os.getenv("IBKR_ACTIVITY_QUERY_ID", "").strip())
@@ -151,7 +151,8 @@ def _download_query_with_retry(
         try:
             reference = request_flex_statement(token, query_id)
             content = download_flex_statement(token, reference, max_wait_seconds=max_wait_seconds)
-            destination = output_dir / f"ibkr-{label}-{query_id}.xml"
+            extension = _statement_extension(content)
+            destination = output_dir / f"ibkr-{label}-{query_id}{extension}"
             destination.write_bytes(content)
             _append_diagnostic(
                 diagnostics,
@@ -243,6 +244,13 @@ def _request_xml(url: str) -> ET.Element:
         return ET.fromstring(content)
     except ET.ParseError as exc:
         raise IbkrFlexError("IBKR Flex service returned invalid XML.", phase="parse_xml") from exc
+
+
+def _statement_extension(content: bytes) -> str:
+    sample = content.lstrip()
+    if sample.startswith(b"<?xml") or sample.startswith(b"<"):
+        return ".xml"
+    return ".csv"
 
 
 def _request_bytes(url: str) -> bytes:

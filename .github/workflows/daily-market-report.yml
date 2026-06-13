@@ -211,7 +211,7 @@ jobs:
           fi
           python scripts/download_onedrive_statements.py --output-dir .cloud-statements
 
-      - name: Download IBKR Flex XML statements
+      - name: Download IBKR Flex statements
         if: steps.email-mode.outputs.should_run == 'true'
         shell: bash
         env:
@@ -263,6 +263,14 @@ jobs:
         if: steps.email-mode.outputs.should_run == 'true' && steps.email-mode.outputs.email_mode == 'serenity'
         run: python scripts/generate_serenity_report.py
 
+      - name: Build public portfolio-redacted artifact
+        if: steps.email-mode.outputs.should_run == 'true'
+        run: |
+          python scripts/build_public_report_artifact.py \
+            --config config.example.json \
+            --output-dir output \
+            --artifact-dir .public-artifact
+
       - name: Send emergency market shock alert
         if: steps.email-mode.outputs.should_run == 'true'
         env:
@@ -308,9 +316,8 @@ jobs:
         with:
           name: market-report-${{ github.run_id }}-${{ steps.email-mode.outputs.email_mode }}
           path: |
-            output/*.html
-            output/*.json
-            output/cache/*.json
+            .public-artifact/*.html
+            .public-artifact/*.json
             .cloud-statements/ibkr-flex-diagnostics.json
           if-no-files-found: error
 

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from copy import deepcopy
 import os
 from pathlib import Path
 import sys
@@ -13,6 +12,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import send_report_email as emailer
+from market_report.privacy import without_portfolio
 
 
 def main() -> int:
@@ -37,11 +37,19 @@ def main() -> int:
     else:
         public_recipients = group_recipients
 
+    public_payload = without_portfolio(payload)
+    public_subject, public_html, public_text = emailer._render_message(
+        "full", report_path, html, public_payload
+    )
     if public_recipients:
-        subject, public_html, public_text = emailer._render_message(
-            "full", report_path, html, _without_portfolio(payload)
+        public_result = _send(
+            provider,
+            public_subject,
+            public_html,
+            public_text,
+            public_recipients,
+            report_path,
         )
-        public_result = _send(provider, subject, public_html, public_text, public_recipients, report_path)
         if public_result:
             return public_result
     else:
@@ -54,16 +62,18 @@ def main() -> int:
         )
         return 0
 
-    private_subject, private_html, private_text = emailer._render_message("full", report_path, html, payload)
-    print("Full report contains imported portfolio data; sending a second private portfolio edition.")
+    print(
+        "Full report contains imported portfolio data; sending the private report "
+        "as an HTML attachment only."
+    )
     attachment = _html_attachment(report_path, html, "private-portfolio-report")
     return _send(
         provider,
-        f"{private_subject} - Private Portfolio",
-        private_html,
-        private_text
-        + "\n\nThis private edition includes imported portfolio data. "
-        + "The complete private HTML report is attached for full table/detail review.",
+        f"{public_subject} - Private Portfolio Attachment",
+        public_html,
+        public_text
+        + "\n\nThe complete private portfolio report is attached as an HTML file. "
+        + "Private holdings are not embedded in this email body.",
         private_recipients,
         report_path,
         attachments=[attachment],
@@ -179,20 +189,7 @@ def _prepare_full_report() -> tuple[str, Path, str, dict, list[str]] | int:
 
 
 def _without_portfolio(payload: dict) -> dict:
-    sanitized = deepcopy(payload)
-    sanitized["portfolio_event_monitor"] = None
-    monitor = sanitized.get("etf_monitor")
-    if isinstance(monitor, dict):
-        monitor["portfolio_positions"] = []
-        monitor["portfolio_summary"] = []
-        monitor["portfolio_warnings"] = []
-        monitor["portfolio_total_value_gbp"] = None
-        monitor["portfolio_performance"] = None
-        monitor["portfolio_exposures"] = []
-        monitor["portfolio_exposure_notes"] = []
-        monitor["portfolio_mag7_exposures"] = []
-        monitor["portfolio_mag7_notes"] = []
-    return sanitized
+    return without_portfolio(payload)
 
 
 def _recipient_key(address: str) -> str:

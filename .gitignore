@@ -13,6 +13,7 @@ config.email.json
 portfolio.csv
 trading-account-statement_*.csv
 .cloud-statements/
+.public-artifact/
 
 .env
 .venv/

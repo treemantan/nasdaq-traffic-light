@@ -18,6 +18,14 @@ python -m market_report --config config.example.json --dry-run
 
 工作流会生成报告、上传 artifact，并根据 `EMAIL_MODE` 决定是否发送邮件。
 
+### 公共 Artifact 与私人组合数据
+
+- GitHub Actions 的 `market-report-*` Artifact 只上传去除实际持仓、组合收益、组合事件和动态持仓补充 ticker 的公开市场报告。
+- 私人组合 HTML/JSON 不上传 Artifact；`output/cache` 也不作为可下载 Artifact 发布。
+- `full` 模式的邮件正文统一使用公开去持仓版本。
+- 当存在 `portfolio.csv` 且配置了 `PORTFOLIO_EMAIL_TO` 时，完整私人组合 HTML 仅作为附件发送给私人收件人。
+- 私人组合 JSON 不通过邮件或 Artifact 分发。
+
 邮件模式：
 
 - `none`：只生成报告和 artifact
@@ -90,7 +98,7 @@ SMTP_PORT
 SMTP_SECURITY
 ```
 
-多个收件人使用英文逗号分隔。`PORTFOLIO_EMAIL_TO` 可选：当 full 报告包含实际持仓时，公开收件人收到移除组合信息的版本，私人收件人收到完整版本。若同一邮箱同时出现在 `REPORT_EMAIL_TO` 和 `PORTFOLIO_EMAIL_TO`，full 模式会优先发送私人完整版本，并从公开版收件人中去重。`serenity` 模式必须配置 `PORTFOLIO_EMAIL_TO`，并且只向该私人名单发送。
+多个收件人使用英文逗号分隔。`PORTFOLIO_EMAIL_TO` 可选：当 full 报告包含实际持仓时，公开与私人收件人的邮件正文均为去持仓版本，私人收件人另获完整私人组合 HTML 附件。若同一邮箱同时出现在 `REPORT_EMAIL_TO` 和 `PORTFOLIO_EMAIL_TO`，会从公开收件人中去重，避免重复邮件。`serenity` 模式必须配置 `PORTFOLIO_EMAIL_TO`，并且只向该私人名单发送。
 
 ## OneDrive 本地 inbox
 
@@ -148,15 +156,15 @@ ONEDRIVE_IBKR_FOLDER_PATH=Trading/IBKR Transaction Statement
 ONEDRIVE_USE_LATEST_PER_ACCOUNT_FOLDER=false
 ```
 
-云端导入会先下载 OneDrive 中的 Revolut/IBKR 手动 statement，再尝试下载 IBKR Flex Web Service XML，最后统一导入 `.cloud-statements` 目录下的 CSV/XML。IBKR Trade Confirmation 会只使用 `LevelOfDetail=EXECUTION` 的成交明细，避免把 summary/order/execution 重复计入持仓；如果某个来源不存在，会跳过该辅助来源并继续生成报告。
+云端导入会先下载 OneDrive 中的 Revolut/IBKR 手动 statement，再尝试下载 IBKR Flex Web Service statement，最后统一导入 `.cloud-statements` 目录下的 CSV/XML。推荐 Full Activity 保留 XML，Activity Light 与 Trade Confirmation 使用 CSV。下载器会根据实际响应内容自动保存为 `.xml` 或 `.csv`，不依赖文件名猜测格式。IBKR Trade Confirmation 只使用 `LevelOfDetail=EXECUTION` 的成交明细，避免把 summary/order/execution 重复计入持仓；旧的 XML Trade Confirmation 中 `<TradeConfirm>` 节点也会被识别。如果某个来源不存在，会跳过该辅助来源并继续生成报告。
 
-IBKR Flex token 对短时间连续请求可能触发限流，Activity statement 也可能临时返回 `Statement could not be generated at this time`。Activity statement 比 Trade Confirmation 更重，主要用于 full 报告中的历史账户、持仓、现金、股息和费用信息；pulse/volatility 等盘中轻量邮件默认只下载 Trade Confirmation，避免一天多次触发 Activity 生成。full 模式会先尝试完整 Activity query；如果 IBKR 在 `SendRequest` 阶段拒绝生成，会立刻尝试 `IBKR_ACTIVITY_LIGHT_QUERY_ID`，不再等待 90 秒重试。工作流仍会在不同 Flex Query 之间等待 30 秒，以降低 token 限流概率。如果其中一个 query 已成功下载、另一个 query 最终仍失败，流程会记录 partial failure 并继续导入已下载的 XML。只有所有 IBKR Flex query 都失败时，才会中断该下载步骤。
+IBKR Flex token 对短时间连续请求可能触发限流，Activity statement 也可能临时返回 `Statement could not be generated at this time`。Activity statement 比 Trade Confirmation 更重，主要用于 full 报告中的历史账户、持仓、现金、股息和费用信息；pulse/volatility 等盘中轻量邮件默认只下载 Trade Confirmation，避免一天多次触发 Activity 生成。full 模式会先尝试完整 Activity query；如果 IBKR 在 `SendRequest` 阶段拒绝生成，会立刻尝试 `IBKR_ACTIVITY_LIGHT_QUERY_ID`，不再等待 90 秒重试。工作流仍会在不同 Flex Query 之间等待 30 秒，以降低 token 限流概率。如果其中一个 query 已成功下载、另一个 query 最终仍失败，流程会记录 partial failure 并继续导入已下载的 CSV/XML。只有所有 IBKR Flex query 都失败时，才会中断该下载步骤。
 
 每次 IBKR Flex 下载都会生成 `.cloud-statements/ibkr-flex-diagnostics.json` 并随 GitHub Actions artifact 上传。该文件不包含 token 或 ReferenceCode，只记录 query label、attempt、IBKR 返回的 status/error、运行模式和耗时。若 Activity 在 Actions 中反复失败但网页手动生成成功，优先下载该诊断文件，对比是否一直停在 `send_request` 阶段、是否只发生在 full 模式、以及是否与同一天多次运行有关。
 
 ## IBKR Flex Web Service 云端导入
 
-IBKR Flex Query 推荐使用 XML。GitHub Actions 支持以下 secrets：
+IBKR Flex Query 推荐采用混合格式：Full Activity 使用 XML，Activity Light 与 Trade Confirmation 使用 CSV。GitHub Actions 支持以下 secrets：
 
 ```text
 IBKR_FLEX_TOKEN
@@ -168,13 +176,23 @@ IBKR_TRADE_CONFIRM_QUERY_ID=1535495
 - `IBKR_ACTIVITY_QUERY_ID` 对应 `PastTradesTransacInfo`，用于历史交易、持仓、现金、股息、费用和表现。
 - `IBKR_ACTIVITY_LIGHT_QUERY_ID` 对应轻量 Activity query，作为完整 Activity 被 IBKR Web Service 拒绝生成时的 fallback。
 - `IBKR_TRADE_CONFIRM_QUERY_ID` 对应 `TodayTradesTransacInfo`，用于当天/近期成交确认，补充 Activity statement 的延迟。
+
+推荐的 IBKR 输出设置：
+
+| Query | Format | Header/trailer | Column headers | Single header row | Section code/line descriptor |
+| --- | --- | --- | --- | --- | --- |
+| Full Activity | XML | 不适用 | 不适用 | 不适用 | 不适用 |
+| Activity Light | CSV | No | Yes | No | Yes |
+| Trade Confirmation | CSV | No | Yes | Yes | No |
+
+同一个 Flex Query ID 的输出格式由 IBKR 后台配置决定，Web Service 下载时不能临时覆盖。当前方案不创建额外的 Full Activity CSV Query：Full Activity 保留 XML，轻量 fallback 和当日成交确认使用 CSV。
 - token 不应写入代码、日志或聊天记录，只放在 GitHub Secrets。
 
 本地测试可运行：
 
 ```text
 python scripts/download_ibkr_flex.py --output-dir .cloud-statements --query-delay-seconds 30 --transient-retries 0 --transient-wait-seconds 0
-python scripts/import_portfolio_statements.py .cloud-statements/*.xml
+python scripts/import_portfolio_statements.py .cloud-statements/*.xml .cloud-statements/*.csv
 ```
 
 该路径只使用免费 App Registration 和标准 Graph 文件读取接口，不创建 Azure VM、Storage、Functions、数据库或其他计费资源。CSV、refresh token 和 `portfolio.csv` 不应提交到 GitHub。

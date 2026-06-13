@@ -61,6 +61,24 @@ class ImportPortfolioStatementsTests(unittest.TestCase):
         self.assertAlmostEqual(positions["VWRL"]["cost_gbp"], 4001.994)
         self.assertAlmostEqual(positions["VWRL"]["dividend_income_gbp"], 1.5)
 
+    def test_ibkr_trade_confirm_xml_rows_are_supported(self) -> None:
+        content = """<?xml version="1.0" encoding="UTF-8"?>
+<FlexQueryResponse>
+  <TradeConfirms>
+    <TradeConfirm accountId="U1" symbol="JEDG" tradeID="t1" ibExecID="exec-jedg"
+      tradeDate="20260612" buySell="BUY" quantity="10" tradePrice="12.34"
+      netCash="-123.40" levelOfDetail="EXECUTION" />
+  </TradeConfirms>
+</FlexQueryResponse>
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "ibkr-trade-confirm.xml"
+            path.write_text(content, encoding="utf-8")
+            positions = MODULE._reconstruct_ibkr_positions([path])
+
+        self.assertAlmostEqual(positions["JEDG"]["quantity"], 10)
+        self.assertAlmostEqual(positions["JEDG"]["cost_gbp"], 123.40)
+
     def test_revolut_and_ibkr_positions_merge_by_symbol(self) -> None:
         revolut = {"VWRL": {"quantity": 1.0, "cost_gbp": 100.0, "realized_pnl_gbp": 0.0, "dividend_income_gbp": 0.0}}
         ibkr = {"VWRL": {"quantity": 2.0, "cost_gbp": 210.0, "realized_pnl_gbp": 0.0, "dividend_income_gbp": 1.5}}

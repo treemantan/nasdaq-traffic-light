@@ -98,6 +98,36 @@ class DownloadIbkrFlexTests(unittest.TestCase):
             self.assertTrue(destination.exists())
             self.assertIn("transient_generation", (Path(tmpdir) / "diagnostics.json").read_text(encoding="utf-8"))
 
+    def test_download_query_uses_csv_extension_for_csv_content(self) -> None:
+        csv_content = (
+            b"ClientAccountID,Symbol,TradeID,TradeDate,Buy/Sell,Quantity,"
+            b"TradePrice,NetCash,LevelOfDetail\n"
+            b"U1,JEDG,t1,20260612,BUY,10,12.34,-123.40,EXECUTION\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            output_dir = Path(directory)
+            diagnostics_file = output_dir / "diagnostics.json"
+            diagnostics = {"events": []}
+            with patch.object(MODULE, "request_flex_statement", return_value="reference"), patch.object(
+                MODULE, "download_flex_statement", return_value=csv_content
+            ):
+                destination = MODULE._download_query_with_retry(
+                    token="token",
+                    label="trade-confirm",
+                    query_id="trade-confirm-id",
+                    output_dir=output_dir,
+                    max_wait_seconds=1,
+                    rate_limit_retries=0,
+                    rate_limit_wait_seconds=0,
+                    transient_retries=0,
+                    transient_wait_seconds=0,
+                    diagnostics=diagnostics,
+                    diagnostics_file=diagnostics_file,
+                )
+
+            self.assertEqual(destination.name, "ibkr-trade-confirm-trade-confirm-id.csv")
+            self.assertEqual(destination.read_bytes(), csv_content)
+
     def test_main_continues_when_one_query_is_rate_limited_after_success(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             output_dir = Path(tmpdir)
