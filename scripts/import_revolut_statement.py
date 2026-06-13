@@ -20,6 +20,7 @@ from market_report.etf_monitor import (
     _distance_to_sma,
     _fetch_yahoo_price_data,
     _normalize_currency,
+    _rsi,
     _robust_trend_volatility,
     _safe_float,
     _sma,
@@ -370,6 +371,7 @@ def _build_portfolio_rows(positions: dict[str, dict[str, object]]) -> list[dict[
         total_return = unrealized + realized_pnl + dividend_income
         day_change_pct = (price / previous_price - 1) * 100 if price is not None and previous_price not in (None, 0) else None
         peak_price, peak_date, drawdown_from_peak_pct = _year_peak_snapshot(history)
+        technical = _portfolio_technical_snapshot(history)
         (
             sma200,
             distance_sma200_pct,
@@ -407,8 +409,16 @@ def _build_portfolio_rows(positions: dict[str, dict[str, object]]) -> list[dict[
                 "year_peak_date": peak_date.isoformat() if peak_date else "",
                 "drawdown_from_year_peak_pct": drawdown_from_peak_pct,
                 "peak_watch": peak_watch,
+                "ema21_native": technical["ema21"],
+                "distance_ema21_pct": technical["distance_ema21_pct"],
+                "sma50_native": technical["sma50"],
+                "distance_sma50_pct": technical["distance_sma50_pct"],
                 "sma200_native": sma200,
                 "distance_sma200_pct": distance_sma200_pct,
+                "rsi14": technical["rsi14"],
+                "momentum_1m_pct": technical["momentum_1m_pct"],
+                "support_20d_native": technical["support_20d"],
+                "support_60d_native": technical["support_60d"],
                 "daily_volatility_pct": daily_volatility_pct,
                 "pullback_sigma_1m": pullback_sigma_1m,
                 "yellow_drawdown_threshold_pct": yellow_drawdown_threshold_pct,
@@ -512,8 +522,16 @@ def _build_portfolio_rows(positions: dict[str, dict[str, object]]) -> list[dict[
                 "year_peak_date": str(item["year_peak_date"]),
                 "drawdown_from_year_peak_pct": _fmt_number(item["drawdown_from_year_peak_pct"]),
                 "peak_watch": str(item["peak_watch"]),
+                "ema21_native": _fmt_number(item["ema21_native"]),
+                "distance_ema21_pct": _fmt_number(item["distance_ema21_pct"]),
+                "sma50_native": _fmt_number(item["sma50_native"]),
+                "distance_sma50_pct": _fmt_number(item["distance_sma50_pct"]),
                 "sma200_native": _fmt_number(item["sma200_native"]),
                 "distance_sma200_pct": _fmt_number(item["distance_sma200_pct"]),
+                "rsi14": _fmt_number(item["rsi14"]),
+                "momentum_1m_pct": _fmt_number(item["momentum_1m_pct"]),
+                "support_20d_native": _fmt_number(item["support_20d_native"]),
+                "support_60d_native": _fmt_number(item["support_60d_native"]),
                 "daily_volatility_pct": _fmt_number(item["daily_volatility_pct"]),
                 "pullback_sigma_1m": _fmt_number(item["pullback_sigma_1m"]),
                 "yellow_drawdown_threshold_pct": _fmt_number(item["yellow_drawdown_threshold_pct"]),
@@ -828,6 +846,23 @@ def _portfolio_drawdown_snapshot(
     )
 
 
+def _portfolio_technical_snapshot(history: list[tuple[date, float]]) -> dict[str, float | None]:
+    values = [price for _, price in history]
+    latest = values[-1] if values else None
+    ema21 = _ema(values, 21)
+    sma50 = _sma(values, 50)
+    return {
+        "ema21": ema21,
+        "distance_ema21_pct": _distance_to_sma(latest, ema21),
+        "sma50": sma50,
+        "distance_sma50_pct": _distance_to_sma(latest, sma50),
+        "rsi14": _rsi(values, 14),
+        "momentum_1m_pct": _momentum(values, 21),
+        "support_20d": min(values[-20:]) if values else None,
+        "support_60d": min(values[-60:]) if values else None,
+    }
+
+
 def _adaptive_drawdown_thresholds(daily_volatility_pct: float | None) -> tuple[float, float]:
     monthly_volatility = daily_volatility_pct * math.sqrt(21) if daily_volatility_pct is not None else 0
     return max(5.0, monthly_volatility), max(10.0, monthly_volatility * 2)
@@ -853,6 +888,22 @@ def _drawdown_regime_label(
     ):
         return "趋势破坏风险：回撤较深且中期趋势或波动结构已转弱"
     return "需要复核：回撤超过常态区间，需结合SMA200、波动率与基本面事件判断"
+
+
+def _ema(values: list[float], window: int) -> float | None:
+    if not values or window <= 0:
+        return None
+    alpha = 2 / (window + 1)
+    result = values[0]
+    for value in values[1:]:
+        result = alpha * value + (1 - alpha) * result
+    return result
+
+
+def _momentum(values: list[float], days: int) -> float | None:
+    if len(values) <= days or values[-days - 1] == 0:
+        return None
+    return (values[-1] / values[-days - 1] - 1) * 100
 
 
 def _fmt_number(value: float | None) -> str:

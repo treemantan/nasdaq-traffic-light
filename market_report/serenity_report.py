@@ -171,7 +171,10 @@ def build_serenity_report(payload: dict[str, Any], focus_limit: int = 5) -> Sere
     concentration.extend(
         str(item) for item in (monitor.get("portfolio_exposure_notes") or []) if item
     )
-    red_count = sum(_is_red_alert(item) for item in positions)
+    red_count = sum(
+        _is_red_alert(item, assets.get(_symbol_key(item.get("symbol"))))
+        for item in positions
+    )
     ai_count = sum(_is_ai_related(item, assets.get(_symbol_key(item.get("symbol")))) for item in positions)
     conclusion = (
         f"本周组合需要优先复核{red_count}个红色回撤或趋势破坏持仓；"
@@ -327,13 +330,13 @@ def _research_priority(
 ) -> float:
     score = _number(position.get("weight_pct"))
     key = _symbol_key(position.get("symbol"))
-    if _is_red_alert(position):
+    if _is_red_alert(position, asset):
         score += 120
-    elif _number(position.get("drawdown_from_year_peak_pct")) <= -_number(
-        position.get("yellow_drawdown_threshold_pct"), 5
-    ):
+    elif not _is_non_equity(asset) and _number(
+        position.get("drawdown_from_year_peak_pct")
+    ) <= -_number(position.get("yellow_drawdown_threshold_pct"), 5):
         score += 45
-    if "趋势破坏" in str(position.get("drawdown_regime") or ""):
+    if not _is_non_equity(asset) and "趋势破坏" in str(position.get("drawdown_regime") or ""):
         score += 50
     if _is_ai_related(position, asset):
         score += 28
@@ -344,7 +347,11 @@ def _research_priority(
     return score
 
 
-def _is_red_alert(position: dict[str, Any]) -> bool:
+def _is_red_alert(
+    position: dict[str, Any], asset: dict[str, Any] | None = None
+) -> bool:
+    if _is_non_equity(asset):
+        return False
     drawdown = _optional_number(position.get("drawdown_from_year_peak_pct"))
     threshold = _number(position.get("red_drawdown_threshold_pct"), 10)
     return (
@@ -378,10 +385,26 @@ def _framework_profile(key: str, asset: dict[str, Any]) -> tuple[str, str]:
 
 
 def _holding_state(position: dict[str, Any], asset: dict[str, Any]) -> list[str]:
+    if _is_non_equity(asset):
+        items = [
+            f"组合权重约{_number(position.get('weight_pct')):.1f}%，该资产按现金、短债或实物资产框架复核，不使用权益回撤阈值判定趋势破坏。",
+        ]
+        if asset.get("liquidity_label") or asset.get("liquidity_note"):
+            items.append(
+                f"流动性：{asset.get('liquidity_label') or '待确认'}；"
+                f"{asset.get('liquidity_note') or '规模、成交与价差数据不足。'}"
+            )
+        if asset.get("entry_note"):
+            items.append(str(asset["entry_note"]))
+        return items[:5]
+
     items = [
         f"组合权重约{_number(position.get('weight_pct')):.1f}%，未实现收益率{_fmt_pct(position.get('unrealized_pnl_pct'))}。",
         f"距年内高点{_fmt_pct(position.get('drawdown_from_year_peak_pct'))}，距SMA200 {_fmt_pct(position.get('distance_sma200_pct'))}。",
     ]
+    if not asset:
+        technical = _stock_technical_state(position)
+        items.extend(technical)
     if asset:
         items.append(
             f"新增仓位环境{int(_number(asset.get('entry_score'), 50))}/100，"
@@ -391,6 +414,22 @@ def _holding_state(position: dict[str, Any], asset: dict[str, Any]) -> list[str]
 
 
 def _holding_risks(position: dict[str, Any], asset: dict[str, Any]) -> list[str]:
+    if _is_non_equity(asset):
+        theme = str(asset.get("theme") or "")
+        if "Ultrashort" in theme or "Cash-like" in theme:
+            return [
+                "短端利率下行会逐步压低未来分派收益率，主要风险来自再投资收益下降，而不是股票式趋势破坏。",
+                "需持续核对组合久期、信用质量、基金规模、成交活跃度与买卖价差；SMA200和年内高点回撤仅作价格形态参考。",
+            ]
+        if "Treasury" in theme or "Bond" in theme:
+            return [
+                "利率上行会通过久期压低债券价格，需结合收益率曲线和实际利率判断，而不能单看价格均线。",
+                "GBP对冲成本、信用质量和流动性可能影响实际持有回报。",
+            ]
+        return [
+            "该资产不适用单一个股式供应链卡点与回撤框架，需按自身收益来源和风险因子复核。"
+        ]
+
     risks: list[str] = []
     drawdown = _optional_number(position.get("drawdown_from_year_peak_pct"))
     red = _number(position.get("red_drawdown_threshold_pct"), 10)
@@ -403,11 +442,32 @@ def _holding_risks(position: dict[str, Any], asset: dict[str, Any]) -> list[str]
         risks.append(f"拥挤度{crowding:.0f}/100，正向叙事可能已被较充分定价。")
     if asset.get("valuation_label"):
         risks.append(str(asset["valuation_label"]))
+    if not asset:
+        ema_distance = _optional_number(position.get("distance_ema21_pct"))
+        rsi = _optional_number(position.get("rsi14"))
+        momentum = _optional_number(position.get("momentum_1m_pct"))
+        if ema_distance is not None and ema_distance < 0:
+            risks.append(f"价格低于EMA21 {abs(ema_distance):.1f}%，短线尚未恢复主动买盘。")
+        if rsi is not None and rsi < 40:
+            risks.append(f"RSI14为{rsi:.1f}，动量偏弱；超卖不等于趋势已经反转。")
+        if momentum is not None and momentum < 0:
+            risks.append(f"近1个月动量{momentum:+.1f}%，仍需等待价格与基本面催化形成共振。")
     risks.extend(str(item) for item in (asset.get("warnings") or [])[:2] if item)
     return risks[:6]
 
 
 def _holding_support(position: dict[str, Any], asset: dict[str, Any]) -> list[str]:
+    if _is_non_equity(asset):
+        support = []
+        if asset.get("liquidity_label"):
+            support.append(
+                f"流动性状态为“{asset.get('liquidity_label')}”，可作为现金管理或防守仓位的可用性依据。"
+            )
+        if asset.get("risk_management_note"):
+            support.append(str(asset["risk_management_note"]))
+        support.append("对超短债应重点比较到期收益率、分派收益率、有效久期与现金替代价值。")
+        return support[:5]
+
     support: list[str] = []
     if _number(position.get("unrealized_pnl_pct")) > 0:
         support.append(f"当前未实现收益率仍为{_fmt_pct(position.get('unrealized_pnl_pct'))}，持仓尚有成本缓冲。")
@@ -417,6 +477,8 @@ def _holding_support(position: dict[str, Any], asset: dict[str, Any]) -> list[st
         support.append(str(asset.get("entry_label") or "当前趋势结构仍相对完整。"))
     if asset.get("risk_management_note"):
         support.append(str(asset["risk_management_note"]))
+    if not asset:
+        support.extend(_stock_support_levels(position))
     return support[:5]
 
 
@@ -495,7 +557,7 @@ def _priority_reason(
     events: list[dict[str, Any]],
 ) -> str:
     reasons = []
-    if _is_red_alert(position):
+    if _is_red_alert(position, asset):
         reasons.append("红色回撤/趋势破坏")
     if _is_ai_related(position, asset):
         reasons.append("AI或半导体链")
@@ -506,6 +568,50 @@ def _priority_reason(
     if _number(asset.get("crowding_score")) >= 70:
         reasons.append("拥挤度偏高")
     return "、".join(reasons) or "组合权重与风险贡献"
+
+
+def _is_non_equity(asset: dict[str, Any] | None) -> bool:
+    return bool(asset) and asset.get("equity_like") is False
+
+
+def _stock_technical_state(position: dict[str, Any]) -> list[str]:
+    items: list[str] = []
+    ema21 = _optional_number(position.get("ema21_native"))
+    ema_distance = _optional_number(position.get("distance_ema21_pct"))
+    sma50 = _optional_number(position.get("sma50_native"))
+    sma50_distance = _optional_number(position.get("distance_sma50_pct"))
+    rsi = _optional_number(position.get("rsi14"))
+    momentum = _optional_number(position.get("momentum_1m_pct"))
+    if ema21 is not None:
+        items.append(f"EMA21为{ema21:.2f}，现价相对EMA21 {ema_distance:+.1f}%" if ema_distance is not None else f"EMA21为{ema21:.2f}。")
+    if sma50 is not None:
+        items.append(f"SMA50为{sma50:.2f}，现价相对SMA50 {sma50_distance:+.1f}%" if sma50_distance is not None else f"SMA50为{sma50:.2f}。")
+    if rsi is not None or momentum is not None:
+        rsi_text = f"RSI14 {rsi:.1f}" if rsi is not None else "RSI14 N/A"
+        momentum_text = f"近1个月动量{momentum:+.1f}%" if momentum is not None else "近1个月动量N/A"
+        items.append(f"{rsi_text}；{momentum_text}。")
+    return items
+
+
+def _stock_support_levels(position: dict[str, Any]) -> list[str]:
+    levels: list[str] = []
+    support_20d = _optional_number(position.get("support_20d_native"))
+    support_60d = _optional_number(position.get("support_60d_native"))
+    ema21 = _optional_number(position.get("ema21_native"))
+    sma50 = _optional_number(position.get("sma50_native"))
+    sma200 = _optional_number(position.get("sma200_native"))
+    if support_20d is not None:
+        levels.append(f"近20日观察支撑约{support_20d:.2f}；跌破后需检查是否进入新的价格发现区间。")
+    if support_60d is not None and support_60d != support_20d:
+        levels.append(f"近60日次级支撑约{support_60d:.2f}，更适合用于中期风险复核。")
+    averages = [
+        label
+        for label, value in (("EMA21", ema21), ("SMA50", sma50), ("SMA200", sma200))
+        if value is not None
+    ]
+    if averages:
+        levels.append("均线确认顺序：" + " → ".join(averages) + "；重新站上短周期均线比单日反弹更有信息量。")
+    return levels
 
 
 def _event_symbols(item: dict[str, Any]) -> set[str]:

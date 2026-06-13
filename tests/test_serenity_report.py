@@ -141,6 +141,69 @@ def _payload() -> dict:
 
 
 class SerenityReportTests(unittest.TestCase):
+    def test_cash_like_holding_is_not_treated_as_red_drawdown(self) -> None:
+        payload = _payload()
+        payload["etf_monitor"]["portfolio_positions"].append(
+            {
+                "symbol": "ERNS.L",
+                "weight_pct": 40,
+                "unrealized_pnl_pct": 0,
+                "drawdown_from_year_peak_pct": -12,
+                "red_drawdown_threshold_pct": 10,
+                "distance_sma200_pct": -4,
+                "drawdown_regime": "趋势破坏风险",
+                "price_source": "Yahoo quote:ERNS.L",
+            }
+        )
+        payload["etf_monitor"]["assets"].append(
+            {
+                "symbol": "ERNS.L",
+                "theme": "GBP Ultrashort Bond / Cash-like",
+                "provider": "iShares",
+                "equity_like": False,
+                "entry_score": 58,
+                "crowding_score": 45,
+                "liquidity_label": "流动性可用",
+                "liquidity_note": "规模与成交较好",
+            }
+        )
+
+        report = build_serenity_report(payload)
+        erns = next(item for item in report.focus_holdings if item.symbol == "ERNS.L")
+
+        self.assertNotIn("红色回撤", erns.priority_reason)
+        self.assertIn("组合核心仓位", erns.priority_reason)
+        self.assertIn("利率", " ".join(erns.current_state + erns.risks + erns.supporting_evidence))
+
+    def test_stock_focus_includes_short_term_trend_and_support_diagnostics(self) -> None:
+        payload = _payload()
+        nflx = next(
+            item
+            for item in payload["etf_monitor"]["portfolio_positions"]
+            if item["symbol"] == "NFLX"
+        )
+        nflx.update(
+            {
+                "current_price_native": 81.52,
+                "ema21_native": 84.10,
+                "distance_ema21_pct": -3.07,
+                "sma50_native": 88.20,
+                "distance_sma50_pct": -7.57,
+                "rsi14": 38.5,
+                "momentum_1m_pct": -9.2,
+                "support_20d_native": 79.80,
+                "support_60d_native": 75.40,
+            }
+        )
+
+        report = build_serenity_report(payload)
+        focus = next(item for item in report.focus_holdings if item.symbol == "NFLX")
+        combined = " ".join(focus.current_state + focus.risks + focus.supporting_evidence)
+
+        self.assertIn("EMA21", combined)
+        self.assertIn("RSI14", combined)
+        self.assertIn("79.80", combined)
+
     def test_focus_selection_prioritizes_red_alerts_and_keeps_three_to_five_holdings(self) -> None:
         report = build_serenity_report(_payload())
 

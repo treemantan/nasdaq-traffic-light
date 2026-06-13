@@ -82,8 +82,16 @@ class PortfolioPosition:
     year_peak_date: str = ""
     drawdown_from_year_peak_pct: float | None = None
     peak_watch: str = ""
+    ema21_native: float | None = None
+    distance_ema21_pct: float | None = None
+    sma50_native: float | None = None
+    distance_sma50_pct: float | None = None
     sma200_native: float | None = None
     distance_sma200_pct: float | None = None
+    rsi14: float | None = None
+    momentum_1m_pct: float | None = None
+    support_20d_native: float | None = None
+    support_60d_native: float | None = None
     daily_volatility_pct: float | None = None
     pullback_sigma_1m: float | None = None
     yellow_drawdown_threshold_pct: float = 5
@@ -2364,8 +2372,16 @@ def _load_portfolio_summary(
             year_peak_date=str(row.get("year_peak_date") or ""),
             drawdown_from_year_peak_pct=_safe_float(row.get("drawdown_from_year_peak_pct")),
             peak_watch=str(row.get("peak_watch") or ""),
+            ema21_native=_safe_float(row.get("ema21_native")),
+            distance_ema21_pct=_safe_float(row.get("distance_ema21_pct")),
+            sma50_native=_safe_float(row.get("sma50_native")),
+            distance_sma50_pct=_safe_float(row.get("distance_sma50_pct")),
             sma200_native=_safe_float(row.get("sma200_native")),
             distance_sma200_pct=_safe_float(row.get("distance_sma200_pct")),
+            rsi14=_safe_float(row.get("rsi14")),
+            momentum_1m_pct=_safe_float(row.get("momentum_1m_pct")),
+            support_20d_native=_safe_float(row.get("support_20d_native")),
+            support_60d_native=_safe_float(row.get("support_60d_native")),
             daily_volatility_pct=_safe_float(row.get("daily_volatility_pct")),
             pullback_sigma_1m=_safe_float(row.get("pullback_sigma_1m")),
             yellow_drawdown_threshold_pct=_safe_float(row.get("yellow_drawdown_threshold_pct")) or 5,
@@ -2409,13 +2425,15 @@ def _load_portfolio_summary(
     red_peak_watches = [
         f"{item.symbol} {_fmt_signed_pct(item.drawdown_from_year_peak_pct)}（阈值 -{item.red_drawdown_threshold_pct:.1f}%）"
         for item in portfolio_positions
-        if item.drawdown_from_year_peak_pct is not None
+        if _position_uses_equity_drawdown(item, asset_map.get(item.symbol))
+        and item.drawdown_from_year_peak_pct is not None
         and item.drawdown_from_year_peak_pct <= -item.red_drawdown_threshold_pct
     ]
     yellow_peak_watches = [
         f"{item.symbol} {_fmt_signed_pct(item.drawdown_from_year_peak_pct)}（阈值 -{item.yellow_drawdown_threshold_pct:.1f}%）"
         for item in portfolio_positions
-        if item.drawdown_from_year_peak_pct is not None
+        if _position_uses_equity_drawdown(item, asset_map.get(item.symbol))
+        and item.drawdown_from_year_peak_pct is not None
         and -item.red_drawdown_threshold_pct < item.drawdown_from_year_peak_pct <= -item.yellow_drawdown_threshold_pct
     ]
     if red_peak_watches:
@@ -2425,7 +2443,8 @@ def _load_portfolio_summary(
     trend_breaks = [
         item.symbol
         for item in portfolio_positions
-        if "趋势破坏风险" in item.drawdown_regime
+        if _position_uses_equity_drawdown(item, asset_map.get(item.symbol))
+        and "趋势破坏风险" in item.drawdown_regime
     ]
     if trend_breaks:
         warnings.append(
@@ -2505,6 +2524,14 @@ def _adjust_portfolio_position_for_asset_type(
         peak_watch=position.peak_watch or "现金替代观察",
         drawdown_regime="现金/短债：SMA200不作为趋势破坏核心依据；重点看分派收益、短端利率、久期与流动性。",
     )
+
+
+def _position_uses_equity_drawdown(
+    position: PortfolioPosition, asset: ETFAssetMonitor | None
+) -> bool:
+    if asset is not None:
+        return asset.equity_like
+    return "现金/短债" not in position.drawdown_regime
 
 
 def _is_direct_high_beta_position(position: PortfolioPosition) -> bool:

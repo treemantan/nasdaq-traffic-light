@@ -17,6 +17,20 @@ _reconstruct_positions = MODULE._reconstruct_positions
 
 
 class RevolutImportTests(unittest.TestCase):
+    def test_portfolio_technical_snapshot_exposes_short_term_trend_and_supports(self) -> None:
+        history = [
+            (date(2026, 1, 1).fromordinal(date(2026, 1, 1).toordinal() + offset), 100 + offset)
+            for offset in range(80)
+        ]
+
+        snapshot = MODULE._portfolio_technical_snapshot(history)
+
+        self.assertIsNotNone(snapshot["ema21"])
+        self.assertIsNotNone(snapshot["sma50"])
+        self.assertGreater(snapshot["rsi14"], 70)
+        self.assertEqual(snapshot["support_20d"], 160)
+        self.assertEqual(snapshot["support_60d"], 120)
+
     def test_multiple_statements_are_combined(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             first = Path(directory) / "isa.csv"
