@@ -7,6 +7,7 @@ def without_portfolio(payload: dict) -> dict:
     """Return a report payload with imported private-portfolio data removed."""
     sanitized = deepcopy(payload)
     sanitized["portfolio_event_monitor"] = None
+    _remove_private_technical_swing(sanitized)
 
     monitor = sanitized.get("etf_monitor")
     if not isinstance(monitor, dict):
@@ -54,6 +55,22 @@ def without_portfolio(payload: dict) -> dict:
 
     _remove_portfolio_context_from_iron_condor(sanitized)
     return sanitized
+
+
+def _remove_private_technical_swing(payload: dict) -> None:
+    technical = payload.get("technical_swing")
+    if not isinstance(technical, dict):
+        return
+    public_assessments = [
+        item
+        for item in (technical.get("assessments") or [])
+        if isinstance(item, dict) and str(item.get("origin") or "").lower() != "holding"
+    ]
+    technical["assessments"] = public_assessments
+    technical["warnings"] = []
+    technical["summary"] = (
+        f"公开版本保留{len(public_assessments)}个非持仓观察标的；私人持仓技术结构已移除。"
+    )
 
 
 def _is_portfolio_supplement(asset: dict) -> bool:

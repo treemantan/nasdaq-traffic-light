@@ -12,6 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from market_report.technical_indicators import ema as shared_ema
 from market_report.etf_monitor import (
     DEFAULT_ETF_SPECS,
     ETF_CACHE_PATH,
@@ -988,13 +989,7 @@ def _drawdown_regime_label(
 
 
 def _ema(values: list[float], window: int) -> float | None:
-    if not values or window <= 0:
-        return None
-    alpha = 2 / (window + 1)
-    result = values[0]
-    for value in values[1:]:
-        result = alpha * value + (1 - alpha) * result
-    return result
+    return shared_ema(values, window)
 
 
 def _momentum(values: list[float], days: int) -> float | None:

@@ -177,5 +177,67 @@ class SendReportEmailTests(unittest.TestCase):
         self.assertIn("主要风险与反证", attachments[0]["content"])
 
 
+    def test_technical_package_accepts_optional_empty_ticker_input(self) -> None:
+        module = _load_send_report_email_module()
+        payload = {
+            "technical_swing": {
+                "generated_at": "2026-06-14T12:00:00+00:00",
+                "summary": "One holding assessed.",
+                "assessments": [
+                    {
+                        "symbol": "MSFT",
+                        "origin": "holding",
+                        "identity": {
+                            "requested_symbol": "MSFT",
+                            "resolved_symbol": "MSFT",
+                            "name": "Microsoft",
+                            "exchange": "NMS",
+                            "currency": "USD",
+                            "instrument_type": "EQUITY",
+                        },
+                        "current_price": 500,
+                        "change_pct": 1,
+                        "indicators": {
+                            "ema21": 490,
+                            "sma50": 480,
+                            "sma200": 430,
+                            "atr14": 9,
+                            "rsi14": 62,
+                            "average_volume_20": 20_000_000,
+                        },
+                        "trend": "Strong",
+                        "technical_status": "Near resistance",
+                        "supports": [],
+                        "resistances": [],
+                        "invalidation_level": 470,
+                        "volume_ratio": 1.1,
+                        "volume_label": "Normal",
+                        "volume_confirmation": "Normal volume",
+                        "note": "Monitor confirmation.",
+                        "data_source": "Yahoo",
+                        "data_timestamp": "2026-06-13T20:00:00+00:00",
+                        "data_quality": "live",
+                        "asset_class": "equity",
+                        "warnings": [],
+                    }
+                ],
+                "warnings": [],
+            }
+        }
+
+        with TemporaryDirectory() as temp_dir:
+            subject, html, text, attachments = module._render_technical_package(
+                payload, Path(temp_dir)
+            )
+
+        self.assertEqual(subject, "技术波段观察 - 2026-06-14")
+        self.assertIn("MSFT", html)
+        self.assertIn("HTML", text)
+        self.assertEqual(
+            attachments[0]["filename"],
+            "technical-swing-report-2026-06-14.html",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

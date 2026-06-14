@@ -10,6 +10,7 @@ from .news_monitor import NewsEvent, NewsMonitor
 from .portfolio_events import PortfolioEventMonitor
 from .scoring import IronCondorAssessment, ScoreDriver, ScoredMetric, ScoredReport
 from .shock_backtest import MarketShockBacktest, MarketShockSample
+from .technical_swing import SwingAssessment, SwingZone, TechnicalSwingReport
 from .time_utils import format_timestamp
 
 
@@ -36,6 +37,7 @@ def render_html_report(report: ScoredReport, title: str) -> str:
     news_monitor = _render_news_monitor(report.news_monitor)
     mag7_capital_network = _render_mag7_capital_network(report.mag7_capital_network)
     etf_monitor = _render_etf_monitor(report.etf_monitor, report.news_monitor, report.portfolio_event_monitor)
+    technical_swing = _render_technical_swing(report.technical_swing)
 
     return f"""<!doctype html>
 <html lang="zh-CN">
@@ -122,6 +124,16 @@ def render_html_report(report: ScoredReport, title: str) -> str:
     .capital-value {{ color: #f3f4f6; font-weight: 700; margin-top: 4px; }}
     .capital-note {{ color: var(--subtle); font-size: 13px; margin-top: 5px; }}
     .capital-subhead {{ color: var(--text); font-size: 15px; font-weight: 700; margin-top: 14px; }}
+    .swing-panel {{ margin-bottom: 14px; }}
+    .swing-grid {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 12px; }}
+    .swing-card {{ border: 1px solid var(--line); border-radius: 8px; padding: 12px; background: rgba(255,255,255,.025); min-width: 0; }}
+    .swing-card-head {{ display: flex; justify-content: space-between; gap: 10px; align-items: start; }}
+    .swing-card-title {{ font-weight: 760; font-size: 16px; }}
+    .swing-status {{ color: #bfdbfe; font-weight: 650; text-align: right; }}
+    .swing-values {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; margin-top: 10px; }}
+    .swing-value {{ border-top: 1px solid var(--line); padding-top: 7px; color: var(--subtle); font-size: 12px; min-width: 0; }}
+    .swing-value strong {{ display: block; color: var(--text); font-size: 13px; overflow-wrap: anywhere; }}
+    .swing-note {{ color: var(--subtle); font-size: 12px; margin-top: 9px; }}
     .etf-summary {{ color: var(--subtle); margin-bottom: 12px; }}
     .portfolio-panel {{ margin: 12px 0; border: 1px solid var(--line); border-radius: 8px; background: rgba(255,255,255,.02); overflow: hidden; }}
     .portfolio-head {{ display: grid; grid-template-columns: 1fr auto; gap: 14px; padding: 14px; background: rgba(255,255,255,.025); }}
@@ -219,7 +231,7 @@ def render_html_report(report: ScoredReport, title: str) -> str:
     .driver-meta {{ grid-column: 1 / -1; color: var(--muted); font-size: 12px; }}
     .footer {{ margin-top: 16px; color: var(--muted); font-size: 12px; display: flex; justify-content: space-between; gap: 12px; border-top: 1px solid var(--line); padding-top: 12px; }}
     @media (max-width: 980px) {{
-      .hero, .grid, .columns, .strategy-head, .strategy-lists {{ grid-template-columns: 1fr; }}
+      .hero, .grid, .columns, .strategy-head, .strategy-lists, .swing-grid {{ grid-template-columns: 1fr; }}
       .datebox {{ text-align: left; }}
       .etf-group-head {{ display: block; }}
       .etf-group-stats {{ text-align: left; margin-top: 7px; }}
@@ -233,6 +245,7 @@ def render_html_report(report: ScoredReport, title: str) -> str:
     @media (max-width: 620px) {{
       .topbar, .metric-grid {{ grid-template-columns: 1fr; }}
       .etf-card-grid, .etf-card-lines {{ grid-template-columns: 1fr; }}
+      .swing-values {{ grid-template-columns: 1fr 1fr; }}
       .score {{ font-size: 52px; }}
     }}
   </style>
@@ -282,6 +295,7 @@ def render_html_report(report: ScoredReport, title: str) -> str:
     {market_shock_backtest}
     {news_monitor}
     {mag7_capital_network}
+    {technical_swing}
     {etf_monitor}
 
     <section class="grid">{groups}</section>
@@ -326,6 +340,83 @@ def render_html_report(report: ScoredReport, title: str) -> str:
   </main>
 </body>
 </html>"""
+
+
+def _render_technical_swing(report: TechnicalSwingReport | None) -> str:
+    if report is None:
+        return ""
+    holdings = [item for item in report.assessments if item.origin == "holding"]
+    watchlist = [item for item in report.assessments if item.origin != "holding"]
+    warning_html = "".join(f"<li>{escape(item)}</li>" for item in report.warnings[:8])
+    sections = []
+    if holdings:
+        sections.append(
+            '<h3>持仓技术结构</h3><div class="swing-grid">'
+            + "".join(_render_swing_card(item) for item in holdings)
+            + "</div>"
+        )
+    if watchlist:
+        sections.append(
+            '<h3 style="margin-top:16px;">观察池与临时标的</h3><div class="swing-grid">'
+            + "".join(_render_swing_card(item) for item in watchlist)
+            + "</div>"
+        )
+    empty = '<div class="muted">当前没有持仓、固定观察池或临时 ticker 需要分析。</div>'
+    return f"""<section class="panel swing-panel">
+      <h2>技术波段观察</h2>
+      <div class="summary">{escape(report.summary)}</div>
+      {''.join(sections) or empty}
+      {f'<details class="swing-note"><summary>数据质量与降级说明</summary><ul>{warning_html}</ul></details>' if warning_html else ''}
+      <div class="disclaimer">本模块识别趋势、支撑阻力与量价确认，仅用于观察 setup 与失效条件，不构成买卖建议。</div>
+    </section>"""
+
+
+def _render_swing_card(item: SwingAssessment) -> str:
+    indicators = item.indicators
+    support = _nearest_swing_zone(item.supports, item.current_price)
+    resistance = _nearest_swing_zone(item.resistances, item.current_price)
+    holding = ""
+    if item.origin == "holding":
+        holding = (
+            f'<div class="swing-value"><span>组合信息</span><strong>'
+            f'权重 {_fmt_plain(item.position_weight_pct)}% · '
+            f'未实现 {_fmt_signed_gbp(item.unrealized_pnl_gbp)}</strong></div>'
+        )
+    warning = f" · {escape('；'.join(item.warnings[:2]))}" if item.warnings else ""
+    return f"""<article class="swing-card">
+      <div class="swing-card-head">
+        <div>
+          <div class="swing-card-title">{escape(item.symbol)} · {escape(item.identity.name)}</div>
+          <div class="muted">{escape(item.origin)} · {escape(item.identity.exchange)} · {escape(item.identity.currency)}</div>
+        </div>
+        <div class="swing-status">{escape(item.technical_status)}</div>
+      </div>
+      <div class="swing-values">
+        <div class="swing-value"><span>价格 / 日变动</span><strong>{_fmt_plain(item.current_price)} / {_fmt_pct(item.change_pct)}</strong></div>
+        <div class="swing-value"><span>趋势结构</span><strong>{escape(item.trend)}</strong></div>
+        <div class="swing-value"><span>EMA21 / SMA50 / SMA200</span><strong>{_fmt_plain(indicators.ema21)} / {_fmt_plain(indicators.sma50)} / {_fmt_plain(indicators.sma200)}</strong></div>
+        <div class="swing-value"><span>ATR14 / RSI14</span><strong>{_fmt_plain(indicators.atr14)} / {_fmt_plain(indicators.rsi14)}</strong></div>
+        <div class="swing-value"><span>量能</span><strong>{escape(item.volume_label)} · {_fmt_plain(item.volume_ratio)}x</strong></div>
+        <div class="swing-value"><span>最近支撑</span><strong>{_fmt_swing_zone(support)}</strong></div>
+        <div class="swing-value"><span>最近阻力</span><strong>{_fmt_swing_zone(resistance)}</strong></div>
+        <div class="swing-value"><span>ATR失效观察</span><strong>{_fmt_plain(item.invalidation_level)}</strong></div>
+        {holding}
+      </div>
+      <div class="swing-note">{escape(item.volume_confirmation)}。{escape(item.note)}</div>
+      <div class="swing-note">来源：{escape(item.data_source)} · 数据时间：{escape(item.data_timestamp)} · 状态：{escape(item.data_quality)}{warning}</div>
+    </article>"""
+
+
+def _nearest_swing_zone(zones: tuple[SwingZone, ...], price: float | None) -> SwingZone | None:
+    if not zones or price is None:
+        return None
+    return min(zones, key=lambda zone: abs((zone.lower + zone.upper) / 2 - price))
+
+
+def _fmt_swing_zone(zone: SwingZone | None) -> str:
+    if zone is None:
+        return "N/A"
+    return f"{zone.lower:.2f}-{zone.upper:.2f} · {zone.score}/100"
 
 
 def _render_health_notes(report: ScoredReport) -> str:

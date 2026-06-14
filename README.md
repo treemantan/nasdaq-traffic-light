@@ -37,6 +37,7 @@ output/market-report-YYYY-MM-DD.json
 - [组合行情缓存与降级机制](docs/PORTFOLIO_QUOTE_CACHE.md)
 - [MAG7 企业资本关系图谱与后续地缘政治辅助分](docs/MAG7_CAPITAL_NETWORK.md)
 - [Serenity 私人持仓周报](docs/SERENITY_WEEKLY.md)
+- [Technical Swing Analysis 技术波段观察](docs/TECHNICAL_SWING.md)
 
 点击下方链接可打开对应文档。Codex 本地预览可能会调用系统默认 Markdown 应用；GitHub 中可直接跳转。
 

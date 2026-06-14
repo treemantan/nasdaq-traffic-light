@@ -15,6 +15,9 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from .technical_indicators import rsi as shared_rsi
+from .technical_indicators import sma as shared_sma
+
 
 ETF_CACHE_PATH = Path("output") / "cache" / "etf_monitor_cache.json"
 ETF_HEADERS = {
@@ -3416,26 +3419,11 @@ def _metric_change_pct(metrics: dict[str, Any] | None, key: str) -> float | None
 
 
 def _sma(values: list[float], window: int) -> float | None:
-    if len(values) < window:
-        return None
-    return sum(values[-window:]) / window
+    return shared_sma(values, window)
 
 
 def _rsi(values: list[float], window: int = 14) -> float | None:
-    if len(values) <= window:
-        return None
-    gains: list[float] = []
-    losses: list[float] = []
-    for current, previous in zip(values[-window:], values[-window - 1 : -1]):
-        change = current - previous
-        gains.append(max(change, 0))
-        losses.append(max(-change, 0))
-    avg_gain = sum(gains) / window
-    avg_loss = sum(losses) / window
-    if avg_loss == 0:
-        return 100.0
-    rs = avg_gain / avg_loss
-    return 100 - (100 / (1 + rs))
+    return shared_rsi(values, window)
 
 
 def _momentum(values: list[float], days: int) -> float | None:

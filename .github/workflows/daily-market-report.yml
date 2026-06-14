@@ -28,9 +28,13 @@ on:
   workflow_dispatch:
     inputs:
       email_mode:
-        description: "Email mode: none, pulse, volatility, full, serenity, auto"
+        description: "Email mode: none, pulse, volatility, full, serenity, technical, auto"
         required: false
         default: "full"
+      technical_tickers:
+        description: "Optional comma-separated exact tickers for this Technical run, e.g. MSFT,RKLB,JEDG.L"
+        required: false
+        default: ""
 
 jobs:
   build-and-send:
@@ -71,7 +75,7 @@ jobs:
                       env.write(f"TARGET_UK_DATE={target_date}\n")
               print(notice)
 
-          valid_modes = {"none", "pulse", "volatility", "full", "serenity", "auto"}
+          valid_modes = {"none", "pulse", "volatility", "full", "serenity", "technical", "auto"}
           if os.environ["EVENT_NAME"] == "workflow_dispatch":
               mode = os.environ.get("DISPATCH_EMAIL_MODE") or "full"
               if mode not in valid_modes:
@@ -227,7 +231,7 @@ jobs:
           fi
           activity_query_id="$IBKR_ACTIVITY_QUERY_ID"
           activity_light_query_id="$IBKR_ACTIVITY_LIGHT_QUERY_ID"
-          if [ "$EMAIL_MODE" != "full" ] && [ "$EMAIL_MODE" != "serenity" ]; then
+          if [ "$EMAIL_MODE" != "full" ] && [ "$EMAIL_MODE" != "serenity" ] && [ "$EMAIL_MODE" != "technical" ]; then
             echo "EMAIL_MODE=$EMAIL_MODE; skipping heavyweight IBKR Activity query and downloading Trade Confirmation only."
             activity_query_id=""
             activity_light_query_id=""
@@ -260,11 +264,17 @@ jobs:
 
       - name: Generate report
         if: steps.email-mode.outputs.should_run == 'true'
+        env:
+          TECHNICAL_TICKERS: ${{ inputs.technical_tickers }}
         run: python -m market_report --config config.example.json --dry-run
 
       - name: Generate Serenity weekly report
         if: steps.email-mode.outputs.should_run == 'true' && steps.email-mode.outputs.email_mode == 'serenity'
         run: python scripts/generate_serenity_report.py
+
+      - name: Generate Technical Swing report
+        if: steps.email-mode.outputs.should_run == 'true' && steps.email-mode.outputs.email_mode == 'technical'
+        run: python scripts/generate_technical_swing_report.py
 
       - name: Build public portfolio-redacted artifact
         if: steps.email-mode.outputs.should_run == 'true'

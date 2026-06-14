@@ -27,7 +27,7 @@ from market_report.time_utils import _timezone_for
 REQUIRED_RESEND_ENV = ("RESEND_API_KEY", "REPORT_EMAIL_TO", "REPORT_EMAIL_FROM")
 REQUIRED_SMTP_ENV = ("SMTP_USERNAME", "SMTP_PASSWORD", "REPORT_EMAIL_TO")
 VALID_PROVIDERS = {"resend", "smtp"}
-VALID_MODES = {"none", "pulse", "volatility", "full", "serenity", "auto"}
+VALID_MODES = {"none", "pulse", "volatility", "full", "serenity", "technical", "auto"}
 LONDON = ZoneInfo("Europe/London") if ZoneInfo else None
 
 
@@ -47,7 +47,11 @@ def main() -> int:
         print("EMAIL_MODE=none; report email skipped successfully.")
         return 0
 
-    recipient_env = "PORTFOLIO_EMAIL_TO" if mode == "serenity" else "REPORT_EMAIL_TO"
+    recipient_env = (
+        "PORTFOLIO_EMAIL_TO"
+        if mode in {"serenity", "technical"}
+        else "REPORT_EMAIL_TO"
+    )
     required_env = (
         ("SMTP_USERNAME", "SMTP_PASSWORD", recipient_env)
         if provider == "smtp"
@@ -70,7 +74,7 @@ def main() -> int:
         return 6
 
     payload = _load_payload(report_path)
-    if mode in {"pulse", "volatility", "full", "serenity"} and payload is None:
+    if mode in {"pulse", "volatility", "full", "serenity", "technical"} and payload is None:
         print(f"Structured report payload not found for EMAIL_MODE={mode}: {report_path.with_suffix('.json')}", file=sys.stderr)
         return 7
 
@@ -82,6 +86,10 @@ def main() -> int:
     attachments = None
     if mode == "serenity":
         subject, message_html, message_text, attachments = _render_serenity_package(
+            payload or {}, output_dir
+        )
+    elif mode == "technical":
+        subject, message_html, message_text, attachments = _render_technical_package(
             payload or {}, output_dir
         )
     else:
@@ -222,7 +230,11 @@ def _infer_email_mode(now: datetime | None = None) -> str:
 def _latest_html_report(output_dir: Path) -> Path | None:
     if not output_dir.exists():
         return None
-    reports = sorted(output_dir.glob("*.html"), key=lambda path: path.stat().st_mtime, reverse=True)
+    reports = sorted(
+        output_dir.glob("market-report-*.html"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
     return reports[0] if reports else None
 
 
@@ -277,6 +289,27 @@ def _render_serenity_package(
     }
     if not report_path.exists():
         raise RuntimeError("Serenity report attachment was not written.")
+    return subject, html, text, [attachment]
+
+
+def _render_technical_package(
+    payload: dict, output_dir: Path
+) -> tuple[str, str, str, list[dict[str, str | bytes]]]:
+    from market_report.technical_swing import (
+        render_technical_swing_email,
+        render_technical_swing_html,
+        technical_swing_from_payload,
+        write_technical_swing_report,
+    )
+
+    report = technical_swing_from_payload(payload.get("technical_swing") or {})
+    report_path, _ = write_technical_swing_report(report, output_dir)
+    subject, html, text = render_technical_swing_email(report)
+    attachment = {
+        "filename": f"technical-swing-report-{_report_date(report_path)}.html",
+        "content": render_technical_swing_html(report),
+        "mime_type": "text/html",
+    }
     return subject, html, text, [attachment]
 
 
@@ -432,9 +465,11 @@ def _report_from_payload(payload: dict):
             },
         )
 
+    normalized_payload = dict(payload)
+    normalized_payload.setdefault("technical_swing", {})
     return _dataclass_from_dict(
         ScoredReport,
-        payload,
+        normalized_payload,
         converters={
             "metrics": lambda _raw: metrics,
             "regime": lambda raw: _dataclass_from_dict(RegimeAssessment, raw or {}),
@@ -449,8 +484,15 @@ def _report_from_payload(payload: dict):
             "mag7_capital_network": lambda _raw: mag7_capital_network,
             "portfolio_event_monitor": lambda _raw: portfolio_event_monitor,
             "market_shock_backtest": _market_shock_backtest_from_payload,
+            "technical_swing": _technical_swing_from_payload,
         },
     )
+
+
+def _technical_swing_from_payload(raw: object):
+    from market_report.technical_swing import technical_swing_from_payload
+
+    return technical_swing_from_payload(raw if isinstance(raw, dict) else {})
 
 
 def _market_metric_from_payload(raw: dict):

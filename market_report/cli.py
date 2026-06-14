@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from dataclasses import asdict, replace
 from datetime import date, datetime
 from pathlib import Path
@@ -17,6 +18,7 @@ from .portfolio_events import build_portfolio_event_monitor
 from .render import render_html_report
 from .scoring import score_snapshot
 from .shock_backtest import analyze_market_shock_history
+from .technical_swing import build_technical_swing_report
 
 
 def main() -> int:
@@ -32,6 +34,22 @@ def main() -> int:
     news_monitor = fetch_news_monitor()
     mag7_capital_network = build_mag7_capital_network()
     portfolio_event_monitor = build_portfolio_event_monitor(etf_monitor.portfolio_positions)
+    asset_classes = {
+        asset.symbol.upper(): (
+            "cash_like"
+            if "cash-like" in asset.theme.lower() or "ultrashort" in asset.theme.lower()
+            else "fixed_income"
+            if not asset.equity_like
+            else "equity"
+        )
+        for asset in etf_monitor.assets
+    }
+    technical_swing = build_technical_swing_report(
+        etf_monitor.portfolio_positions,
+        config.swing_watchlist,
+        os.environ.get("TECHNICAL_TICKERS", ""),
+        asset_classes=asset_classes,
+    )
     previous_regime = load_previous_regime(config.output_dir)
     scored = score_snapshot(
         snapshot,
@@ -42,6 +60,7 @@ def main() -> int:
         news_monitor=news_monitor,
         mag7_capital_network=mag7_capital_network,
         portfolio_event_monitor=portfolio_event_monitor,
+        technical_swing=technical_swing,
     )
     scored = replace(scored, market_shock_backtest=analyze_market_shock_history(snapshot.metrics))
 

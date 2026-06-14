@@ -6,6 +6,27 @@ from market_report.privacy import without_portfolio
 
 
 class ReportPrivacyTests(unittest.TestCase):
+    def test_without_portfolio_removes_holding_technical_assessments(self) -> None:
+        payload = {
+            "technical_swing": {
+                "summary": "one holding and one watchlist",
+                "warnings": ["SECRET holding warning"],
+                "assessments": [
+                    {"symbol": "SECRET", "origin": "holding"},
+                    {"symbol": "MSFT", "origin": "watchlist"},
+                ],
+            }
+        }
+
+        sanitized = without_portfolio(payload)
+
+        self.assertEqual(
+            sanitized["technical_swing"]["assessments"],
+            [{"symbol": "MSFT", "origin": "watchlist"}],
+        )
+        self.assertEqual(sanitized["technical_swing"]["warnings"], [])
+        self.assertNotIn("SECRET", str(sanitized))
+
     def test_without_portfolio_keeps_etf_summary_as_text(self) -> None:
         payload = {
             "etf_monitor": {

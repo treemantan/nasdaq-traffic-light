@@ -27,6 +27,7 @@ class AppConfig:
     report_timezone: str
     output_dir: Path
     weights: dict[str, float]
+    swing_watchlist: list[str]
     email: EmailConfig
 
 
@@ -43,6 +44,7 @@ def load_config(path: str) -> AppConfig:
     report = raw.get("report", {})
     email = raw.get("email", {})
     weights = _normalize_weights(raw.get("weights", {}))
+    swing_watchlist = _env_list("SWING_WATCHLIST") or _as_list(raw.get("swing_watchlist", []))
 
     recipients = _env_list("REPORT_RECIPIENTS") or _as_list(email.get("to", []))
     username = os.environ.get("SMTP_USERNAME", email.get("username", ""))
@@ -53,6 +55,7 @@ def load_config(path: str) -> AppConfig:
         report_timezone=report.get("timezone", "America/New_York"),
         output_dir=Path(report.get("output_dir", "output")),
         weights=weights,
+        swing_watchlist=swing_watchlist,
         email=EmailConfig(
             enabled=_env_bool("EMAIL_ENABLED", bool(email.get("enabled", False))),
             smtp_host=os.environ.get("SMTP_HOST", email.get("smtp_host", "smtp.gmail.com")),

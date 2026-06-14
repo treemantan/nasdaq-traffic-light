@@ -273,5 +273,39 @@ class SerenityReportTests(unittest.TestCase):
         self.assertIn("非投资建议", html)
 
 
+    def test_serenity_reuses_shared_technical_swing_assessment(self) -> None:
+        payload = _payload()
+        payload["technical_swing"] = {
+            "assessments": [
+                {
+                    "symbol": "NFLX",
+                    "asset_class": "equity",
+                    "trend": "Medium-term weakness",
+                    "technical_status": "Near support",
+                    "volume_label": "High volume",
+                    "indicators": {
+                        "ema21": 82.0,
+                        "sma50": 86.0,
+                        "sma200": 74.0,
+                        "atr14": 3.5,
+                    },
+                    "supports": [
+                        {"lower": 78.0, "upper": 80.0, "score": 76}
+                    ],
+                    "resistances": [],
+                    "invalidation_level": 76.25,
+                }
+            ]
+        }
+
+        report = build_serenity_report(payload)
+        focus = next(item for item in report.focus_holdings if item.symbol == "NFLX")
+        combined = " ".join(focus.current_state + focus.supporting_evidence)
+
+        self.assertIn("共享技术框架", combined)
+        self.assertIn("78.00", combined)
+        self.assertIn("76.25", combined)
+
+
 if __name__ == "__main__":
     unittest.main()

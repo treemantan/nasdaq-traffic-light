@@ -33,6 +33,7 @@ python -m market_report --config config.example.json --dry-run
 - `volatility`：波动率和 Iron Condor 环境简报
 - `full`：完整 HTML 报告
 - `serenity`：私人持仓周度深度复核，仅发送到 `PORTFOLIO_EMAIL_TO`
+- `technical`：手动技术波段观察，向 `PORTFOLIO_EMAIL_TO` 发送摘要与完整 HTML 附件
 - `auto`：按 `Europe/London` 当前本地时间自动推断
 
 `auto` 映射：
@@ -43,6 +44,8 @@ python -m market_report --config config.example.json --dry-run
 - `20:00-23:59`：`full`
 
 `auto` 只用于日内邮件，不会自动推断为 `serenity`；Serenity 由周六 schedule 或手动选择触发。
+
+`technical` 只用于手动 `workflow_dispatch`，不会新增 UK ETF 定时扫描。手动触发时可选填写 `technical_tickers`，使用英文逗号分隔明确 ticker；该输入可以留空。系统始终分析当前持仓，并合并配置文件中的固定 `swing_watchlist`。完整说明见 [Technical Swing Analysis](TECHNICAL_SWING.md)。
 
 默认工作日 UK 节奏：
 

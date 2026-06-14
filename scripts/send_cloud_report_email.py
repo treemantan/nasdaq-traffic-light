@@ -20,6 +20,8 @@ def main() -> int:
     mode = emailer._infer_email_mode() if requested_mode == "auto" else requested_mode
     if mode == "serenity":
         return _send_serenity_report()
+    if mode == "technical":
+        return emailer.main()
     if mode != "full" or not Path("portfolio.csv").exists():
         return emailer.main()
 

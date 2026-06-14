@@ -10,6 +10,7 @@
     "treasury_10y": 0.2,
     "dxy": 0.2
   },
+  "swing_watchlist": [],
   "email": {
     "enabled": false,
     "smtp_host": "smtp.gmail.com",

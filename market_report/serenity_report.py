@@ -140,6 +140,11 @@ def build_serenity_report(payload: dict[str, Any], focus_limit: int = 5) -> Sere
         for item in ((payload.get("news_monitor") or {}).get("events") or [])
         if isinstance(item, dict)
     ]
+    swing_assessments = {
+        str(item.get("symbol") or "").upper(): item
+        for item in ((payload.get("technical_swing") or {}).get("assessments") or [])
+        if isinstance(item, dict) and item.get("symbol")
+    }
 
     ranked = sorted(
         positions,
@@ -151,7 +156,13 @@ def build_serenity_report(payload: dict[str, Any], focus_limit: int = 5) -> Sere
     )
     limit = min(5, max(3, focus_limit))
     focus = [
-        _build_focus_holding(item, assets, events, news)
+        _build_focus_holding(
+            item,
+            assets,
+            events,
+            news,
+            swing_assessments.get(str(item.get("symbol") or "").upper()),
+        )
         for item in ranked[: min(limit, len(ranked))]
     ]
 
@@ -306,6 +317,7 @@ def _build_focus_holding(
     assets: dict[str, dict[str, Any]],
     events: list[dict[str, Any]],
     news: list[dict[str, Any]],
+    swing: dict[str, Any] | None = None,
 ) -> SerenityFocusHolding:
     symbol = str(position.get("symbol") or "N/A").upper()
     key = _symbol_key(symbol)
@@ -315,6 +327,10 @@ def _build_focus_holding(
     framework_fit, bottleneck = _framework_profile(key, asset)
     risks = _holding_risks(position, asset)
     support = _holding_support(position, asset)
+    current_state = _holding_state(position, asset)
+    if swing:
+        current_state.extend(_swing_state_lines(swing))
+        support.extend(_swing_support_lines(swing))
     catalysts = _holding_catalysts(related_events, related_news)
     sources = _holding_sources(related_events, related_news)
     gaps = []
@@ -330,7 +346,7 @@ def _build_focus_holding(
         priority_reason=_priority_reason(position, asset, related_events),
         framework_fit=framework_fit,
         bottleneck_assessment=bottleneck,
-        current_state=_holding_state(position, asset),
+        current_state=current_state,
         risks=risks or ["暂未发现明确结构性红旗，但仍需检查数据完整性与仓位集中度。"],
         supporting_evidence=support or ["现有结构化数据不足以确认明确的正向卡点优势。"],
         catalysts=catalysts or ["本周未识别到已登记的直接催化剂。"],
@@ -428,6 +444,57 @@ def _holding_state(position: dict[str, Any], asset: dict[str, Any]) -> list[str]
             f"拥挤度{int(_number(asset.get('crowding_score'), 50))}/100。"
         )
     return items
+
+
+def _swing_state_lines(swing: dict[str, Any]) -> list[str]:
+    indicators = swing.get("indicators") or {}
+    trend = str(swing.get("trend") or "数据不足")
+    status = str(swing.get("technical_status") or "中性")
+    volume = str(swing.get("volume_label") or "成交量数据不足")
+    lines = [
+        f"共享技术框架：{trend}；当前状态为{status}；量能分类为{volume}。",
+        "EMA21 / SMA50 / SMA200："
+        f"{_fmt_optional_number(indicators.get('ema21'))} / "
+        f"{_fmt_optional_number(indicators.get('sma50'))} / "
+        f"{_fmt_optional_number(indicators.get('sma200'))}；"
+        f"ATR14 {_fmt_optional_number(indicators.get('atr14'))}。",
+    ]
+    if str(swing.get("asset_class") or "") == "cash_like":
+        lines = [
+            "共享技术框架将该标的识别为现金/超短债资产；均线仅作净值路径参考，核心复核仍是收益率、久期、派息与流动性。"
+        ]
+    return lines
+
+
+def _swing_support_lines(swing: dict[str, Any]) -> list[str]:
+    if str(swing.get("asset_class") or "") == "cash_like":
+        return []
+    supports = swing.get("supports") or []
+    resistances = swing.get("resistances") or []
+    lines: list[str] = []
+    if supports:
+        zone = supports[0]
+        lines.append(
+            "最近技术支撑区约为"
+            f"{_fmt_optional_number(zone.get('lower'))}–{_fmt_optional_number(zone.get('upper'))}"
+            f"（强度 {int(_number(zone.get('score')))} / 100）。"
+        )
+    if resistances:
+        zone = resistances[0]
+        lines.append(
+            "最近技术阻力区约为"
+            f"{_fmt_optional_number(zone.get('lower'))}–{_fmt_optional_number(zone.get('upper'))}"
+            f"（强度 {int(_number(zone.get('score')))} / 100）。"
+        )
+    invalidation = _optional_number(swing.get("invalidation_level"))
+    if invalidation is not None:
+        lines.append(f"ATR 失效参考约为 {invalidation:.2f}；应以日线收盘确认，不以盘中瞬时刺穿代替。")
+    return lines
+
+
+def _fmt_optional_number(value: object) -> str:
+    number = _optional_number(value)
+    return f"{number:.2f}" if number is not None else "N/A"
 
 
 def _holding_risks(position: dict[str, Any], asset: dict[str, Any]) -> list[str]:

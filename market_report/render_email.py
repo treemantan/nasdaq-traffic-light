@@ -32,6 +32,7 @@ def render_email_report(report: ScoredReport) -> str:
     news_monitor = _render_news_monitor(report.news_monitor)
     mag7_capital_network = _render_mag7_capital_network(report.mag7_capital_network)
     etf_monitor = _render_etf_monitor(report.etf_monitor, report.news_monitor, report.portfolio_event_monitor)
+    technical_swing = _render_technical_swing_email(report.technical_swing)
     accent = report.light_color
 
     return f"""<!doctype html>
@@ -91,6 +92,7 @@ def render_email_report(report: ScoredReport) -> str:
           {market_shock_backtest}
           {news_monitor}
           {mag7_capital_network}
+          {technical_swing}
           {etf_monitor}
           {groups}
           <tr>
@@ -139,6 +141,65 @@ def render_email_report(report: ScoredReport) -> str:
   </table>
 </body>
 </html>"""
+
+
+def _render_technical_swing_email(report) -> str:
+    if report is None or not report.assessments:
+        return ""
+    holdings = [item for item in report.assessments if item.origin == "holding"]
+    watchlist = [item for item in report.assessments if item.origin != "holding"]
+    rows = "".join(_render_swing_email_row(item) for item in holdings + watchlist)
+    return f"""<tr>
+      <td style="padding:0 24px 18px;">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#151f2d;border:1px solid #263244;border-radius:8px;">
+          <tr><td style="padding:14px;">
+            <div style="font-size:19px;font-weight:700;color:#f3f4f6;">技术波段观察</div>
+            <div style="font-size:12px;color:#9ca3af;margin-top:4px;">日线收盘框架；支撑与阻力为区域，不构成买卖指令。持仓与观察池使用同一套 EMA、均线、ATR、成交量和枢轴算法。</div>
+            <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;font-size:12px;color:#d1d5db;margin-top:10px;">
+              <tr>
+                <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">标的</th>
+                <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">趋势 / 状态</th>
+                <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">支撑 / 阻力</th>
+                <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">量能</th>
+              </tr>
+              {rows}
+            </table>
+          </td></tr>
+        </table>
+      </td>
+    </tr>"""
+
+
+def _render_swing_email_row(item) -> str:
+    support = _nearest_swing_email_zone(item.supports, item.current_price, support=True)
+    resistance = _nearest_swing_email_zone(item.resistances, item.current_price, support=False)
+    support_text = _fmt_swing_email_zone(support)
+    resistance_text = _fmt_swing_email_zone(resistance)
+    origin = "持仓" if item.origin == "holding" else "观察"
+    return f"""<tr>
+      <td style="padding:8px;border-bottom:1px solid #263244;"><strong style="color:#f3f4f6;">{escape(item.symbol)}</strong><br><span style="color:#9ca3af;">{origin} · {escape(item.data_quality)}</span></td>
+      <td style="padding:8px;border-bottom:1px solid #263244;">{escape(item.trend)}<br><strong style="color:#bfdbfe;">{escape(item.technical_status)}</strong></td>
+      <td style="padding:8px;border-bottom:1px solid #263244;">支撑 {support_text}<br>阻力 {resistance_text}</td>
+      <td style="padding:8px;border-bottom:1px solid #263244;">{escape(item.volume_label)}<br>{escape(item.volume_confirmation)}</td>
+    </tr>"""
+
+
+def _nearest_swing_email_zone(zones, price, *, support: bool):
+    if price is None or not zones:
+        return None
+    if support:
+        candidates = [zone for zone in zones if zone.lower <= price]
+    else:
+        candidates = [zone for zone in zones if zone.upper >= price]
+    if not candidates:
+        return None
+    return min(candidates, key=lambda zone: abs((zone.lower + zone.upper) / 2 - price))
+
+
+def _fmt_swing_email_zone(zone) -> str:
+    if zone is None:
+        return "N/A"
+    return f"{zone.lower:.2f}–{zone.upper:.2f} ({zone.score}/100)"
 
 
 def _render_group(title: str, keys: list[str], metrics: dict[str, ScoredMetric]) -> str:
