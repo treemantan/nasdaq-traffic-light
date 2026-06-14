@@ -2569,20 +2569,13 @@ def _portfolio_ibkr_warning(position: PortfolioPosition) -> str:
     if not status or status == "live":
         return ""
 
-    def source_detail(
-        label: str,
-        source: str,
-        as_of: str,
-        updated: str,
-    ) -> str:
+    def source_detail(label: str, source: str, as_of: str) -> str:
         if not source:
             return f"{label} 缺失"
-        parts = [f"{label} 来源 {source}"]
+        parts = [label]
         if as_of:
-            parts.append(f"最近有效记录 {as_of}")
-        if updated:
-            parts.append(f"文件更新 {updated}")
-        return "，".join(parts)
+            parts.append(f"截止 {as_of}")
+        return " ".join(parts)
 
     details = "；".join(
         (
@@ -2590,13 +2583,11 @@ def _portfolio_ibkr_warning(position: PortfolioPosition) -> str:
                 "Activity",
                 position.ibkr_activity_source,
                 position.ibkr_activity_as_of,
-                position.ibkr_activity_file_updated,
             ),
             source_detail(
                 "Trade Confirmation",
                 position.ibkr_trade_source,
                 position.ibkr_trade_as_of,
-                position.ibkr_trade_file_updated,
             ),
         )
     )
@@ -2605,12 +2596,9 @@ def _portfolio_ibkr_warning(position: PortfolioPosition) -> str:
         "partial": "部分缺失",
         "missing": "数据缺失",
     }
-    raw_warning = position.ibkr_data_warning.strip()
-    suffix = f" {raw_warning}" if raw_warning else ""
     return (
         f"IBKR 数据状态：{labels.get(status, status)}。{details}。"
-        "请结合截止日期判断组合完整性；近期发生交易时应手动更新 OneDrive statement，"
-        f"以防整体持仓判断遗漏。{suffix}"
+        "如近期有新交易，请更新 OneDrive statement。"
     )
 
 

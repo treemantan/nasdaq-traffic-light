@@ -230,6 +230,9 @@ class ETFProductCheckTests(unittest.TestCase):
         self.assertIn("IBKR", warning)
         self.assertIn("2026-06-13", warning)
         self.assertIn("手动", warning)
+        self.assertEqual(warning.count("Activity"), 1)
+        self.assertEqual(warning.count("Trade Confirmation"), 1)
+        self.assertNotIn("IBKR自动下载失败，当前使用手动文件", warning)
         self.assertEqual(positions[0].ibkr_data_status, "manual-fallback")
 
     def test_portfolio_summary_explains_unmatched_sell_source_and_partial_return(self) -> None:
