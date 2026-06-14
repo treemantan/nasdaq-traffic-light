@@ -213,6 +213,25 @@ class ETFProductCheckTests(unittest.TestCase):
 
         self.assertTrue(any("statement 平均成本降级估值" in item and "A.L" in item for item in warnings))
 
+    def test_portfolio_summary_discloses_ibkr_manual_fallback_cutoff(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "portfolio.csv"
+            path.write_text(
+                "symbol,weight_pct,ibkr_data_status,ibkr_activity_source,"
+                "ibkr_activity_as_of,ibkr_trade_source,ibkr_trade_as_of,ibkr_data_warning\n"
+                "A.L,100,manual-fallback,OneDrive manual,2026-06-13,"
+                "OneDrive manual,2026-06-12,IBKR自动下载失败，当前使用手动文件。\n",
+                encoding="utf-8",
+            )
+
+            _, warnings, positions, _ = _load_portfolio_summary([self._asset("A.L", ())], path)
+
+        warning = " ".join(warnings)
+        self.assertIn("IBKR", warning)
+        self.assertIn("2026-06-13", warning)
+        self.assertIn("手动", warning)
+        self.assertEqual(positions[0].ibkr_data_status, "manual-fallback")
+
     def test_portfolio_summary_explains_unmatched_sell_source_and_partial_return(self) -> None:
         unmatched = [
             {

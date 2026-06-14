@@ -213,6 +213,7 @@ jobs:
 
       - name: Download IBKR Flex statements
         if: steps.email-mode.outputs.should_run == 'true'
+        continue-on-error: true
         shell: bash
         env:
           IBKR_FLEX_TOKEN: ${{ secrets.IBKR_FLEX_TOKEN }}
@@ -253,7 +254,9 @@ jobs:
             echo "No supported cloud statements were downloaded; generating the market report without portfolio.csv."
             exit 0
           fi
-          python scripts/import_portfolio_statements.py "${statements[@]}"
+          python scripts/import_portfolio_statements.py \
+            --ibkr-diagnostics .cloud-statements/ibkr-flex-diagnostics.json \
+            "${statements[@]}"
 
       - name: Generate report
         if: steps.email-mode.outputs.should_run == 'true'

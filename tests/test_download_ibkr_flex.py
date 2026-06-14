@@ -227,6 +227,35 @@ class DownloadIbkrFlexTests(unittest.TestCase):
             ), self.assertRaises(SystemExit):
                 MODULE.main()
 
+    def test_main_uses_existing_manual_ibkr_statement_when_all_queries_fail(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            (output_dir / "PastTradesFullReport 1.xml").write_text(
+                "<?xml version='1.0'?><FlexQueryResponse><FlexStatements /></FlexQueryResponse>",
+                encoding="utf-8",
+            )
+            argv = [
+                "download_ibkr_flex.py",
+                "--token",
+                "secret-token",
+                "--activity-query-id",
+                "activity-id",
+                "--output-dir",
+                tmpdir,
+                "--rate-limit-retries",
+                "0",
+                "--transient-retries",
+                "0",
+            ]
+
+            with patch.object(sys, "argv", argv), patch.object(
+                MODULE, "request_flex_statement", side_effect=RuntimeError("IBKR Flex request failed")
+            ):
+                self.assertEqual(MODULE.main(), 0)
+
+            diagnostics = (output_dir / "ibkr-flex-diagnostics.json").read_text(encoding="utf-8")
+            self.assertIn("manual_fallback_available", diagnostics)
+
 
 if __name__ == "__main__":
     unittest.main()

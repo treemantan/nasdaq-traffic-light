@@ -48,6 +48,43 @@ class OneDriveCloudImportTests(unittest.TestCase):
         ]
         self.assertEqual(MODULE._latest(files)["name"], "new.csv")
 
+    def test_ibkr_patterns_accept_csv_and_xml(self) -> None:
+        items = [
+            {"name": "PastTradesFullReport.xml", "file": {}},
+            {"name": "CustTrade_info.csv", "file": {}},
+            {"name": "notes.txt", "file": {}},
+        ]
+
+        matches = MODULE._matching_files(items, MODULE.DEFAULT_IBKR_PATTERNS)
+
+        self.assertEqual([item["name"] for item in matches], ["PastTradesFullReport.xml", "CustTrade_info.csv"])
+
+    def test_latest_ibkr_revision_is_selected_per_logical_query_name(self) -> None:
+        files = [
+            {
+                "name": "PastTradesFullReport.xml",
+                "file": {},
+                "lastModifiedDateTime": "2026-06-14T00:46:00Z",
+            },
+            {
+                "name": "PastTradesFullReport 1.xml",
+                "file": {},
+                "lastModifiedDateTime": "2026-06-14T00:51:00Z",
+            },
+            {
+                "name": "CustTrade_info.csv",
+                "file": {},
+                "lastModifiedDateTime": "2026-06-03T23:16:00Z",
+            },
+        ]
+
+        selected = MODULE._latest_per_logical_name(files)
+
+        self.assertEqual(
+            [item["name"] for item in selected],
+            ["CustTrade_info.csv", "PastTradesFullReport 1.xml"],
+        )
+
     def test_graph_modified_time_can_be_preserved_on_downloaded_file(self) -> None:
         timestamp = MODULE._graph_modified_timestamp(
             {"lastModifiedDateTime": "2026-06-13T19:25:42Z"}

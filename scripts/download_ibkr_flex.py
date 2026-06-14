@@ -104,6 +104,24 @@ def main() -> int:
         print(f"IBKR Flex {label} statement downloaded: {destination.name}")
     if not downloaded:
         details = " | ".join(failures) if failures else "No files were downloaded."
+        fallback_files = _existing_ibkr_statement_files(output_dir)
+        if fallback_files:
+            _append_diagnostic(
+                diagnostics,
+                diagnostics_file,
+                {
+                    "event": "manual_fallback_available",
+                    "downloaded_count": 0,
+                    "failure_count": len(failures),
+                    "files": [path.name for path in fallback_files],
+                },
+            )
+            print(
+                "IBKR Flex download failed; continuing with existing manual OneDrive statement(s): "
+                + ", ".join(path.name for path in fallback_files),
+                file=sys.stderr,
+            )
+            return 0
         _append_diagnostic(
             diagnostics,
             diagnostics_file,
@@ -251,6 +269,29 @@ def _statement_extension(content: bytes) -> str:
     if sample.startswith(b"<?xml") or sample.startswith(b"<"):
         return ".xml"
     return ".csv"
+
+
+def _existing_ibkr_statement_files(output_dir: Path) -> list[Path]:
+    matches: list[Path] = []
+    for path in sorted(output_dir.iterdir()):
+        if not path.is_file() or path.suffix.lower() not in {".csv", ".xml"}:
+            continue
+        try:
+            sample = path.read_bytes()[:16384]
+        except OSError:
+            continue
+        if path.suffix.lower() == ".xml":
+            try:
+                root = ET.parse(path).getroot()
+            except (OSError, ET.ParseError):
+                continue
+            if root.tag.rsplit("}", 1)[-1] in {"FlexQueryResponse", "FlexStatement"}:
+                matches.append(path)
+            continue
+        text = sample.decode("utf-8-sig", errors="replace")
+        if "ClientAccountID" in text and ("LevelOfDetail" in text or "Buy/Sell" in text):
+            matches.append(path)
+    return matches
 
 
 def _request_bytes(url: str) -> bytes:

@@ -3,15 +3,19 @@ from __future__ import annotations
 import argparse
 import csv
 import importlib.util
+import json
+import re
 import sys
 import xml.etree.ElementTree as ET
 from collections import defaultdict
-from typing import Any
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from market_report.etf_monitor import _safe_float
+from market_report.time_utils import _timezone_for
 
 _REVOLUT_SCRIPT = Path(__file__).resolve().parent / "import_revolut_statement.py"
 _REVOLUT_SPEC = importlib.util.spec_from_file_location("import_revolut_statement", _REVOLUT_SCRIPT)
@@ -30,6 +34,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Convert broker statement CSV/XML files into portfolio.csv.")
     parser.add_argument("statement", nargs="+", help="One or more Revolut CSV or IBKR CSV/XML statement paths.")
     parser.add_argument("--output", default="portfolio.csv", help="Output portfolio CSV path.")
+    parser.add_argument(
+        "--ibkr-diagnostics",
+        default="",
+        help="Optional diagnostics JSON produced by scripts/download_ibkr_flex.py.",
+    )
     args = parser.parse_args()
 
     paths = [Path(value) for value in args.statement]
@@ -55,6 +64,12 @@ def main() -> int:
         raise SystemExit("No open positions found in supported portfolio statements.")
 
     rows = _build_portfolio_rows(positions)
+    ibkr_health = _ibkr_data_health(
+        ibkr_paths,
+        Path(args.ibkr_diagnostics) if args.ibkr_diagnostics else None,
+    )
+    for row in rows:
+        row.update(ibkr_health)
     output = Path(args.output)
     try:
         output.write_text(_to_csv(rows), encoding="utf-8")
@@ -354,6 +369,200 @@ def _add_ibkr_dividends(paths: list[Path], positions: dict[str, dict[str, Any]])
             seen.add(fingerprint)
             amount = _parse_money(row.get("Amount")) or _safe_float(row.get("Amount")) or 0.0
             positions[symbol]["dividend_income_gbp"] += amount
+
+
+def _ibkr_data_health(paths: list[Path], diagnostics_path: Path | None) -> dict[str, str]:
+    diagnostics = _load_ibkr_diagnostics(diagnostics_path)
+    if not paths and not diagnostics:
+        return _blank_ibkr_health()
+    candidates: dict[str, list[Path]] = {"activity": [], "trade": []}
+    for path in paths:
+        role = _ibkr_statement_role(path)
+        if role:
+            candidates[role].append(path)
+
+    selected = {
+        role: _latest_ibkr_source(role_paths)
+        for role, role_paths in candidates.items()
+        if role_paths
+    }
+    activity = selected.get("activity")
+    trade = selected.get("trade")
+    activity_source = _ibkr_source_label(activity)
+    trade_source = _ibkr_source_label(trade)
+    activity_as_of = _ibkr_observation_date(activity) if activity else ""
+    trade_as_of = _ibkr_observation_date(trade) if trade else ""
+    activity_updated = _ibkr_file_updated_at(activity) if activity else ""
+    trade_updated = _ibkr_file_updated_at(trade) if trade else ""
+    failed_labels = {
+        str(event.get("label") or "")
+        for event in diagnostics.get("events", [])
+        if event.get("event") == "query_final_failure"
+    }
+
+    if not activity and not trade:
+        status = "missing"
+        warning = (
+            "IBKR 数据暂不可用；本次报告未获得 Activity 或 Trade Confirmation。"
+            "当前组合可能遗漏近期交易、现金流或持仓变化，请手动更新 OneDrive statement。"
+        )
+    elif not activity or not trade:
+        status = "partial"
+        missing = "Activity" if not activity else "Trade Confirmation"
+        available = _ibkr_source_summary(
+            "Trade Confirmation" if trade else "Activity",
+            trade if trade else activity,
+        )
+        warning = (
+            f"IBKR 数据覆盖不完整：{missing} 暂不可用；{available}。"
+            "当前组合可能遗漏近期交易、历史成本或现金流，请手动更新对应 statement。"
+        )
+    elif activity_source == "IBKR Flex live" and trade_source == "IBKR Flex live" and not failed_labels:
+        status = "live"
+        warning = ""
+    elif "OneDrive manual" in {activity_source, trade_source}:
+        status = "manual-fallback"
+        warning = (
+            "IBKR 自动下载未完整成功，当前使用 OneDrive 手动 statement 兜底；"
+            f"{_ibkr_source_summary('Activity', activity)}；"
+            f"{_ibkr_source_summary('Trade Confirmation', trade)}。"
+            "如期间发生新交易，请手动更新文件，避免整体持仓判断遗漏。"
+        )
+    else:
+        status = "partial"
+        warning = (
+            "IBKR Flex 本次存在部分失败；"
+            f"{_ibkr_source_summary('Activity', activity)}；"
+            f"{_ibkr_source_summary('Trade Confirmation', trade)}。"
+            "请结合截止日期判断组合信息是否完整。"
+        )
+
+    return {
+        "ibkr_data_status": status,
+        "ibkr_activity_source": activity_source,
+        "ibkr_activity_as_of": activity_as_of,
+        "ibkr_activity_file_updated": activity_updated,
+        "ibkr_trade_source": trade_source,
+        "ibkr_trade_as_of": trade_as_of,
+        "ibkr_trade_file_updated": trade_updated,
+        "ibkr_data_warning": warning,
+    }
+
+
+def _blank_ibkr_health() -> dict[str, str]:
+    return {
+        "ibkr_data_status": "",
+        "ibkr_activity_source": "",
+        "ibkr_activity_as_of": "",
+        "ibkr_activity_file_updated": "",
+        "ibkr_trade_source": "",
+        "ibkr_trade_as_of": "",
+        "ibkr_trade_file_updated": "",
+        "ibkr_data_warning": "",
+    }
+
+
+def _load_ibkr_diagnostics(path: Path | None) -> dict[str, Any]:
+    if path is None or not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _ibkr_statement_role(path: Path) -> str:
+    name = re.sub(r"(?:\s+\d+|\s*\(\d+\)|-\d+)$", "", path.stem.lower())
+    compact = re.sub(r"[\s_-]+", "", name)
+    if any(token in compact for token in ("tradeconfirm", "custtrade", "todaytrade")):
+        return "trade"
+    if any(token in compact for token in ("activity", "pasttrade", "customisedtransac", "customizedtransac")):
+        return "activity"
+    if path.suffix.lower() == ".xml":
+        try:
+            root = ET.parse(path).getroot()
+        except (OSError, ET.ParseError):
+            return ""
+        tags = {_xml_tag(element) for element in root.iter()}
+        if "TradeConfirms" in tags or "TradeConfirm" in tags:
+            return "trade"
+        if "FlexStatement" in tags or "OpenPositions" in tags:
+            return "activity"
+    return ""
+
+
+def _latest_ibkr_source(paths: list[Path]) -> Path:
+    return max(
+        paths,
+        key=lambda path: (
+            _ibkr_observation_date(path),
+            path.stat().st_mtime if path.exists() else 0,
+        ),
+    )
+
+
+def _ibkr_source_label(path: Path | None) -> str:
+    if path is None:
+        return ""
+    return "IBKR Flex live" if path.name.lower().startswith("ibkr-") else "OneDrive manual"
+
+
+def _ibkr_observation_date(path: Path | None) -> str:
+    if path is None:
+        return ""
+    candidates: list[str] = []
+    try:
+        for row in _iter_ibkr_rows(path):
+            for key in ("TradeDate", "ReportDate", "Date/Time", "Date"):
+                parsed = _normalize_ibkr_date(row.get(key))
+                if parsed:
+                    candidates.append(parsed)
+        if path.suffix.lower() == ".xml":
+            root = ET.parse(path).getroot()
+            for element in root.iter():
+                for key in ("toDate", "reportDate", "tradeDate", "dateTime", "date"):
+                    parsed = _normalize_ibkr_date(element.attrib.get(key))
+                    if parsed:
+                        candidates.append(parsed)
+    except (OSError, UnicodeDecodeError, csv.Error, ET.ParseError, RuntimeError):
+        pass
+    return max(candidates) if candidates else ""
+
+
+def _normalize_ibkr_date(value: object) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    match = re.search(r"(20\d{2})[-/]?(\d{2})[-/]?(\d{2})", raw)
+    if not match:
+        return ""
+    try:
+        return datetime(
+            int(match.group(1)),
+            int(match.group(2)),
+            int(match.group(3)),
+        ).date().isoformat()
+    except ValueError:
+        return ""
+
+
+def _ibkr_file_updated_at(path: Path | None) -> str:
+    if path is None or not path.exists():
+        return ""
+    utc_updated = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+    updated = utc_updated.astimezone(_timezone_for(utc_updated, "Europe/London"))
+    return updated.strftime("%Y-%m-%d %H:%M UK")
+
+
+def _ibkr_source_summary(label: str, path: Path | None) -> str:
+    if path is None:
+        return f"{label} 缺失"
+    source = _ibkr_source_label(path)
+    as_of = _ibkr_observation_date(path) or "未知"
+    updated = _ibkr_file_updated_at(path)
+    updated_text = f"，文件更新 {updated}" if updated else ""
+    return f"{label} 来源 {source}，最近有效记录 {as_of}{updated_text}"
 
 
 if __name__ == "__main__":

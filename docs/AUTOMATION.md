@@ -156,9 +156,22 @@ ONEDRIVE_IBKR_FOLDER_PATH=Trading/IBKR Transaction Statement
 ONEDRIVE_USE_LATEST_PER_ACCOUNT_FOLDER=false
 ```
 
-云端导入会先下载 OneDrive 中的 Revolut/IBKR 手动 statement，再尝试下载 IBKR Flex Web Service statement，最后统一导入 `.cloud-statements` 目录下的 CSV/XML。推荐 Full Activity 保留 XML，Activity Light 与 Trade Confirmation 使用 CSV。下载器会根据实际响应内容自动保存为 `.xml` 或 `.csv`，不依赖文件名猜测格式。IBKR Trade Confirmation 只使用 `LevelOfDetail=EXECUTION` 的成交明细，避免把 summary/order/execution 重复计入持仓；旧的 XML Trade Confirmation 中 `<TradeConfirm>` 节点也会被识别。如果某个来源不存在，会跳过该辅助来源并继续生成报告。
+云端导入会先下载 OneDrive 中的 Revolut/IBKR 手动 statement，再尝试下载 IBKR Flex Web Service statement，最后统一导入 `.cloud-statements` 目录下的 CSV/XML。Revolut 默认匹配 `*.csv`；IBKR 默认同时匹配 `*.csv,*.xml`，也可通过 `ONEDRIVE_IBKR_STATEMENT_PATTERNS` 调整。IBKR 网页重复下载产生的 `PastTradesFullReport.xml`、`PastTradesFullReport 1.xml` 或 `PastTradesFullReport (1).xml` 会被视为同一查询系列，只下载 OneDrive 中修改时间最新的版本。不同 QueryName 仍分别保留，例如 Activity 与 Trade Confirmation 不会互相覆盖。
 
-IBKR Flex token 对短时间连续请求可能触发限流，Activity statement 也可能临时返回 `Statement could not be generated at this time`。Activity statement 比 Trade Confirmation 更重，主要用于 full 报告中的历史账户、持仓、现金、股息和费用信息；pulse/volatility 等盘中轻量邮件默认只下载 Trade Confirmation，避免一天多次触发 Activity 生成。full 模式会先尝试完整 Activity query；如果 IBKR 在 `SendRequest` 阶段拒绝生成，会立刻尝试 `IBKR_ACTIVITY_LIGHT_QUERY_ID`，不再等待 90 秒重试。工作流仍会在不同 Flex Query 之间等待 30 秒，以降低 token 限流概率。如果其中一个 query 已成功下载、另一个 query 最终仍失败，流程会记录 partial failure 并继续导入已下载的 CSV/XML。只有所有 IBKR Flex query 都失败时，才会中断该下载步骤。
+推荐 Full Activity 保留 XML，Activity Light 与 Trade Confirmation 使用 CSV。下载器会根据实际响应内容自动保存为 `.xml` 或 `.csv`，不依赖文件名猜测格式。IBKR Trade Confirmation 只使用 `LevelOfDetail=EXECUTION` 的成交明细，避免把 summary/order/execution 重复计入持仓；旧的 XML Trade Confirmation 中 `<TradeConfirm>` 节点也会被识别。如果某个来源不存在，会跳过该辅助来源并继续生成报告。
+
+IBKR Flex token 对短时间连续请求可能触发限流，Activity statement 也可能临时返回 `Statement could not be generated at this time`。Activity statement 比 Trade Confirmation 更重，主要用于 full 报告中的历史账户、持仓、现金、股息和费用信息；pulse/volatility 等盘中轻量邮件默认只下载 Trade Confirmation，避免一天多次触发 Activity 生成。full 模式会先尝试完整 Activity query；如果 IBKR 在 `SendRequest` 阶段拒绝生成，会立刻尝试 `IBKR_ACTIVITY_LIGHT_QUERY_ID`，不再等待 90 秒重试。工作流仍会在不同 Flex Query 之间等待 30 秒，以降低 token 限流概率。
+
+如果其中一个 query 已成功下载、另一个 query 最终仍失败，流程会记录 partial failure 并继续导入已下载的 CSV/XML。如果所有 Flex query 都失败，但 OneDrive 中已有可识别的手动 IBKR CSV/XML，流程会使用最新手动文件兜底；即使没有任何可用 IBKR 文件，市场报告和 Revolut 组合部分也不会因此中断。
+
+组合报告会明确显示 IBKR 数据健康度：
+
+- `live`：Activity 与 Trade Confirmation 均来自本次 IBKR Flex 下载。
+- `manual-fallback`：自动下载未完整成功，至少一类数据使用 OneDrive 手动文件兜底。
+- `partial`：Activity 或 Trade Confirmation 其中一类缺失。
+- `missing`：已配置 IBKR，但本次没有任何可用 IBKR statement。
+
+告警会分别显示 Activity 与 Trade Confirmation 的最近有效记录日期、来源和文件更新时间。该日期是信息覆盖截止点，不代表实时券商净值；发生新交易后应及时把最新手动 statement 放入 OneDrive，以免组合分析遗漏。
 
 每次 IBKR Flex 下载都会生成 `.cloud-statements/ibkr-flex-diagnostics.json` 并随 GitHub Actions artifact 上传。该文件不包含 token 或 ReferenceCode，只记录 query label、attempt、IBKR 返回的 status/error、运行模式和耗时。若 Activity 在 Actions 中反复失败但网页手动生成成功，优先下载该诊断文件，对比是否一直停在 `send_request` 阶段、是否只发生在 full 模式、以及是否与同一天多次运行有关。
 

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import json
+import os
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 
@@ -108,6 +111,77 @@ class ImportPortfolioStatementsTests(unittest.TestCase):
         self.assertEqual(positions["TESTX"]["unmatched_sells"][0]["account_id"], "U1")
         self.assertEqual(positions["TESTX"]["unmatched_sells"][0]["currency"], "USD")
         self.assertEqual(positions["TESTX"]["unmatched_sells"][0]["net_proceeds_native"], 2325.46)
+
+    def test_ibkr_data_health_prefers_latest_manual_activity_revision(self) -> None:
+        content = """<?xml version="1.0" encoding="UTF-8"?>
+<FlexQueryResponse>
+  <FlexStatements>
+    <FlexStatement accountId="U1" fromDate="20260601" toDate="20260613">
+      <Trades>
+        <Trade accountId="U1" symbol="VWRL" tradeID="t1" tradeDate="20260613"
+          buySell="BUY" quantity="1" tradePrice="100" netCash="-100"
+          levelOfDetail="EXECUTION" />
+      </Trades>
+    </FlexStatement>
+  </FlexStatements>
+</FlexQueryResponse>
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            older = root / "PastTradesFullReport.xml"
+            latest = root / "PastTradesFullReport 1.xml"
+            trade = root / "CustTrade_info.csv"
+            older.write_text(content.replace("20260613", "20260612"), encoding="utf-8")
+            latest.write_text(content, encoding="utf-8")
+            trade.write_text(
+                "ClientAccountID,Symbol,TradeID,TradeDate,Buy/Sell,Quantity,"
+                "TradePrice,NetCash,LevelOfDetail\n"
+                "U1,JEDG,t2,20260612,BUY,10,12.34,-123.40,EXECUTION\n",
+                encoding="utf-8",
+            )
+            older_time = datetime(2026, 6, 14, 0, 46, tzinfo=timezone.utc).timestamp()
+            latest_time = datetime(2026, 6, 14, 0, 51, tzinfo=timezone.utc).timestamp()
+            os.utime(older, (older_time, older_time))
+            os.utime(latest, (latest_time, latest_time))
+
+            health = MODULE._ibkr_data_health([older, latest, trade], None)
+
+        self.assertEqual(health["ibkr_data_status"], "manual-fallback")
+        self.assertEqual(health["ibkr_activity_source"], "OneDrive manual")
+        self.assertEqual(health["ibkr_activity_as_of"], "2026-06-13")
+        self.assertIn("手动", health["ibkr_data_warning"])
+
+    def test_ibkr_data_health_reports_partial_live_coverage(self) -> None:
+        content = (
+            "ClientAccountID,Symbol,TradeID,TradeDate,Buy/Sell,Quantity,"
+            "TradePrice,NetCash,LevelOfDetail\n"
+            "U1,JEDG,t1,20260614,BUY,10,12.34,-123.40,EXECUTION\n"
+        )
+        diagnostics = {
+            "events": [
+                {"event": "query_final_failure", "label": "activity", "message": "not generated"},
+                {"event": "query_downloaded", "label": "trade-confirm", "file": "ibkr-trade-confirm-1.csv"},
+            ]
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            trade = root / "ibkr-trade-confirm-1.csv"
+            trade.write_text(content, encoding="utf-8")
+            diagnostics_path = root / "ibkr-flex-diagnostics.json"
+            diagnostics_path.write_text(json.dumps(diagnostics), encoding="utf-8")
+
+            health = MODULE._ibkr_data_health([trade], diagnostics_path)
+
+        self.assertEqual(health["ibkr_data_status"], "partial")
+        self.assertEqual(health["ibkr_trade_source"], "IBKR Flex live")
+        self.assertEqual(health["ibkr_trade_as_of"], "2026-06-14")
+        self.assertIn("Activity", health["ibkr_data_warning"])
+
+    def test_ibkr_data_health_is_blank_when_ibkr_is_not_configured(self) -> None:
+        health = MODULE._ibkr_data_health([], None)
+
+        self.assertEqual(health["ibkr_data_status"], "")
+        self.assertEqual(health["ibkr_data_warning"], "")
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@ import argparse
 import fnmatch
 import json
 import os
+import re
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -19,6 +20,7 @@ GRAPH_ROOT = "https://graph.microsoft.com/v1.0"
 DEFAULT_FOLDER = "Trading/Revolut Transaction Statement"
 DEFAULT_IBKR_FOLDER = "Trading/IBKR Transaction Statement"
 DEFAULT_PATTERN = "*.csv"
+DEFAULT_IBKR_PATTERNS = ("*.csv", "*.xml")
 
 
 class _PreauthenticatedDownloadRedirectHandler(HTTPRedirectHandler):
@@ -33,7 +35,7 @@ class _PreauthenticatedDownloadRedirectHandler(HTTPRedirectHandler):
 class GraphConfig:
     client_id: str
     folder_path: str
-    pattern: str
+    pattern: str | tuple[str, ...]
     tenant_id: str = ""
     client_secret: str = ""
     refresh_token: str = ""
@@ -61,6 +63,11 @@ def main() -> int:
     parser.add_argument("--ibkr-folder-path", default=os.getenv("ONEDRIVE_IBKR_FOLDER_PATH") or DEFAULT_IBKR_FOLDER)
     parser.add_argument("--pattern", default=os.getenv("ONEDRIVE_STATEMENT_PATTERN") or DEFAULT_PATTERN)
     parser.add_argument(
+        "--ibkr-patterns",
+        default=os.getenv("ONEDRIVE_IBKR_STATEMENT_PATTERNS") or ",".join(DEFAULT_IBKR_PATTERNS),
+        help="Comma-separated filename patterns accepted inside the IBKR OneDrive folder.",
+    )
+    parser.add_argument(
         "--latest-per-account-folder",
         action="store_true",
         default=_env_flag("ONEDRIVE_USE_LATEST_PER_ACCOUNT_FOLDER"),
@@ -79,14 +86,15 @@ def main() -> int:
     token = _acquire_access_token(config)
     items = _select_statement_items(token, config, args.latest_per_account_folder)
     if args.ibkr_folder_path:
-        ibkr_config = _config_from_env(args.ibkr_folder_path, args.pattern)
+        ibkr_config = _config_from_env(args.ibkr_folder_path, _parse_patterns(args.ibkr_patterns))
         try:
-            items.extend(_select_statement_items(token, ibkr_config, False))
+            ibkr_items = _select_statement_items(token, ibkr_config, False)
+            items.extend(_latest_per_logical_name(ibkr_items))
         except RuntimeError as exc:
             print(f"Optional IBKR OneDrive folder skipped: {exc}", file=sys.stderr)
     if not items:
         raise SystemExit(
-            f"No supported portfolio statement CSV matched {config.pattern!r} inside configured OneDrive folders."
+            f"No supported portfolio statement matched {config.pattern!r} inside configured OneDrive folders."
         )
 
     downloaded = [_download_item(token, config, item, output_dir) for item in items]
@@ -101,10 +109,11 @@ def main() -> int:
     return 0
 
 
-def _config_from_env(folder_path: str, pattern: str) -> GraphConfig:
+def _config_from_env(folder_path: str, pattern: str | tuple[str, ...]) -> GraphConfig:
     client_id = os.getenv("ONEDRIVE_CLIENT_ID", "").strip()
     if not client_id:
         raise ValueError("ONEDRIVE_CLIENT_ID is required.")
+    normalized_pattern = (pattern.strip() or DEFAULT_PATTERN) if isinstance(pattern, str) else pattern
     return GraphConfig(
         client_id=client_id,
         tenant_id=os.getenv("ONEDRIVE_TENANT_ID", "").strip(),
@@ -112,7 +121,7 @@ def _config_from_env(folder_path: str, pattern: str) -> GraphConfig:
         refresh_token=os.getenv("ONEDRIVE_REFRESH_TOKEN", "").strip(),
         user_id=os.getenv("ONEDRIVE_USER_ID", "").strip(),
         folder_path=folder_path.strip().strip("/"),
-        pattern=pattern.strip() or DEFAULT_PATTERN,
+        pattern=normalized_pattern,
     )
 
 
@@ -180,16 +189,46 @@ def _children_url(config: GraphConfig, folder_path: str) -> str:
     )
 
 
-def _matching_files(items: list[dict[str, Any]], pattern: str) -> list[dict[str, Any]]:
+def _matching_files(
+    items: list[dict[str, Any]], pattern: str | tuple[str, ...]
+) -> list[dict[str, Any]]:
+    patterns = (pattern,) if isinstance(pattern, str) else pattern
     return [
         item
         for item in items
-        if item.get("file") is not None and fnmatch.fnmatch(str(item.get("name") or ""), pattern)
+        if item.get("file") is not None
+        and any(
+            fnmatch.fnmatch(str(item.get("name") or "").lower(), candidate.lower())
+            for candidate in patterns
+        )
     ]
 
 
 def _latest(items: list[dict[str, Any]]) -> dict[str, Any]:
     return max(items, key=lambda item: str(item.get("lastModifiedDateTime") or ""))
+
+
+def _parse_patterns(raw: str) -> tuple[str, ...]:
+    patterns = tuple(item.strip() for item in raw.split(",") if item.strip())
+    return patterns or DEFAULT_IBKR_PATTERNS
+
+
+def _logical_file_name(file_name: str) -> str:
+    stem = Path(file_name).stem.strip()
+    stem = re.sub(r"(?:[\s_-]+\d+|\s*\(\d+\))$", "", stem)
+    return re.sub(r"[\s_-]+", "", stem).lower()
+
+
+def _latest_per_logical_name(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    latest_by_name: dict[str, dict[str, Any]] = {}
+    for item in items:
+        logical_name = _logical_file_name(str(item.get("name") or ""))
+        current = latest_by_name.get(logical_name)
+        if current is None or str(item.get("lastModifiedDateTime") or "") > str(
+            current.get("lastModifiedDateTime") or ""
+        ):
+            latest_by_name[logical_name] = item
+    return sorted(latest_by_name.values(), key=lambda item: str(item.get("name") or "").lower())
 
 
 def _download_item(token: str, config: GraphConfig, item: dict[str, Any], output_dir: Path) -> Path:

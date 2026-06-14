@@ -105,6 +105,14 @@ class PortfolioPosition:
     _closed_trades_json: str = ""
     _transaction_costs_json: str = ""
     _unmatched_sells_json: str = ""
+    ibkr_data_status: str = ""
+    ibkr_activity_source: str = ""
+    ibkr_activity_as_of: str = ""
+    ibkr_activity_file_updated: str = ""
+    ibkr_trade_source: str = ""
+    ibkr_trade_as_of: str = ""
+    ibkr_trade_file_updated: str = ""
+    ibkr_data_warning: str = ""
 
 
 @dataclass(frozen=True)
@@ -2414,6 +2422,14 @@ def _load_portfolio_summary(
             _closed_trades_json=str(row.get("closed_trades_json") or ""),
             _transaction_costs_json=str(row.get("transaction_costs_json") or ""),
             _unmatched_sells_json=str(row.get("unmatched_sells_json") or ""),
+            ibkr_data_status=str(row.get("ibkr_data_status") or ""),
+            ibkr_activity_source=str(row.get("ibkr_activity_source") or ""),
+            ibkr_activity_as_of=str(row.get("ibkr_activity_as_of") or ""),
+            ibkr_activity_file_updated=str(row.get("ibkr_activity_file_updated") or ""),
+            ibkr_trade_source=str(row.get("ibkr_trade_source") or ""),
+            ibkr_trade_as_of=str(row.get("ibkr_trade_as_of") or ""),
+            ibkr_trade_file_updated=str(row.get("ibkr_trade_file_updated") or ""),
+            ibkr_data_warning=str(row.get("ibkr_data_warning") or ""),
         )
         for row in rows
         if str(row.get("symbol") or "").strip()
@@ -2442,6 +2458,10 @@ def _load_portfolio_summary(
             + "、".join(statement_fallbacks)
             + "。原币市值、日变化、距年内高点、SMA200 与未实现盈亏暂不可用。"
         )
+    if portfolio_positions:
+        ibkr_warning = _portfolio_ibkr_warning(portfolio_positions[0])
+        if ibkr_warning:
+            warnings.append(ibkr_warning)
     red_peak_watches = [
         f"{item.symbol} {_fmt_signed_pct(item.drawdown_from_year_peak_pct)}（阈值 -{item.red_drawdown_threshold_pct:.1f}%）"
         for item in portfolio_positions
@@ -2542,6 +2562,56 @@ def _load_portfolio_summary(
     if fx_notes:
         summary.append("GBP参考估值使用抓取时点FX：" + "；".join(fx_notes) + "。")
     return summary, warnings, portfolio_positions, portfolio_total
+
+
+def _portfolio_ibkr_warning(position: PortfolioPosition) -> str:
+    status = position.ibkr_data_status.strip().lower()
+    if not status or status == "live":
+        return ""
+
+    def source_detail(
+        label: str,
+        source: str,
+        as_of: str,
+        updated: str,
+    ) -> str:
+        if not source:
+            return f"{label} 缺失"
+        parts = [f"{label} 来源 {source}"]
+        if as_of:
+            parts.append(f"最近有效记录 {as_of}")
+        if updated:
+            parts.append(f"文件更新 {updated}")
+        return "，".join(parts)
+
+    details = "；".join(
+        (
+            source_detail(
+                "Activity",
+                position.ibkr_activity_source,
+                position.ibkr_activity_as_of,
+                position.ibkr_activity_file_updated,
+            ),
+            source_detail(
+                "Trade Confirmation",
+                position.ibkr_trade_source,
+                position.ibkr_trade_as_of,
+                position.ibkr_trade_file_updated,
+            ),
+        )
+    )
+    labels = {
+        "manual-fallback": "使用手动文件兜底",
+        "partial": "部分缺失",
+        "missing": "数据缺失",
+    }
+    raw_warning = position.ibkr_data_warning.strip()
+    suffix = f" {raw_warning}" if raw_warning else ""
+    return (
+        f"IBKR 数据状态：{labels.get(status, status)}。{details}。"
+        "请结合截止日期判断组合完整性；近期发生交易时应手动更新 OneDrive statement，"
+        f"以防整体持仓判断遗漏。{suffix}"
+    )
 
 
 def _adjust_portfolio_position_for_asset_type(
