@@ -416,7 +416,7 @@ def _nearest_swing_zone(zones: tuple[SwingZone, ...], price: float | None) -> Sw
 def _fmt_swing_zone(zone: SwingZone | None) -> str:
     if zone is None:
         return "N/A"
-    return f"{zone.lower:.2f}-{zone.upper:.2f} · {zone.score}/100"
+    return f"{zone.lower:.2f}-{zone.upper:.2f} · 强度 {zone.score}/100"
 
 
 def _render_health_notes(report: ScoredReport) -> str:

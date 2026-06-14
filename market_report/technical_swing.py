@@ -544,7 +544,7 @@ def _fmt_optional(value: float | None) -> str:
 def _zone_text(zone: SwingZone | None) -> str:
     if zone is None:
         return "N/A"
-    return f"{zone.lower:.2f}–{zone.upper:.2f}（{zone.score}/100）"
+    return f"{zone.lower:.2f}–{zone.upper:.2f}（强度 {zone.score}/100）"
 
 
 def _infer_asset_class(item: SwingUniverseItem) -> str:

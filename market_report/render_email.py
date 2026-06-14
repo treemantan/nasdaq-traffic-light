@@ -199,7 +199,7 @@ def _nearest_swing_email_zone(zones, price, *, support: bool):
 def _fmt_swing_email_zone(zone) -> str:
     if zone is None:
         return "N/A"
-    return f"{zone.lower:.2f}–{zone.upper:.2f} ({zone.score}/100)"
+    return f"{zone.lower:.2f}–{zone.upper:.2f}（强度 {zone.score}/100）"
 
 
 def _render_group(title: str, keys: list[str], metrics: dict[str, ScoredMetric]) -> str:

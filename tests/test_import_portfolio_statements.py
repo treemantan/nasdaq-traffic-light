@@ -141,6 +141,48 @@ class ImportPortfolioStatementsTests(unittest.TestCase):
         self.assertAlmostEqual(positions["JEDG"]["quantity"], 10)
         self.assertAlmostEqual(positions["JEDG"]["cost_gbp"], 123.40)
 
+    def test_ibkr_overlapping_reports_deduplicate_when_identifier_subsets_differ(self) -> None:
+        activity = """<?xml version="1.0" encoding="UTF-8"?>
+<FlexQueryResponse>
+  <FlexStatements>
+    <FlexStatement accountId="U1" fromDate="20260612" toDate="20260612">
+      <Trades>
+        <Trade accountId="U1" symbol="JEDG" tradeID="9695167951"
+          ibExecID="00011041.6a2bab13.01.01" tradeDate="20260612"
+          dateTime="20260612;062838" buySell="BUY" quantity="11"
+          tradePrice="86.16" netCash="-948.82" currency="GBP"
+          levelOfDetail="EXECUTION" />
+      </Trades>
+    </FlexStatement>
+  </FlexStatements>
+</FlexQueryResponse>
+"""
+        trade_confirmation = (
+            "ClientAccountID,Symbol,TradeID,TradeDate,Buy/Sell,Quantity,"
+            "TradePrice,NetCash,Currency,LevelOfDetail\n"
+            "U1,JEDG,9695167951,20260612,BUY,11,86.16,-948.82,GBP,EXECUTION\n"
+        )
+        execution_only_confirmation = (
+            "ClientAccountID,Symbol,ExecID,TradeDate,Buy/Sell,Quantity,"
+            "TradePrice,NetCash,Currency,LevelOfDetail\n"
+            "U1,JEDG,00011041.6a2bab13.01.01,20260612,BUY,11,86.16,-948.82,GBP,EXECUTION\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            activity_path = root / "activity.xml"
+            confirmation_path = root / "trade-confirm.csv"
+            execution_path = root / "execution-confirm.csv"
+            activity_path.write_text(activity, encoding="utf-8")
+            confirmation_path.write_text(trade_confirmation, encoding="utf-8")
+            execution_path.write_text(execution_only_confirmation, encoding="utf-8")
+
+            positions = MODULE._reconstruct_ibkr_positions(
+                [confirmation_path, activity_path, execution_path]
+            )
+
+        self.assertAlmostEqual(positions["JEDG"]["quantity"], 11)
+        self.assertAlmostEqual(positions["JEDG"]["cost_gbp"], 948.82)
+
     def test_revolut_and_ibkr_positions_merge_by_symbol(self) -> None:
         revolut = {"VWRL": {"quantity": 1.0, "cost_gbp": 100.0, "realized_pnl_gbp": 0.0, "dividend_income_gbp": 0.0}}
         ibkr = {"VWRL": {"quantity": 2.0, "cost_gbp": 210.0, "realized_pnl_gbp": 0.0, "dividend_income_gbp": 1.5}}

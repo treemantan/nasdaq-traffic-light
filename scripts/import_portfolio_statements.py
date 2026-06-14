@@ -211,7 +211,8 @@ def _reconstruct_ibkr_positions(paths: list[Path]) -> dict[str, dict[str, Any]]:
 
 
 def _unique_ibkr_rows(paths: list[Path]) -> tuple[list[dict[str, str]], int]:
-    rows_by_fingerprint: dict[tuple[str, ...], dict[str, str]] = {}
+    unique_rows: list[dict[str, str]] = []
+    seen_identifiers: set[tuple[str, ...]] = set()
     duplicate_count = 0
     for path in paths:
         for row in _iter_ibkr_rows(path):
@@ -219,12 +220,14 @@ def _unique_ibkr_rows(paths: list[Path]) -> tuple[list[dict[str, str]], int]:
                 continue
             if not (row.get("Buy/Sell") or row.get("TransactionType")):
                 continue
-            fingerprint = _ibkr_fingerprint(row)
-            if fingerprint in rows_by_fingerprint:
+            identifiers = _ibkr_identity_keys(row)
+            if any(identifier in seen_identifiers for identifier in identifiers):
                 duplicate_count += 1
+                seen_identifiers.update(identifiers)
                 continue
-            rows_by_fingerprint[fingerprint] = row
-    return sorted(rows_by_fingerprint.values(), key=_ibkr_sort_key), duplicate_count
+            unique_rows.append(row)
+            seen_identifiers.update(identifiers)
+    return sorted(unique_rows, key=_ibkr_sort_key), duplicate_count
 
 
 def _iter_ibkr_rows(path: Path):
@@ -322,19 +325,28 @@ def _xml_tag(element: ET.Element) -> str:
 
 
 def _ibkr_fingerprint(row: dict[str, str]) -> tuple[str, ...]:
-    ids = (
-        row.get("ExecID"),
-        row.get("IBExecID"),
-        row.get("TransactionID"),
-        row.get("TradeID"),
-        row.get("OrderID"),
-        row.get("IBOrderID"),
-    )
-    stable = tuple(str(value or "").strip() for value in ids if str(value or "").strip())
-    if stable:
-        return stable
+    identifiers = _ibkr_identity_keys(row)
+    return identifiers[0]
+
+
+def _ibkr_identity_keys(row: dict[str, str]) -> tuple[tuple[str, ...], ...]:
+    account = str(row.get("ClientAccountID") or "").strip()
+    identifiers: list[tuple[str, ...]] = []
+    for kind, fields in (
+        ("execution", ("ExecID", "IBExecID")),
+        ("transaction", ("TransactionID",)),
+        ("trade", ("TradeID",)),
+    ):
+        for field in fields:
+            value = str(row.get(field) or "").strip()
+            if value:
+                identifier = (kind, account, value)
+                if identifier not in identifiers:
+                    identifiers.append(identifier)
+    if identifiers:
+        return tuple(identifiers)
     keys = ("Symbol", "TradeDate", "Date/Time", "Buy/Sell", "Quantity", "TradeQuantity", "Price", "TradePrice", "NetCash")
-    return tuple(str(row.get(key) or "").strip() for key in keys)
+    return (("economic", account, *(str(row.get(key) or "").strip() for key in keys)),)
 
 
 def _ibkr_sort_key(row: dict[str, str]) -> str:
