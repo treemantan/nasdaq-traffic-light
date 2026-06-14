@@ -44,6 +44,16 @@
 
 新增独立模块 `market_report/technical_swing.py`，不把新逻辑继续堆入 ETF 评分或 Serenity 模块。
 
+实施遵循“复用优先”：
+
+- 扩展现有 Yahoo chart HTTP 请求与缓存结构，不另建平行情源客户端；
+- 抽取并复用现有 EMA、SMA、RSI、历史价格和 ticker/币种映射算法；
+- 复用现有 `PortfolioPosition`、Full report payload、Serenity 输入及私人邮件附件流程；
+- 复用公共 Artifact 的持仓清洗边界；
+- 只有现有接口无法表达 OHLCV、ATR、pivot zone 或 Technical 专属报告时才新增类型和函数。
+
+Full、Serenity 和 Technical 模式必须消费同一份 `SwingAssessment`，不得分别重算或维护不同阈值。
+
 核心对象：
 
 - `SwingInstrumentIdentity`
