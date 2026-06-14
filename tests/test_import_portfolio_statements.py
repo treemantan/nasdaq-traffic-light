@@ -64,6 +64,65 @@ class ImportPortfolioStatementsTests(unittest.TestCase):
         self.assertAlmostEqual(positions["VWRL"]["cost_gbp"], 4001.994)
         self.assertAlmostEqual(positions["VWRL"]["dividend_income_gbp"], 1.5)
 
+    def test_ibkr_cash_fx_execution_is_not_treated_as_a_position(self) -> None:
+        content = """<?xml version="1.0" encoding="UTF-8"?>
+<FlexQueryResponse>
+  <FlexStatements>
+    <FlexStatement accountId="U1" fromDate="20260612" toDate="20260612">
+      <Trades>
+        <Trade accountId="U1" assetCategory="CASH" symbol="GBP.USD"
+          tradeID="fx1" ibExecID="fx-exec" tradeDate="20260612"
+          buySell="BUY" quantity="0.00657141" tradePrice="1.34120357"
+          currency="USD" netCash="0" tradeMoney="0.0088136"
+          levelOfDetail="EXECUTION" />
+      </Trades>
+    </FlexStatement>
+  </FlexStatements>
+</FlexQueryResponse>
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "ibkr-activity.xml"
+            path.write_text(content, encoding="utf-8")
+
+            positions = MODULE._reconstruct_ibkr_positions([path])
+
+        self.assertNotIn("GBP.USD", positions)
+
+    def test_ibkr_non_gbp_trade_uses_actual_fx_cash_outflow_for_cost_basis(self) -> None:
+        content = """<?xml version="1.0" encoding="UTF-8"?>
+<FlexQueryResponse>
+  <FlexStatements>
+    <FlexStatement accountId="U1" fromDate="20260612" toDate="20260612">
+      <Trades>
+        <Trade accountId="U1" assetCategory="CASH" symbol="GBP.USD"
+          tradeID="fx1" ibExecID="fx-exec-1" tradeDate="20260612"
+          buySell="SELL" quantity="-1007.65" tradePrice="1.33964"
+          currency="USD" proceeds="1349.888246" tradeMoney="-1349.888246"
+          fxRateToBase="0.74585" levelOfDetail="EXECUTION" />
+        <Trade accountId="U1" assetCategory="CASH" symbol="GBP.USD"
+          tradeID="fx2" ibExecID="fx-exec-2" tradeDate="20260612"
+          buySell="SELL" quantity="-0.09" tradePrice="1.33964"
+          currency="USD" proceeds="0.1205676" tradeMoney="-0.1205676"
+          fxRateToBase="0.74585" levelOfDetail="EXECUTION" />
+        <Trade accountId="U1" assetCategory="STK" symbol="SPCX"
+          tradeID="spcx1" ibExecID="spcx-exec" tradeDate="20260612"
+          buySell="BUY" quantity="10" tradePrice="135"
+          currency="USD" netCash="-1350" fxRateToBase="0.74585"
+          levelOfDetail="EXECUTION" />
+      </Trades>
+    </FlexStatement>
+  </FlexStatements>
+</FlexQueryResponse>
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "ibkr-activity.xml"
+            path.write_text(content, encoding="utf-8")
+
+            positions = MODULE._reconstruct_ibkr_positions([path])
+
+        self.assertAlmostEqual(positions["SPCX"]["quantity"], 10)
+        self.assertAlmostEqual(positions["SPCX"]["cost_gbp"], 1007.7334209)
+
     def test_ibkr_trade_confirm_xml_rows_are_supported(self) -> None:
         content = """<?xml version="1.0" encoding="UTF-8"?>
 <FlexQueryResponse>

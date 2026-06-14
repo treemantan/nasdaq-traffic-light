@@ -152,7 +152,11 @@ def _reconstruct_ibkr_positions(paths: list[Path]) -> dict[str, dict[str, Any]]:
     rows, duplicate_count = _unique_ibkr_rows(paths)
     if duplicate_count:
         print(f"Removed {duplicate_count} duplicate IBKR execution row(s).")
+    fx_rates_to_base = _ibkr_fx_rates_to_base_by_date(rows)
     for row in rows:
+        asset_category = str(row.get("AssetCategory") or "").strip().upper()
+        if asset_category == "CASH":
+            continue
         symbol = str(row.get("Symbol") or row.get("UnderlyingSymbol") or "").strip().upper()
         if not symbol or symbol == "GBP":
             continue
@@ -161,14 +165,14 @@ def _reconstruct_ibkr_positions(paths: list[Path]) -> dict[str, dict[str, Any]]:
         if quantity is None:
             continue
         if activity == "BUY":
-            cost = _ibkr_cash_amount(row, buy=True)
+            cost = _ibkr_cash_amount(row, buy=True, fx_rates_to_base=fx_rates_to_base)
             positions[symbol]["quantity"] += quantity
             positions[symbol]["cost_gbp"] += cost
         elif activity == "SELL":
             current_quantity = positions[symbol]["quantity"]
             average_cost = positions[symbol]["cost_gbp"] / current_quantity if current_quantity else 0.0
             matched_quantity = min(quantity, max(current_quantity, 0))
-            proceeds = _ibkr_cash_amount(row, buy=False)
+            proceeds = _ibkr_cash_amount(row, buy=False, fx_rates_to_base=fx_rates_to_base)
             matched_proceeds = proceeds * (matched_quantity / quantity) if quantity else 0.0
             unmatched_quantity = max(quantity - matched_quantity, 0.0)
             currency = str(
@@ -272,6 +276,7 @@ def _normalize_ibkr_xml_row(attrs: dict[str, str], *, row_kind: str) -> dict[str
             **normalized,
             "ClientAccountID": pick("accountId", "acctId", "account"),
             "LevelOfDetail": level.upper(),
+            "AssetCategory": pick("assetCategory"),
             "Symbol": pick("symbol", "underlyingSymbol"),
             "UnderlyingSymbol": pick("underlyingSymbol"),
             "TradeID": pick("tradeID", "tradeId"),
@@ -292,11 +297,13 @@ def _normalize_ibkr_xml_row(attrs: dict[str, str], *, row_kind: str) -> dict[str
             "IBCommission": pick("ibCommission", "commission"),
             "Tax": pick("tax", "taxes"),
             "Currency": pick("currency", "currencyPrimary"),
+            "FxRateToBase": pick("fxRateToBase"),
         }
     return {
         **normalized,
         "ClientAccountID": pick("accountId", "acctId", "account"),
         "LevelOfDetail": (pick("levelOfDetail") or "DETAIL").upper(),
+        "AssetCategory": pick("assetCategory"),
         "Symbol": pick("symbol", "underlyingSymbol"),
         "UnderlyingSymbol": pick("underlyingSymbol"),
         "Type": pick("type", "transactionType", "description"),
@@ -306,6 +313,7 @@ def _normalize_ibkr_xml_row(attrs: dict[str, str], *, row_kind: str) -> dict[str
         "Date/Time": pick("dateTime", "reportDate", "date"),
         "Amount": pick("amount", "netCash"),
         "Currency": pick("currency", "currencyPrimary"),
+        "FxRateToBase": pick("fxRateToBase"),
     }
 
 
@@ -338,14 +346,68 @@ def _ibkr_quantity(row: dict[str, str]) -> float | None:
     return abs(quantity) if quantity is not None else None
 
 
-def _ibkr_cash_amount(row: dict[str, str], *, buy: bool) -> float:
+def _ibkr_cash_amount(
+    row: dict[str, str],
+    *,
+    buy: bool,
+    fx_rates_to_base: dict[tuple[str, str], float] | None = None,
+) -> float:
     net_cash = _safe_float(row.get("NetCash") or row.get("NetCashWithBillable"))
     if net_cash is not None:
-        return abs(net_cash)
+        return abs(_ibkr_amount_in_base_currency(row, net_cash, fx_rates_to_base))
     gross = _safe_float(row.get("Amount") or row.get("TradeMoney") or row.get("TradeGross") or row.get("Proceeds")) or 0.0
     commission = abs(_safe_float(row.get("Commission") or row.get("IBCommission") or row.get("TradeCommission")) or 0.0)
     tax = abs(_safe_float(row.get("Tax") or row.get("Taxes") or row.get("TradeTax")) or 0.0)
-    return abs(gross) + commission + tax if buy else max(abs(gross) - commission - tax, 0.0)
+    gross_base = abs(_ibkr_amount_in_base_currency(row, gross, fx_rates_to_base))
+    commission_base = abs(_ibkr_amount_in_base_currency(row, commission, fx_rates_to_base))
+    tax_base = abs(_ibkr_amount_in_base_currency(row, tax, fx_rates_to_base))
+    return gross_base + commission_base + tax_base if buy else max(gross_base - commission_base - tax_base, 0.0)
+
+
+def _ibkr_amount_in_base_currency(
+    row: dict[str, str],
+    amount: float,
+    fx_rates_to_base: dict[tuple[str, str], float] | None = None,
+) -> float:
+    currency = str(row.get("Currency") or row.get("CurrencyPrimary") or "").strip().upper()
+    date_key = str(row.get("TradeDate") or row.get("Date/Time") or row.get("ReportDate") or "")[:8]
+    actual_fx_rate = (fx_rates_to_base or {}).get((date_key, currency))
+    if actual_fx_rate is not None and actual_fx_rate > 0:
+        return amount * actual_fx_rate
+    fx_rate = _safe_float(row.get("FxRateToBase") or row.get("FXRateToBase") or row.get("fxRateToBase"))
+    if fx_rate is None or fx_rate <= 0:
+        return amount
+    return amount * fx_rate
+
+
+def _ibkr_fx_rates_to_base_by_date(rows: list[dict[str, str]]) -> dict[tuple[str, str], float]:
+    totals: dict[tuple[str, str], dict[str, float]] = defaultdict(lambda: {"base": 0.0, "foreign": 0.0})
+    for row in rows:
+        if str(row.get("AssetCategory") or "").strip().upper() != "CASH":
+            continue
+        symbol = str(row.get("Symbol") or "").strip().upper()
+        if symbol != "GBP.USD":
+            continue
+        currency = str(row.get("Currency") or "").strip().upper()
+        date_key = str(row.get("TradeDate") or row.get("Date/Time") or "")[:8]
+        if not currency or not date_key:
+            continue
+        base_amount = abs(_safe_float(row.get("Quantity")) or 0.0)
+        foreign_amount = abs(
+            _safe_float(row.get("Proceeds"))
+            or _safe_float(row.get("TradeMoney"))
+            or _safe_float(row.get("Amount"))
+            or 0.0
+        )
+        if base_amount <= 0 or foreign_amount <= 0:
+            continue
+        totals[(date_key, currency)]["base"] += base_amount
+        totals[(date_key, currency)]["foreign"] += foreign_amount
+    return {
+        key: value["base"] / value["foreign"]
+        for key, value in totals.items()
+        if value["base"] > 0 and value["foreign"] > 0
+    }
 
 
 def _add_ibkr_dividends(paths: list[Path], positions: dict[str, dict[str, Any]]) -> None:
@@ -368,6 +430,7 @@ def _add_ibkr_dividends(paths: list[Path], positions: dict[str, dict[str, Any]])
                 continue
             seen.add(fingerprint)
             amount = _parse_money(row.get("Amount")) or _safe_float(row.get("Amount")) or 0.0
+            amount = _ibkr_amount_in_base_currency(row, amount)
             positions[symbol]["dividend_income_gbp"] += amount
 
 
