@@ -486,6 +486,8 @@ def _standalone_card(item: SwingAssessment) -> str:
     resistance = _nearest_zone(item.resistances, item.current_price or 0, below=False)
     support_text = _zone_text(support)
     resistance_text = _zone_text(resistance)
+    zone_details = _render_zone_details("支撑", support, item.current_price)
+    zone_details += _render_zone_details("阻力", resistance, item.current_price)
     price = f"{item.current_price:.2f}" if item.current_price is not None else "N/A"
     invalidation = (
         f"{item.invalidation_level:.2f}"
@@ -507,6 +509,7 @@ def _standalone_card(item: SwingAssessment) -> str:
       <div>量能：{escape(item.volume_label)}；{escape(item.volume_confirmation)}</div>
       <div>最近支撑：{support_text}</div>
       <div>最近阻力：{resistance_text}</div>
+      {zone_details}
       <div>ATR 失效参考：{invalidation}</div>
       <p style="color:#bfdbfe;">{escape(item.note)}</p>
       <div style="font-size:12px;color:#9ca3af;">{escape(item.data_source)} · {escape(item.data_timestamp)} · {escape(item.data_quality)}</div>
@@ -545,6 +548,36 @@ def _zone_text(zone: SwingZone | None) -> str:
     if zone is None:
         return "N/A"
     return f"{zone.lower:.2f}–{zone.upper:.2f}（强度 {zone.score}/100）"
+
+
+def _render_zone_details(label: str, zone: SwingZone | None, current_price: float | None) -> str:
+    if zone is None:
+        return ""
+    components = "".join(f"<li>{escape(component)}</li>" for component in zone.components)
+    if not components:
+        components = "<li>组成项暂无明细</li>"
+    distance = _zone_distance_text(zone, current_price)
+    return f"""<details style="margin-top:8px;color:#9ca3af;font-size:12px;">
+        <summary style="color:#bfdbfe;cursor:pointer;">{escape(label)}强度拆解</summary>
+        <ul>
+          <li>区间：{zone.lower:.2f}-{zone.upper:.2f}</li>
+          <li>强度：{zone.score}/100</li>
+          <li>触及次数：{zone.touches}</li>
+          <li>距现价 {escape(distance)}</li>
+          {components}
+          <li>该强度用于衡量历史结构重要性，不是上涨概率、目标价或交易胜率。</li>
+        </ul>
+      </details>"""
+
+
+def _zone_distance_text(zone: SwingZone, current_price: float | None) -> str:
+    if current_price in (None, 0):
+        return "N/A"
+    if zone.lower <= current_price <= zone.upper:
+        return "0.00%（现价位于区间内）"
+    reference = zone.upper if current_price > zone.upper else zone.lower
+    distance_pct = (reference / current_price - 1) * 100
+    return f"{distance_pct:+.2f}%"
 
 
 def _infer_asset_class(item: SwingUniverseItem) -> str:

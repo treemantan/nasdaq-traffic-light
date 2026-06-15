@@ -134,6 +134,9 @@ def render_html_report(report: ScoredReport, title: str) -> str:
     .swing-value {{ border-top: 1px solid var(--line); padding-top: 7px; color: var(--subtle); font-size: 12px; min-width: 0; }}
     .swing-value strong {{ display: block; color: var(--text); font-size: 13px; overflow-wrap: anywhere; }}
     .swing-note {{ color: var(--subtle); font-size: 12px; margin-top: 9px; }}
+    .swing-zone-details {{ margin-top: 8px; color: var(--subtle); font-size: 12px; }}
+    .swing-zone-details summary {{ cursor: pointer; color: #bfdbfe; }}
+    .swing-zone-details ul {{ margin: 6px 0 0 18px; padding: 0; }}
     .etf-summary {{ color: var(--subtle); margin-bottom: 12px; }}
     .portfolio-panel {{ margin: 12px 0; border: 1px solid var(--line); border-radius: 8px; background: rgba(255,255,255,.02); overflow: hidden; }}
     .portfolio-head {{ display: grid; grid-template-columns: 1fr auto; gap: 14px; padding: 14px; background: rgba(255,255,255,.025); }}
@@ -375,6 +378,8 @@ def _render_swing_card(item: SwingAssessment) -> str:
     indicators = item.indicators
     support = _nearest_swing_zone(item.supports, item.current_price)
     resistance = _nearest_swing_zone(item.resistances, item.current_price)
+    zone_details = _render_swing_zone_details("支撑", support, item.current_price)
+    zone_details += _render_swing_zone_details("阻力", resistance, item.current_price)
     holding = ""
     if item.origin == "holding":
         holding = (
@@ -402,6 +407,7 @@ def _render_swing_card(item: SwingAssessment) -> str:
         <div class="swing-value"><span>ATR失效观察</span><strong>{_fmt_plain(item.invalidation_level)}</strong></div>
         {holding}
       </div>
+      {zone_details}
       <div class="swing-note">{escape(item.volume_confirmation)}。{escape(item.note)}</div>
       <div class="swing-note">来源：{escape(item.data_source)} · 数据时间：{escape(item.data_timestamp)} · 状态：{escape(item.data_quality)}{warning}</div>
     </article>"""
@@ -417,6 +423,36 @@ def _fmt_swing_zone(zone: SwingZone | None) -> str:
     if zone is None:
         return "N/A"
     return f"{zone.lower:.2f}-{zone.upper:.2f} · 强度 {zone.score}/100"
+
+
+def _render_swing_zone_details(label: str, zone: SwingZone | None, current_price: float | None) -> str:
+    if zone is None:
+        return ""
+    components = "".join(f"<li>{escape(component)}</li>" for component in zone.components)
+    if not components:
+        components = "<li>组成项暂无明细</li>"
+    distance = _swing_zone_distance_text(zone, current_price)
+    return f"""<details class="swing-zone-details">
+        <summary>{escape(label)}强度拆解</summary>
+        <ul>
+          <li>区间：{zone.lower:.2f}-{zone.upper:.2f}</li>
+          <li>强度：{zone.score}/100</li>
+          <li>触及次数：{zone.touches}</li>
+          <li>距现价 {escape(distance)}</li>
+          {components}
+          <li>该强度用于衡量历史结构重要性，不是上涨概率、目标价或交易胜率。</li>
+        </ul>
+      </details>"""
+
+
+def _swing_zone_distance_text(zone: SwingZone, current_price: float | None) -> str:
+    if current_price in (None, 0):
+        return "N/A"
+    if zone.lower <= current_price <= zone.upper:
+        return "0.00%（现价位于区间内）"
+    reference = zone.upper if current_price > zone.upper else zone.lower
+    distance_pct = (reference / current_price - 1) * 100
+    return f"{distance_pct:+.2f}%"
 
 
 def _render_health_notes(report: ScoredReport) -> str:
