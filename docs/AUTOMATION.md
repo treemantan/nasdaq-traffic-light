@@ -52,8 +52,8 @@ python -m market_report --config config.example.json --dry-run
 - `08:30`：Market Pulse
 - `14:45`：Market Pulse
 - `18:00`：Volatility / Iron Condor 简报
-- `21:15`：完整 HTML 报告
-- `21:45` / `22:15`：full 报告兜底候选，仅在当天 full 尚未成功发送时补发
+- `19:45`：full 报告提前候选；若 GitHub 准时启动，会等待到 `21:07 UK` 后再生成和发送
+- `20:45` / `21:45`：full 报告兜底候选，仅在当天 full 尚未成功发送时补发
 
 默认周末 UK 节奏：
 
@@ -62,7 +62,9 @@ python -m market_report --config config.example.json --dry-run
 
 Serenity 的两个候选运行通过 `market-report-scheduled-email-sent-...-serenity` cache marker 去重。手动 `workflow_dispatch` 的 `serenity` 不读取或写入定时 marker，因此可用于测试或主动重发。详细方法见 [Serenity 私人持仓周报](SERENITY_WEEKLY.md)。
 
-英国夏令时按固定规则转换：三月最后一个周日进入 BST，十月最后一个周日回到 GMT。GitHub cron 使用 UTC，因此 workflow 配置两组候选 UTC 时间，并在运行时按 `Europe/London` 判断是否执行。GitHub scheduled workflow 可能被平台排队延迟；本项目不会因为 GitHub 延迟而跳过正确的 UK 候选，只会跳过错误的 BST/GMT 候选。为了避免当天最重要的 full 邮件缺失，workflow 额外设置 `21:45` 和 `22:15` full 兜底候选，并通过 `market-report-scheduled-email-sent-...-full` cache marker 确保同一天 scheduled full 邮件只发送一次。手动 `workflow_dispatch` 的 `full` 模式不会读取或写入 scheduled marker，不会影响当天定时 full 邮件；它只用于当天重新发送或验证邮件。
+英国夏令时按固定规则转换：三月最后一个周日进入 BST，十月最后一个周日回到 GMT。GitHub cron 使用 UTC，因此 workflow 配置两组候选 UTC 时间，并在运行时按 `Europe/London` 判断是否执行。GitHub scheduled workflow 可能被平台排队延迟；本项目不会因为 GitHub 延迟而跳过正确的 UK 候选，只会跳过错误的 BST/GMT 候选。
+
+为降低 GitHub cron 延迟导致 full 邮件过晚的问题，full 报告不再只等到 `21:15 UK` 后才触发。workflow 会从 `19:45 UK` 开始设置 full 候选；如果 GitHub 准时启动，`scripts/wait_for_full_report_window.py` 会等待到 `21:07 UK` 后再生成报告，避免美股收盘前误发；如果 GitHub 本身延迟，启动后会直接生成。`20:45` 和 `21:45` 作为后续兜底候选，并通过 `market-report-scheduled-email-sent-...-full` cache marker 确保同一天 scheduled full 邮件只发送一次。手动 `workflow_dispatch` 的 `full` 模式不会读取或写入 scheduled marker，不会影响当天定时 full 邮件；它只用于当天重新发送或验证邮件。
 
 ### 紧急市场冲击邮件
 
