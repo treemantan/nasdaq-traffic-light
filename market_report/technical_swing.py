@@ -131,6 +131,7 @@ def cluster_pivots(
     atr_value: float | None,
     current_price: float,
     bars_count: int,
+    baseline_volume: float | None = None,
 ) -> tuple[SwingZone, ...]:
     selected = sorted((pivot for pivot in pivots if pivot.kind == kind), key=lambda item: item.price)
     if not selected:
@@ -149,7 +150,7 @@ def cluster_pivots(
         else:
             clusters.append([pivot])
     zones = [
-        _zone_from_cluster(cluster, kind, atr_value, current_price, bars_count)
+        _zone_from_cluster(cluster, kind, atr_value, current_price, bars_count, baseline_volume)
         for cluster in clusters
     ]
     return tuple(sorted(zones, key=lambda zone: zone.score, reverse=True))
@@ -161,6 +162,7 @@ def _zone_from_cluster(
     atr_value: float | None,
     current_price: float,
     bars_count: int,
+    baseline_volume: float | None,
 ) -> SwingZone:
     center = sum(item.price for item in cluster) / len(cluster)
     padding = min((atr_value or current_price * 0.02) * 0.5, current_price * 0.015)
@@ -168,9 +170,25 @@ def _zone_from_cluster(
     recency = max(0, 25 - int((bars_count - 1 - latest_index) / max(bars_count, 1) * 25))
     touch_score = min(45, len(cluster) * 15)
     volume_values = [item.volume for item in cluster if item.volume is not None]
-    volume_score = 10 if volume_values and max(volume_values) > sum(volume_values) / len(volume_values) else 0
+    volume_ratio = (
+        (sum(volume_values) / len(volume_values)) / baseline_volume
+        if volume_values and baseline_volume and baseline_volume > 0
+        else None
+    )
+    if volume_ratio is None:
+        volume_score = 0
+        volume_component = "成交量比N/A"
+    elif volume_ratio < 1.0:
+        volume_score = 0
+        volume_component = f"成交量比{volume_ratio:.2f}x"
+    elif volume_ratio < 1.5:
+        volume_score = 5
+        volume_component = f"成交量比{volume_ratio:.2f}x"
+    else:
+        volume_score = 10
+        volume_component = f"成交量比{volume_ratio:.2f}x"
     score = max(1, min(100, 20 + touch_score + recency + volume_score))
-    components = (f"{len(cluster)}次触及", f"新近度+{recency}", f"成交量+{volume_score}")
+    components = (f"{len(cluster)}次触及", f"新近度+{recency}", volume_component, f"成交量+{volume_score}")
     return SwingZone(kind, center - padding, center + padding, score, len(cluster), components)
 
 
@@ -230,10 +248,20 @@ def assess_swing(
     trend = classify_trend(price, indicators, asset_class)
     pivots = detect_pivots(bars)
     supports = cluster_pivots(
-        pivots, kind="support", atr_value=indicators.atr14, current_price=price, bars_count=len(bars)
+        pivots,
+        kind="support",
+        atr_value=indicators.atr14,
+        current_price=price,
+        bars_count=len(bars),
+        baseline_volume=indicators.average_volume_20,
     )
     resistances = cluster_pivots(
-        pivots, kind="resistance", atr_value=indicators.atr14, current_price=price, bars_count=len(bars)
+        pivots,
+        kind="resistance",
+        atr_value=indicators.atr14,
+        current_price=price,
+        bars_count=len(bars),
+        baseline_volume=indicators.average_volume_20,
     )
     nearest_support = _nearest_zone(supports, price, below=True)
     nearest_resistance = _nearest_zone(resistances, price, below=False)
