@@ -371,7 +371,7 @@ def _iter_ibkr_rows(path: Path):
                 continue
             if header is None or len(raw) != len(header):
                 continue
-            yield dict(zip(header, raw))
+            yield _normalize_ibkr_csv_row(dict(zip(header, raw)))
 
 
 def _iter_ibkr_xml_rows(path: Path):
@@ -387,6 +387,50 @@ def _iter_ibkr_xml_rows(path: Path):
                 element.clear()
     except ET.ParseError as exc:
         raise RuntimeError(f"Invalid IBKR Flex XML file {path}: {exc}") from exc
+
+
+def _normalize_ibkr_csv_row(row: dict[str, str]) -> dict[str, str]:
+    normalized = {str(key): str(value) for key, value in row.items()}
+    lower = {key.lower(): value for key, value in normalized.items()}
+
+    def pick(*names: str) -> str:
+        for name in names:
+            value = lower.get(name.lower())
+            if value not in (None, ""):
+                return value
+        return ""
+
+    return {
+        **normalized,
+        "ClientAccountID": pick("ClientAccountID", "AccountID", "AccountId"),
+        "LevelOfDetail": (pick("LevelOfDetail") or "EXECUTION").upper(),
+        "AssetCategory": pick("AssetCategory", "AssetClass"),
+        "Symbol": pick("Symbol", "UnderlyingSymbol"),
+        "UnderlyingSymbol": pick("UnderlyingSymbol"),
+        "TradeID": pick("TradeID", "TradeId"),
+        "OrderID": pick("OrderID", "OrderId"),
+        "ExecID": pick("IBExecID", "ExecID", "ExecutionID"),
+        "TradeDate": pick("TradeDate", "Date/Time", "DateTime", "Date"),
+        "Date/Time": pick("Date/Time", "DateTime", "TradeDate", "Date"),
+        "Buy/Sell": pick("Buy/Sell", "BuySell", "Side"),
+        "Quantity": pick("Quantity", "TradeQuantity"),
+        "TradeQuantity": pick("TradeQuantity", "Quantity"),
+        "Price": pick("Price", "TradePrice"),
+        "TradePrice": pick("TradePrice", "Price"),
+        "Amount": pick("TradeMoney", "Amount", "Proceeds"),
+        "TradeMoney": pick("TradeMoney", "Amount"),
+        "Proceeds": pick("Proceeds"),
+        "NetCash": pick("NetCash", "NetCashWithBillable"),
+        "Commission": pick("Commission", "IBCommission", "TradeCommission"),
+        "IBCommission": pick("IBCommission", "Commission", "TradeCommission"),
+        "Tax": pick("Tax", "Taxes"),
+        "Currency": pick("Currency", "CommissionCurrency", "IBCommissionCurrency", "CurrencyPrimary"),
+        "FxRateToBase": pick("FxRateToBase", "FXRateToBase"),
+        "Multiplier": pick("Multiplier"),
+        "PutCall": pick("PutCall", "Right"),
+        "Strike": pick("Strike"),
+        "Expiry": pick("Expiry", "ExpiryDate", "Maturity"),
+    }
 
 
 def _normalize_ibkr_xml_row(attrs: dict[str, str], *, row_kind: str) -> dict[str, str]:

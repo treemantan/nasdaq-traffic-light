@@ -170,6 +170,78 @@ class ImportPortfolioStatementsTests(unittest.TestCase):
         self.assertAlmostEqual(short_put["net_cash_after_fee_native"], 149.35)
         self.assertAlmostEqual(long_put["net_cash_after_fee_native"], -25.65)
 
+    def test_ibkr_option_trades_are_extracted_from_csv_asset_class(self) -> None:
+        header = [
+            "ClientAccountID",
+            "LevelOfDetail",
+            "AssetClass",
+            "Symbol",
+            "UnderlyingSymbol",
+            "TradeID",
+            "IBExecID",
+            "TradeDate",
+            "Buy/Sell",
+            "Quantity",
+            "TradePrice",
+            "Currency",
+            "NetCash",
+            "IBCommission",
+            "Multiplier",
+        ]
+        rows = [
+            [
+                "U1",
+                "EXECUTION",
+                "OPT",
+                "NFLX 260724P00070000",
+                "NFLX",
+                "nflx-short-csv",
+                "csv-exec-1",
+                "20260616",
+                "SELL",
+                "1",
+                "1.50",
+                "USD",
+                "150",
+                "-0.65",
+                "100",
+            ],
+            [
+                "U1",
+                "EXECUTION",
+                "OPT",
+                "VIX 260722C00017000",
+                "VIX",
+                "vix-call-csv",
+                "csv-exec-2",
+                "20260616",
+                "BUY",
+                "1",
+                "3.00",
+                "USD",
+                "-300",
+                "-1.00",
+                "100",
+            ],
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "ibkr-options.csv"
+            path.write_text(
+                ",".join(header)
+                + "\n"
+                + "\n".join(",".join(row) for row in rows)
+                + "\n",
+                encoding="utf-8",
+            )
+
+            positions = MODULE._reconstruct_ibkr_positions([path])
+            option_legs = MODULE._extract_ibkr_option_legs([path])
+
+        self.assertEqual(positions, {})
+        self.assertEqual(len(option_legs), 2)
+        self.assertEqual({leg["underlying"] for leg in option_legs}, {"NFLX", "VIX"})
+        self.assertAlmostEqual(option_legs[0]["net_cash_after_fee_native"], 149.35)
+
     def test_ibkr_trade_confirm_xml_rows_are_supported(self) -> None:
         content = """<?xml version="1.0" encoding="UTF-8"?>
 <FlexQueryResponse>
