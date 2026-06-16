@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from html import escape
 
@@ -721,6 +722,7 @@ def _render_portfolio_panel(
         else ""
     )
     performance_panel = _render_portfolio_performance(monitor)
+    option_panel = _render_option_risk_panel(monitor.portfolio_positions)
     event_panel = _render_portfolio_event_calendar(portfolio_event_monitor)
     event_panel += _render_portfolio_event_review(monitor.portfolio_positions, news_monitor)
     total = _fmt_gbp(monitor.portfolio_total_value_gbp)
@@ -743,12 +745,198 @@ def _render_portfolio_panel(
           <tbody>{rows}</tbody>
         </table>
       </div>
+      {option_panel}
       {performance_panel}
       {exposure_panel}
       {mag7_panel}
       {event_panel}
       <div class="portfolio-notes"><ul>{note_html}</ul></div>
     </div>"""
+
+
+def _render_option_risk_panel(positions: list[PortfolioPosition]) -> str:
+    legs = _portfolio_option_legs(positions)
+    if not legs:
+        return ""
+    groups: dict[tuple[str, str], list[dict[str, object]]] = {}
+    for leg in legs:
+        key = (str(leg.get("underlying") or ""), str(leg.get("expiry") or ""))
+        groups.setdefault(key, []).append(leg)
+    strategy_rows = "\n".join(
+        _render_option_strategy_row(underlying, expiry, group_legs)
+        for (underlying, expiry), group_legs in sorted(groups.items())
+    )
+    leg_rows = "\n".join(_render_option_leg_row(leg) for leg in legs)
+    return f"""<div class="portfolio-notes">
+      <strong>IBKR期权风险（成本与结构识别）</strong>
+      <div class="small-note">期权已从普通股票/ETF持仓中剥离。当前使用IBKR statement成交现金流识别成本、方向、到期与行权价；实时mark、delta、gamma、theta、vega和POP需要IBKR期权行情或模型输入，未取得时不做伪精确估算。</div>
+      <div class="portfolio-table-scroll">
+        <table class="portfolio-table">
+          <thead><tr><th>策略/标的</th><th>到期</th><th>结构</th><th>净现金流</th><th>盈亏边界</th><th>数据状态</th></tr></thead>
+          <tbody>{strategy_rows}</tbody>
+        </table>
+      </div>
+      <details>
+        <summary>查看期权腿明细</summary>
+        <div class="portfolio-table-scroll">
+          <table class="portfolio-table">
+            <thead><tr><th>合约</th><th>方向</th><th>数量</th><th>成交价</th><th>Net cash</th><th>手续费</th><th>来源</th></tr></thead>
+            <tbody>{leg_rows}</tbody>
+          </table>
+        </div>
+      </details>
+    </div>"""
+
+
+def _portfolio_option_legs(positions: list[PortfolioPosition]) -> list[dict[str, object]]:
+    for position in positions:
+        if not position.option_legs_json:
+            continue
+        try:
+            raw = json.loads(position.option_legs_json)
+        except json.JSONDecodeError:
+            return []
+        if isinstance(raw, list):
+            return [item for item in raw if isinstance(item, dict)]
+    return []
+
+
+def _render_option_strategy_row(underlying: str, expiry: str, legs: list[dict[str, object]]) -> str:
+    strategy = _classify_option_strategy(legs)
+    currency = _option_currency(legs)
+    net_cash = sum(_option_cash_after_fee_native(leg) for leg in legs)
+    net_cash_gbp = sum(_option_cash_after_fee_gbp(leg) for leg in legs)
+    boundary = _option_boundary_text(strategy, legs, net_cash)
+    structure = "；".join(
+        _option_leg_label(leg)
+        for leg in sorted(legs, key=lambda item: (_option_float(item.get("strike")) or 0))
+    )
+    return f"""<tr>
+      <td><strong>{escape(underlying or "UNKNOWN")}</strong><br><span class="portfolio-scope">{escape(strategy)}</span></td>
+      <td>{escape(expiry or "到期日待确认")}</td>
+      <td>{escape(structure)}</td>
+      <td>{escape(_fmt_option_cash(net_cash, currency))}<br><span class="portfolio-scope">扣费后；GBP参考 {escape(_fmt_signed_gbp(net_cash_gbp))}</span></td>
+      <td>{escape(boundary)}</td>
+      <td>成交已识别；实时mark/Greeks/POP待IBKR行情或模型估算</td>
+    </tr>"""
+
+
+def _classify_option_strategy(legs: list[dict[str, object]]) -> str:
+    puts = [leg for leg in legs if str(leg.get("right") or "").upper() == "P"]
+    calls = [leg for leg in legs if str(leg.get("right") or "").upper() == "C"]
+    if len(puts) == 2:
+        short_puts = [leg for leg in puts if (_option_float(leg.get("signed_contracts")) or 0) < 0]
+        long_puts = [leg for leg in puts if (_option_float(leg.get("signed_contracts")) or 0) > 0]
+        if short_puts and long_puts:
+            short_strike = _option_float(short_puts[0].get("strike"))
+            long_strike = _option_float(long_puts[0].get("strike"))
+            if short_strike is not None and long_strike is not None and short_strike > long_strike:
+                return "Bull put spread / 牛市看跌价差"
+    if len(calls) == 1 and (_option_float(calls[0].get("signed_contracts")) or 0) > 0:
+        return "Long call / 买入看涨"
+    return "Option legs / 期权组合"
+
+
+def _option_boundary_text(strategy: str, legs: list[dict[str, object]], net_cash: float) -> str:
+    multiplier = _option_float(legs[0].get("multiplier")) or 100.0
+    if "Bull put spread" in strategy:
+        short_put = next((leg for leg in legs if str(leg.get("right") or "") == "P" and (_option_float(leg.get("signed_contracts")) or 0) < 0), None)
+        long_put = next((leg for leg in legs if str(leg.get("right") or "") == "P" and (_option_float(leg.get("signed_contracts")) or 0) > 0), None)
+        if short_put and long_put:
+            short_strike = _option_float(short_put.get("strike"))
+            long_strike = _option_float(long_put.get("strike"))
+            contracts = abs(_option_float(short_put.get("signed_contracts")) or 1.0)
+            if short_strike is not None and long_strike is not None and contracts:
+                net_credit = net_cash / (contracts * multiplier)
+                max_profit = net_cash
+                max_loss = max((short_strike - long_strike - net_credit) * multiplier * contracts, 0)
+                breakeven = short_strike - net_credit
+                return f"盈亏平衡约 {breakeven:.2f}；最大收益约 {max_profit:.2f}；最大亏损约 {max_loss:.2f}（原币）"
+    if "Long call" in strategy:
+        leg = legs[0]
+        strike = _option_float(leg.get("strike"))
+        contracts = abs(_option_float(leg.get("signed_contracts")) or 1.0)
+        if strike is not None and contracts:
+            debit = -net_cash / (contracts * multiplier)
+            breakeven = strike + debit
+            return f"盈亏平衡约 {breakeven:.2f}；最大亏损约 {-net_cash:.2f}（原币）；上行收益取决于到期结算"
+    return "需按腿逐项复核；当前不提供POP/Greeks伪精确值"
+
+
+def _render_option_leg_row(leg: dict[str, object]) -> str:
+    currency = str(leg.get("currency") or "")
+    return f"""<tr>
+      <td><strong>{escape(str(leg.get("symbol") or ""))}</strong><br><span class="portfolio-scope">{escape(str(leg.get("expiry") or ""))} {escape(str(leg.get("right") or ""))}{escape(_fmt_option_number(leg.get("strike")))}</span></td>
+      <td>{escape(str(leg.get("side") or ""))}</td>
+      <td>{escape(_fmt_option_number(leg.get("contracts")))}</td>
+      <td>{escape(_fmt_option_number(leg.get("trade_price")))}</td>
+      <td>{escape(_fmt_option_cash(_option_cash_after_fee_native(leg), currency))}<br><span class="portfolio-scope">原始netCash {escape(_fmt_option_cash(_option_float(leg.get("net_cash_native")) or 0, currency))}；GBP {escape(_fmt_signed_gbp(_option_cash_after_fee_gbp(leg)))}</span></td>
+      <td>{escape(_fmt_option_cash(_option_float(leg.get("commission_native")) or 0, currency))}</td>
+      <td>{escape(str(leg.get("source") or "IBKR statement"))}</td>
+    </tr>"""
+
+
+def _option_leg_label(leg: dict[str, object]) -> str:
+    signed = _option_float(leg.get("signed_contracts")) or 0
+    side = "short" if signed < 0 else "long"
+    right = "P" if str(leg.get("right") or "").upper() == "P" else "C"
+    strike = _fmt_option_number(leg.get("strike"))
+    contracts = _fmt_option_number(abs(signed) or leg.get("contracts"))
+    return f"{side} {contracts}x {strike}{right}"
+
+
+def _option_currency(legs: list[dict[str, object]]) -> str:
+    for leg in legs:
+        currency = str(leg.get("currency") or "").strip().upper()
+        if currency:
+            return currency
+    return ""
+
+
+def _option_cash_after_fee_native(leg: dict[str, object]) -> float:
+    value = _option_float(leg.get("net_cash_after_fee_native"))
+    if value is not None:
+        return value
+    net_cash = _option_float(leg.get("net_cash_native"))
+    commission = _option_float(leg.get("commission_native"))
+    if net_cash is not None and commission is not None:
+        return net_cash + commission
+    return net_cash or 0.0
+
+
+def _option_cash_after_fee_gbp(leg: dict[str, object]) -> float:
+    value = _option_float(leg.get("net_cash_after_fee_gbp"))
+    if value is not None:
+        return value
+    net_cash = _option_float(leg.get("net_cash_gbp"))
+    commission = _option_float(leg.get("commission_gbp"))
+    if net_cash is not None and commission is not None:
+        return net_cash + commission
+    return net_cash or 0.0
+
+
+def _option_float(value: object) -> float | None:
+    try:
+        if value in (None, ""):
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _fmt_option_number(value: object) -> str:
+    number = _option_float(value)
+    if number is None:
+        return "N/A"
+    if abs(number - round(number)) < 1e-9:
+        return str(int(round(number)))
+    return f"{number:.4f}".rstrip("0").rstrip(".")
+
+
+def _fmt_option_cash(value: float, currency: str) -> str:
+    prefix = f"{currency} " if currency else ""
+    sign = "+" if value > 0 else ""
+    return f"{sign}{prefix}{value:,.2f}"
 
 
 def _render_portfolio_performance(monitor: ETFMonitor) -> str:

@@ -116,6 +116,7 @@ class PortfolioPosition:
     ibkr_trade_as_of: str = ""
     ibkr_trade_file_updated: str = ""
     ibkr_data_warning: str = ""
+    option_legs_json: str = ""
 
 
 @dataclass(frozen=True)
@@ -2433,6 +2434,7 @@ def _load_portfolio_summary(
             ibkr_trade_as_of=str(row.get("ibkr_trade_as_of") or ""),
             ibkr_trade_file_updated=str(row.get("ibkr_trade_file_updated") or ""),
             ibkr_data_warning=str(row.get("ibkr_data_warning") or ""),
+            option_legs_json=str(row.get("option_legs_json") or ""),
         )
         for row in rows
         if str(row.get("symbol") or "").strip()

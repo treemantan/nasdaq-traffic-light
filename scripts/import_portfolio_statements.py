@@ -60,10 +60,13 @@ def main() -> int:
         _reconstruct_positions(revolut_paths) if revolut_paths else {},
         _reconstruct_ibkr_positions(ibkr_paths) if ibkr_paths else {},
     )
+    option_legs = _extract_ibkr_option_legs(ibkr_paths) if ibkr_paths else []
     if not positions:
         raise SystemExit("No open positions found in supported portfolio statements.")
 
     rows = _build_portfolio_rows(positions)
+    if rows and option_legs:
+        rows[0]["option_legs_json"] = json.dumps(option_legs, ensure_ascii=False, separators=(",", ":"))
     ibkr_health = _ibkr_data_health(
         ibkr_paths,
         Path(args.ibkr_diagnostics) if args.ibkr_diagnostics else None,
@@ -157,6 +160,8 @@ def _reconstruct_ibkr_positions(paths: list[Path]) -> dict[str, dict[str, Any]]:
         asset_category = str(row.get("AssetCategory") or "").strip().upper()
         if asset_category == "CASH":
             continue
+        if asset_category == "OPT":
+            continue
         symbol = str(row.get("Symbol") or row.get("UnderlyingSymbol") or "").strip().upper()
         if not symbol or symbol == "GBP":
             continue
@@ -208,6 +213,128 @@ def _reconstruct_ibkr_positions(paths: list[Path]) -> dict[str, dict[str, Any]]:
             positions[symbol]["cost_gbp"] -= average_cost * matched_quantity
     _add_ibkr_dividends(paths, positions)
     return dict(positions)
+
+
+def _extract_ibkr_option_legs(paths: list[Path]) -> list[dict[str, Any]]:
+    rows, _duplicate_count = _unique_ibkr_rows(paths)
+    fx_rates_to_base = _ibkr_fx_rates_to_base_by_date(rows)
+    legs: list[dict[str, Any]] = []
+    for row in rows:
+        asset_category = str(row.get("AssetCategory") or "").strip().upper()
+        if asset_category != "OPT":
+            continue
+        quantity = _ibkr_quantity(row)
+        if quantity is None or quantity <= 0:
+            continue
+        raw_symbol = str(row.get("Symbol") or "").strip().upper()
+        underlying = _option_underlying(row, raw_symbol)
+        right = _option_right(row, raw_symbol)
+        expiry = _option_expiry(row, raw_symbol)
+        strike = _option_strike(row, raw_symbol)
+        multiplier = _safe_float(row.get("Multiplier") or row.get("multiplier")) or 100.0
+        side = str(row.get("Buy/Sell") or "").strip().upper()
+        signed_contracts = quantity if side == "BUY" else -quantity if side == "SELL" else quantity
+        net_cash_native = _safe_float(row.get("NetCash") or row.get("NetCashWithBillable"))
+        net_cash_gbp = (
+            _ibkr_amount_in_base_currency(row, net_cash_native, fx_rates_to_base)
+            if net_cash_native is not None
+            else None
+        )
+        commission_native = _safe_float(row.get("Commission") or row.get("IBCommission") or row.get("TradeCommission"))
+        commission_gbp = (
+            _ibkr_amount_in_base_currency(row, commission_native, fx_rates_to_base)
+            if commission_native is not None
+            else None
+        )
+        net_cash_after_fee_native = (
+            net_cash_native + commission_native
+            if net_cash_native is not None and commission_native is not None
+            else net_cash_native
+        )
+        net_cash_after_fee_gbp = (
+            net_cash_gbp + commission_gbp
+            if net_cash_gbp is not None and commission_gbp is not None
+            else net_cash_gbp
+        )
+        trade_price = _safe_float(row.get("TradePrice") or row.get("Price"))
+        legs.append(
+            {
+                "symbol": raw_symbol,
+                "underlying": underlying,
+                "expiry": expiry,
+                "right": right,
+                "strike": strike,
+                "side": side,
+                "contracts": quantity,
+                "signed_contracts": signed_contracts,
+                "multiplier": multiplier,
+                "trade_price": trade_price,
+                "currency": str(row.get("Currency") or "").strip().upper(),
+                "net_cash_native": net_cash_native,
+                "net_cash_gbp": net_cash_gbp,
+                "commission_native": commission_native,
+                "commission_gbp": commission_gbp,
+                "net_cash_after_fee_native": net_cash_after_fee_native,
+                "net_cash_after_fee_gbp": net_cash_after_fee_gbp,
+                "trade_date": _format_ibkr_date(str(row.get("TradeDate") or row.get("Date/Time") or "")),
+                "source": "IBKR statement",
+            }
+        )
+    return sorted(
+        legs,
+        key=lambda item: (
+            str(item.get("underlying") or ""),
+            str(item.get("expiry") or ""),
+            str(item.get("right") or ""),
+            float(item.get("strike") or 0),
+        ),
+    )
+
+
+def _option_underlying(row: dict[str, str], raw_symbol: str) -> str:
+    underlying = str(row.get("UnderlyingSymbol") or "").strip().upper()
+    if underlying:
+        return underlying
+    match = re.match(r"^([A-Z.\-]+)\s+\d{6}[CP]\d{8}$", raw_symbol)
+    return match.group(1) if match else raw_symbol.split()[0] if raw_symbol else ""
+
+
+def _option_right(row: dict[str, str], raw_symbol: str) -> str:
+    value = str(row.get("PutCall") or row.get("Right") or row.get("putCall") or "").strip().upper()
+    if value.startswith("P"):
+        return "P"
+    if value.startswith("C"):
+        return "C"
+    match = re.search(r"\d{6}([CP])\d{8}$", raw_symbol)
+    return match.group(1) if match else ""
+
+
+def _option_expiry(row: dict[str, str], raw_symbol: str) -> str:
+    value = str(row.get("Expiry") or row.get("ExpiryDate") or row.get("Maturity") or "").strip()
+    if value:
+        return _format_ibkr_date(value)
+    match = re.search(r"(\d{6})[CP]\d{8}$", raw_symbol)
+    if not match:
+        return ""
+    compact = match.group(1)
+    return _format_ibkr_date("20" + compact)
+
+
+def _option_strike(row: dict[str, str], raw_symbol: str) -> float | None:
+    value = _safe_float(row.get("Strike") or row.get("strike"))
+    if value is not None:
+        return value
+    match = re.search(r"\d{6}[CP](\d{8})$", raw_symbol)
+    if not match:
+        return None
+    return int(match.group(1)) / 1000.0
+
+
+def _format_ibkr_date(value: str) -> str:
+    digits = re.sub(r"\D", "", value)
+    if len(digits) >= 8:
+        return f"{digits[:4]}-{digits[4:6]}-{digits[6:8]}"
+    return value
 
 
 def _unique_ibkr_rows(paths: list[Path]) -> tuple[list[dict[str, str]], int]:

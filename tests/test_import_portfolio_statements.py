@@ -123,6 +123,53 @@ class ImportPortfolioStatementsTests(unittest.TestCase):
         self.assertAlmostEqual(positions["SPCX"]["quantity"], 10)
         self.assertAlmostEqual(positions["SPCX"]["cost_gbp"], 1007.7334209)
 
+    def test_ibkr_option_trades_are_extracted_as_option_legs_not_stock_positions(self) -> None:
+        content = """<?xml version="1.0" encoding="UTF-8"?>
+<FlexQueryResponse>
+  <FlexStatements>
+    <FlexStatement accountId="U1" fromDate="20260616" toDate="20260616">
+      <Trades>
+        <Trade accountId="U1" assetCategory="OPT" symbol="NFLX 260724P00070000"
+          underlyingSymbol="NFLX" tradeID="nflx-short" ibExecID="opt-exec-1"
+          tradeDate="20260616" buySell="SELL" quantity="1" tradePrice="1.50"
+          currency="USD" netCash="150" ibCommission="-0.65"
+          levelOfDetail="EXECUTION" />
+        <Trade accountId="U1" assetCategory="OPT" symbol="NFLX 260724P00060000"
+          underlyingSymbol="NFLX" tradeID="nflx-long" ibExecID="opt-exec-2"
+          tradeDate="20260616" buySell="BUY" quantity="1" tradePrice="0.25"
+          currency="USD" netCash="-25" ibCommission="-0.65"
+          levelOfDetail="EXECUTION" />
+        <Trade accountId="U1" assetCategory="OPT" symbol="VIX 260722C00017000"
+          underlyingSymbol="VIX" tradeID="vix-call" ibExecID="opt-exec-3"
+          tradeDate="20260616" buySell="BUY" quantity="1" tradePrice="3.00"
+          currency="USD" netCash="-300" ibCommission="-1.00"
+          levelOfDetail="EXECUTION" />
+      </Trades>
+    </FlexStatement>
+  </FlexStatements>
+</FlexQueryResponse>
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "ibkr-options.xml"
+            path.write_text(content, encoding="utf-8")
+
+            positions = MODULE._reconstruct_ibkr_positions([path])
+            option_legs = MODULE._extract_ibkr_option_legs([path])
+
+        self.assertEqual(positions, {})
+        self.assertEqual(len(option_legs), 3)
+        short_put = next(item for item in option_legs if item["strike"] == 70.0)
+        long_put = next(item for item in option_legs if item["strike"] == 60.0)
+        self.assertEqual(short_put["underlying"], "NFLX")
+        self.assertEqual(short_put["right"], "P")
+        self.assertEqual(short_put["expiry"], "2026-07-24")
+        self.assertEqual(short_put["signed_contracts"], -1.0)
+        self.assertEqual(long_put["signed_contracts"], 1.0)
+        self.assertAlmostEqual(short_put["net_cash_native"], 150.0)
+        self.assertAlmostEqual(long_put["net_cash_native"], -25.0)
+        self.assertAlmostEqual(short_put["net_cash_after_fee_native"], 149.35)
+        self.assertAlmostEqual(long_put["net_cash_after_fee_native"], -25.65)
+
     def test_ibkr_trade_confirm_xml_rows_are_supported(self) -> None:
         content = """<?xml version="1.0" encoding="UTF-8"?>
 <FlexQueryResponse>
