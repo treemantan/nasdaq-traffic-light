@@ -806,7 +806,7 @@ def _render_option_strategy_row(underlying: str, expiry: str, legs: list[dict[st
     currency = _option_currency(legs)
     net_cash = sum(_option_cash_after_fee_native(leg) for leg in legs)
     net_cash_gbp = sum(_option_cash_after_fee_gbp(leg) for leg in legs)
-    boundary = _option_boundary_text(strategy, legs, net_cash)
+    boundary = _option_boundary_text(strategy, legs, net_cash, net_cash_gbp)
     structure = "；".join(
         _option_leg_label(leg)
         for leg in sorted(legs, key=lambda item: (_option_float(item.get("strike")) or 0))
@@ -815,7 +815,7 @@ def _render_option_strategy_row(underlying: str, expiry: str, legs: list[dict[st
       <td><strong>{escape(underlying or "UNKNOWN")}</strong><br><span class="portfolio-scope">{escape(strategy)}</span></td>
       <td>{escape(expiry or "到期日待确认")}</td>
       <td>{escape(structure)}</td>
-      <td>{escape(_fmt_option_cash(net_cash, currency))}<br><span class="portfolio-scope">扣费后；GBP参考 {escape(_fmt_signed_gbp(net_cash_gbp))}</span></td>
+      <td>{escape(_fmt_signed_gbp(net_cash_gbp))}<br><span class="portfolio-scope">扣费后；原币 {escape(_fmt_option_cash(net_cash, currency))}</span></td>
       <td>{escape(boundary)}</td>
       <td>成交已识别；实时mark/Greeks/POP待IBKR行情或模型估算</td>
     </tr>"""
@@ -837,7 +837,13 @@ def _classify_option_strategy(legs: list[dict[str, object]]) -> str:
     return "Option legs / 期权组合"
 
 
-def _option_boundary_text(strategy: str, legs: list[dict[str, object]], net_cash: float) -> str:
+def _option_boundary_text(
+    strategy: str,
+    legs: list[dict[str, object]],
+    net_cash: float,
+    net_cash_gbp: float | None = None,
+) -> str:
+    currency = _option_currency(legs)
     multiplier = _option_float(legs[0].get("multiplier")) or 100.0
     if "Bull put spread" in strategy:
         short_put = next((leg for leg in legs if str(leg.get("right") or "") == "P" and (_option_float(leg.get("signed_contracts")) or 0) < 0), None)
@@ -851,6 +857,14 @@ def _option_boundary_text(strategy: str, legs: list[dict[str, object]], net_cash
                 max_profit = net_cash
                 max_loss = max((short_strike - long_strike - net_credit) * multiplier * contracts, 0)
                 breakeven = short_strike - net_credit
+                if net_cash_gbp is not None and abs(net_cash) > 1e-9:
+                    max_profit_gbp = net_cash_gbp
+                    max_loss_gbp = max_loss * abs(net_cash_gbp / net_cash)
+                    return (
+                        f"盈亏平衡约 {breakeven:.2f}；"
+                        f"最大收益约 {_fmt_gbp(max_profit_gbp)}（{_fmt_option_cash_abs(max_profit, currency)}）；"
+                        f"最大亏损约 {_fmt_gbp(max_loss_gbp)}（{_fmt_option_cash_abs(max_loss, currency)}）"
+                    )
                 return f"盈亏平衡约 {breakeven:.2f}；最大收益约 {max_profit:.2f}；最大亏损约 {max_loss:.2f}（原币）"
     if "Long call" in strategy:
         leg = legs[0]
@@ -859,6 +873,13 @@ def _option_boundary_text(strategy: str, legs: list[dict[str, object]], net_cash
         if strike is not None and contracts:
             debit = -net_cash / (contracts * multiplier)
             breakeven = strike + debit
+            if net_cash_gbp is not None and abs(net_cash) > 1e-9:
+                max_loss_gbp = abs(net_cash_gbp)
+                return (
+                    f"盈亏平衡约 {breakeven:.2f}；"
+                    f"最大亏损约 {_fmt_gbp(max_loss_gbp)}（{_fmt_option_cash_abs(-net_cash, currency)}）；"
+                    "上行收益取决于到期结算"
+                )
             return f"盈亏平衡约 {breakeven:.2f}；最大亏损约 {-net_cash:.2f}（原币）；上行收益取决于到期结算"
     return "需按腿逐项复核；当前不提供POP/Greeks伪精确值"
 
@@ -937,6 +958,11 @@ def _fmt_option_cash(value: float, currency: str) -> str:
     prefix = f"{currency} " if currency else ""
     sign = "+" if value > 0 else ""
     return f"{sign}{prefix}{value:,.2f}"
+
+
+def _fmt_option_cash_abs(value: float, currency: str) -> str:
+    prefix = f"{currency} " if currency else ""
+    return f"{prefix}{abs(value):,.2f}"
 
 
 def _render_portfolio_performance(monitor: ETFMonitor) -> str:
