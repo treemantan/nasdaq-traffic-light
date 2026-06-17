@@ -220,15 +220,38 @@ def _logical_file_name(file_name: str) -> str:
 
 
 def _latest_per_logical_name(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    incremental_items = [
+        item
+        for item in items
+        if _is_incremental_ibkr_trade_file(str(item.get("name") or ""))
+    ]
     latest_by_name: dict[str, dict[str, Any]] = {}
     for item in items:
+        if item in incremental_items:
+            continue
         logical_name = _logical_file_name(str(item.get("name") or ""))
         current = latest_by_name.get(logical_name)
         if current is None or str(item.get("lastModifiedDateTime") or "") > str(
             current.get("lastModifiedDateTime") or ""
         ):
             latest_by_name[logical_name] = item
-    return sorted(latest_by_name.values(), key=lambda item: str(item.get("name") or "").lower())
+    return sorted(
+        [*latest_by_name.values(), *incremental_items],
+        key=lambda item: str(item.get("name") or "").lower(),
+    )
+
+
+def _is_incremental_ibkr_trade_file(file_name: str) -> bool:
+    logical_name = _logical_file_name(file_name)
+    return any(
+        marker in logical_name
+        for marker in (
+            "todaytrades",
+            "tradeconfirm",
+            "tradeconfirmation",
+            "custtrade",
+        )
+    )
 
 
 def _download_item(token: str, config: GraphConfig, item: dict[str, Any], output_dir: Path) -> Path:

@@ -85,6 +85,41 @@ class OneDriveCloudImportTests(unittest.TestCase):
             ["CustTrade_info.csv", "PastTradesFullReport 1.xml"],
         )
 
+    def test_incremental_ibkr_trade_files_are_all_preserved(self) -> None:
+        files = [
+            {
+                "name": "TodayTradesTransacInfo.csv",
+                "file": {},
+                "lastModifiedDateTime": "2026-06-16T20:53:00Z",
+            },
+            {
+                "name": "TodayTradesTransacInfo 1.csv",
+                "file": {},
+                "lastModifiedDateTime": "2026-06-17T23:52:00Z",
+            },
+            {
+                "name": "PastTradesFullReport.xml",
+                "file": {},
+                "lastModifiedDateTime": "2026-06-14T00:46:00Z",
+            },
+            {
+                "name": "PastTradesFullReport 1.xml",
+                "file": {},
+                "lastModifiedDateTime": "2026-06-14T00:51:00Z",
+            },
+        ]
+
+        selected = MODULE._latest_per_logical_name(files)
+
+        self.assertEqual(
+            [item["name"] for item in selected],
+            [
+                "PastTradesFullReport 1.xml",
+                "TodayTradesTransacInfo 1.csv",
+                "TodayTradesTransacInfo.csv",
+            ],
+        )
+
     def test_graph_modified_time_can_be_preserved_on_downloaded_file(self) -> None:
         timestamp = MODULE._graph_modified_timestamp(
             {"lastModifiedDateTime": "2026-06-13T19:25:42Z"}
