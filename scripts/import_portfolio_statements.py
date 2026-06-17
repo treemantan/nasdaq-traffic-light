@@ -676,6 +676,9 @@ def _ibkr_amount_in_base_currency(
     actual_fx_rate = (fx_rates_to_base or {}).get((date_key, currency))
     if actual_fx_rate is not None and actual_fx_rate > 0:
         return amount * actual_fx_rate
+    fallback_fx_rate = (fx_rates_to_base or {}).get(("", currency))
+    if fallback_fx_rate is not None and fallback_fx_rate > 0:
+        return amount * fallback_fx_rate
     fx_rate = _safe_float(row.get("FxRateToBase") or row.get("FXRateToBase") or row.get("fxRateToBase"))
     if fx_rate is None or fx_rate <= 0:
         return amount
@@ -705,11 +708,19 @@ def _ibkr_fx_rates_to_base_by_date(rows: list[dict[str, str]]) -> dict[tuple[str
             continue
         totals[(date_key, currency)]["base"] += base_amount
         totals[(date_key, currency)]["foreign"] += foreign_amount
-    return {
+    rates = {
         key: value["base"] / value["foreign"]
         for key, value in totals.items()
         if value["base"] > 0 and value["foreign"] > 0
     }
+    by_currency: dict[str, dict[str, float]] = defaultdict(lambda: {"base": 0.0, "foreign": 0.0})
+    for (_date_key, currency), value in totals.items():
+        by_currency[currency]["base"] += value["base"]
+        by_currency[currency]["foreign"] += value["foreign"]
+    for currency, value in by_currency.items():
+        if value["base"] > 0 and value["foreign"] > 0:
+            rates[("", currency)] = value["base"] / value["foreign"]
+    return rates
 
 
 def _add_ibkr_dividends(paths: list[Path], positions: dict[str, dict[str, Any]]) -> None:

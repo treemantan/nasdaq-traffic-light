@@ -166,6 +166,64 @@ class ImportPortfolioStatementsTests(unittest.TestCase):
         self.assertAlmostEqual(positions["FLRK"]["quantity"], 11)
         self.assertAlmostEqual(positions["FLRK"]["cost_gbp"], 959.64)
 
+    def test_ibkr_option_cash_uses_primary_currency_not_commission_currency(self) -> None:
+        header = (
+            "ClientAccountID,AssetCategory,Symbol,UnderlyingSymbol,TradeID,ExecID,TradeDate,Buy/Sell,"
+            "Quantity,TradePrice,NetCash,Commission,CurrencyPrimary,CommissionCurrency,FxRateToBase,"
+            "Multiplier,PutCall,Strike,Expiry,LevelOfDetail\n"
+        )
+        content = (
+            header
+            + "U1,OPT,VIX 260722C00017000,VIX,t1,exec1,20260616,SELL,"
+            "1,2.53,251.50,-1.50,USD,GBP,0.745,100,C,17,20260722,EXECUTION\n"
+            + "U1,OPT,VIX 260722C00017000,VIX,t2,exec2,20260616,BUY,"
+            "1,2.25,-226.50,-1.50,USD,GBP,0.745,100,C,17,20260722,EXECUTION\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "ibkr-options.csv"
+            path.write_text(content, encoding="utf-8")
+
+            option_legs = MODULE._extract_ibkr_option_legs([path])
+
+        self.assertEqual(len(option_legs), 2)
+        net_cash_native = sum(leg["net_cash_after_fee_native"] for leg in option_legs)
+        net_cash_gbp = sum(leg["net_cash_after_fee_gbp"] for leg in option_legs)
+        self.assertAlmostEqual(net_cash_native, 22.0)
+        self.assertAlmostEqual(net_cash_gbp, 16.39)
+
+    def test_ibkr_option_cash_uses_batch_fx_fallback_across_split_trade_files(self) -> None:
+        header = (
+            "ClientAccountID,AssetClass,Symbol,UnderlyingSymbol,TradeID,ExecID,TradeDate,Buy/Sell,"
+            "Quantity,TradePrice,NetCash,Commission,CurrencyPrimary,CommissionCurrency,FxRateToBase,"
+            "Multiplier,PutCall,Strike,Expiry,LevelOfDetail,Proceeds\n"
+        )
+        sell_leg = (
+            header
+            + "U1,OPT,VIX 260722C00017000,VIX,t1,exec1,20260616,SELL,"
+            "1,2.53,251.50,-1.50,USD,USD,,100,C,17,20260722,EXECUTION,\n"
+        )
+        buy_leg_with_fx = (
+            header
+            + "U1,OPT,VIX 260722C00017000,VIX,t2,exec2,20260616,BUY,"
+            "1,2.25,-226.50,-1.50,USD,USD,,100,C,17,20260722,EXECUTION,\n"
+            + "U1,CASH,GBP.USD,,fx1,fxexec1,20260616,SELL,"
+            "-168.98,1.34,0,0,USD,GBP,,1,,,,EXECUTION,226.50\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            sell_path = Path(directory) / "TodayTradesTransacInfo 1.csv"
+            buy_path = Path(directory) / "TodayTradesTransacInfo.csv"
+            sell_path.write_text(sell_leg, encoding="utf-8")
+            buy_path.write_text(buy_leg_with_fx, encoding="utf-8")
+
+            option_legs = MODULE._extract_ibkr_option_legs([sell_path, buy_path])
+
+        vix_legs = [leg for leg in option_legs if leg["underlying"] == "VIX"]
+        self.assertEqual(len(vix_legs), 2)
+        net_cash_native = sum(leg["net_cash_after_fee_native"] for leg in vix_legs)
+        net_cash_gbp = sum(leg["net_cash_after_fee_gbp"] for leg in vix_legs)
+        self.assertAlmostEqual(net_cash_native, 22.0)
+        self.assertAlmostEqual(net_cash_gbp, 16.41, places=2)
+
     def test_ibkr_option_trades_are_extracted_as_option_legs_not_stock_positions(self) -> None:
         content = """<?xml version="1.0" encoding="UTF-8"?>
 <FlexQueryResponse>
