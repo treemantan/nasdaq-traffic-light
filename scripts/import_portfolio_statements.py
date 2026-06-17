@@ -509,7 +509,7 @@ def _normalize_ibkr_csv_row(row: dict[str, str]) -> dict[str, str]:
         "Commission": pick("Commission", "IBCommission", "TradeCommission"),
         "IBCommission": pick("IBCommission", "Commission", "TradeCommission"),
         "Tax": pick("Tax", "Taxes"),
-        "Currency": pick("Currency", "CommissionCurrency", "IBCommissionCurrency", "CurrencyPrimary"),
+        "Currency": pick("Currency", "CurrencyPrimary", "TradeCurrency", "CommissionCurrency", "IBCommissionCurrency"),
         "FxRateToBase": pick("FxRateToBase", "FXRateToBase"),
         "Multiplier": pick("Multiplier"),
         "PutCall": pick("PutCall", "Right"),
@@ -670,6 +670,8 @@ def _ibkr_amount_in_base_currency(
     fx_rates_to_base: dict[tuple[str, str], float] | None = None,
 ) -> float:
     currency = str(row.get("Currency") or row.get("CurrencyPrimary") or "").strip().upper()
+    if currency in {"", "GBP"}:
+        return amount
     date_key = str(row.get("TradeDate") or row.get("Date/Time") or row.get("ReportDate") or "")[:8]
     actual_fx_rate = (fx_rates_to_base or {}).get((date_key, currency))
     if actual_fx_rate is not None and actual_fx_rate > 0:

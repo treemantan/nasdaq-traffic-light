@@ -148,6 +148,24 @@ class ImportPortfolioStatementsTests(unittest.TestCase):
         self.assertAlmostEqual(positions["FLRK"]["quantity"], 11)
         self.assertAlmostEqual(positions["FLRK"]["cost_gbp"], 959.64)
 
+    def test_ibkr_csv_prefers_primary_currency_over_commission_currency_for_cost_basis(self) -> None:
+        header = (
+            "ClientAccountID,AssetCategory,Symbol,TradeID,ExecID,TradeDate,Buy/Sell,"
+            "Quantity,TradePrice,NetCash,Cost,CurrencyPrimary,CommissionCurrency,FxRateToBase,LevelOfDetail\n"
+        )
+        content = (
+            header
+            + "U1,STK,FLRK,t1,exec1,20260617,BUY,11,87.24,-959.64,959.64,GBP,USD,0.742,EXECUTION\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "ibkr-activity.csv"
+            path.write_text(content, encoding="utf-8")
+
+            positions = MODULE._reconstruct_ibkr_positions([path])
+
+        self.assertAlmostEqual(positions["FLRK"]["quantity"], 11)
+        self.assertAlmostEqual(positions["FLRK"]["cost_gbp"], 959.64)
+
     def test_ibkr_option_trades_are_extracted_as_option_legs_not_stock_positions(self) -> None:
         content = """<?xml version="1.0" encoding="UTF-8"?>
 <FlexQueryResponse>
@@ -376,7 +394,7 @@ class ImportPortfolioStatementsTests(unittest.TestCase):
         )
         content = (
             header
-            + "U1,TESTX,t1,exec-1,20260612,SELL,5,465,2325.46,-1,USD,GBP,EXECUTION\n"
+            + "U1,TESTX,t1,exec-1,20260612,SELL,5,465,2325.46,-1,USD,USD,EXECUTION\n"
         )
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "ibkr-trade-confirm.csv"
