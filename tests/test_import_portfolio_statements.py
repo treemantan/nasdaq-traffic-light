@@ -123,6 +123,31 @@ class ImportPortfolioStatementsTests(unittest.TestCase):
         self.assertAlmostEqual(positions["SPCX"]["quantity"], 10)
         self.assertAlmostEqual(positions["SPCX"]["cost_gbp"], 1007.7334209)
 
+    def test_ibkr_buy_uses_explicit_cost_basis_when_available(self) -> None:
+        content = """<?xml version="1.0" encoding="UTF-8"?>
+<FlexQueryResponse>
+  <FlexStatements>
+    <FlexStatement accountId="U1" fromDate="20260617" toDate="20260617">
+      <Trades>
+        <Trade accountId="U1" assetCategory="STK" symbol="FLRK"
+          tradeID="flrk1" ibExecID="flrk-exec" tradeDate="20260617"
+          buySell="BUY" quantity="11" tradePrice="87.24"
+          currency="GBP" netCash="-712.25" cost="959.64"
+          levelOfDetail="EXECUTION" />
+      </Trades>
+    </FlexStatement>
+  </FlexStatements>
+</FlexQueryResponse>
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "ibkr-activity.xml"
+            path.write_text(content, encoding="utf-8")
+
+            positions = MODULE._reconstruct_ibkr_positions([path])
+
+        self.assertAlmostEqual(positions["FLRK"]["quantity"], 11)
+        self.assertAlmostEqual(positions["FLRK"]["cost_gbp"], 959.64)
+
     def test_ibkr_option_trades_are_extracted_as_option_legs_not_stock_positions(self) -> None:
         content = """<?xml version="1.0" encoding="UTF-8"?>
 <FlexQueryResponse>

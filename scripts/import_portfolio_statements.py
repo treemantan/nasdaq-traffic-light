@@ -505,6 +505,7 @@ def _normalize_ibkr_csv_row(row: dict[str, str]) -> dict[str, str]:
         "TradeMoney": pick("TradeMoney", "Amount"),
         "Proceeds": pick("Proceeds"),
         "NetCash": pick("NetCash", "NetCashWithBillable"),
+        "Cost": pick("Cost", "CostBasis", "CostBasisMoney"),
         "Commission": pick("Commission", "IBCommission", "TradeCommission"),
         "IBCommission": pick("IBCommission", "Commission", "TradeCommission"),
         "Tax": pick("Tax", "Taxes"),
@@ -555,6 +556,7 @@ def _normalize_ibkr_xml_row(attrs: dict[str, str], *, row_kind: str) -> dict[str
             "TradeMoney": pick("tradeMoney", "amount"),
             "Proceeds": pick("proceeds"),
             "NetCash": pick("netCash", "netCashWithBillable"),
+            "Cost": pick("cost", "costBasis", "costBasisMoney"),
             "Commission": pick("commission", "ibCommission"),
             "IBCommission": pick("ibCommission", "commission"),
             "Tax": pick("tax", "taxes"),
@@ -646,6 +648,10 @@ def _ibkr_cash_amount(
     buy: bool,
     fx_rates_to_base: dict[tuple[str, str], float] | None = None,
 ) -> float:
+    if buy:
+        cost_basis = _safe_float(row.get("Cost") or row.get("CostBasis") or row.get("CostBasisMoney"))
+        if cost_basis is not None:
+            return abs(_ibkr_amount_in_base_currency(row, cost_basis, fx_rates_to_base))
     net_cash = _safe_float(row.get("NetCash") or row.get("NetCashWithBillable"))
     if net_cash is not None:
         return abs(_ibkr_amount_in_base_currency(row, net_cash, fx_rates_to_base))
