@@ -242,6 +242,38 @@ class ImportPortfolioStatementsTests(unittest.TestCase):
         self.assertEqual({leg["underlying"] for leg in option_legs}, {"NFLX", "VIX"})
         self.assertAlmostEqual(option_legs[0]["net_cash_after_fee_native"], 149.35)
 
+    def test_ibkr_option_open_position_mark_updates_trade_legs(self) -> None:
+        content = """<?xml version="1.0" encoding="UTF-8"?>
+<FlexQueryResponse>
+  <FlexStatements>
+    <FlexStatement accountId="U1" fromDate="20260616" toDate="20260616">
+      <Trades>
+        <Trade accountId="U1" assetCategory="OPT" symbol="NFLX 260724P00070000"
+          underlyingSymbol="NFLX" tradeID="nflx-short" ibExecID="opt-exec-1"
+          tradeDate="20260616" buySell="SELL" quantity="1" tradePrice="1.50"
+          currency="USD" netCash="150" ibCommission="-0.65"
+          fxRateToBase="0.75" levelOfDetail="EXECUTION" />
+      </Trades>
+      <OpenPositions>
+        <OpenPosition accountId="U1" assetCategory="OPT" symbol="NFLX 260724P00070000"
+          underlyingSymbol="NFLX" reportDate="20260617" position="-1"
+          markPrice="1.20" currency="USD" multiplier="100" fxRateToBase="0.75" />
+      </OpenPositions>
+    </FlexStatement>
+  </FlexStatements>
+</FlexQueryResponse>
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "ibkr-options.xml"
+            path.write_text(content, encoding="utf-8")
+
+            option_legs = MODULE._extract_ibkr_option_legs([path])
+
+        self.assertEqual(len(option_legs), 1)
+        self.assertAlmostEqual(option_legs[0]["mark_price"], 1.20)
+        self.assertAlmostEqual(option_legs[0]["market_value_native"], -120.0)
+        self.assertAlmostEqual(option_legs[0]["market_value_gbp"], -90.0)
+
     def test_ibkr_trade_confirm_xml_rows_are_supported(self) -> None:
         content = """<?xml version="1.0" encoding="UTF-8"?>
 <FlexQueryResponse>

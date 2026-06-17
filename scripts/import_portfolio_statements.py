@@ -219,12 +219,10 @@ def _extract_ibkr_option_legs(paths: list[Path]) -> list[dict[str, Any]]:
     rows, _duplicate_count = _unique_ibkr_rows(paths)
     fx_rates_to_base = _ibkr_fx_rates_to_base_by_date(rows)
     legs: list[dict[str, Any]] = []
+    mtm_by_contract: dict[tuple[str, str, str, float | None], dict[str, Any]] = {}
     for row in rows:
         asset_category = str(row.get("AssetCategory") or "").strip().upper()
         if asset_category != "OPT":
-            continue
-        quantity = _ibkr_quantity(row)
-        if quantity is None or quantity <= 0:
             continue
         raw_symbol = str(row.get("Symbol") or "").strip().upper()
         underlying = _option_underlying(row, raw_symbol)
@@ -232,6 +230,29 @@ def _extract_ibkr_option_legs(paths: list[Path]) -> list[dict[str, Any]]:
         expiry = _option_expiry(row, raw_symbol)
         strike = _option_strike(row, raw_symbol)
         multiplier = _safe_float(row.get("Multiplier") or row.get("multiplier")) or 100.0
+        key = _option_contract_key(underlying, expiry, right, strike)
+        if _ibkr_is_position_row(row):
+            signed_position = _safe_float(row.get("Position") or row.get("Quantity") or row.get("TradeQuantity"))
+            mtm = _ibkr_option_mtm(row, signed_position, multiplier, fx_rates_to_base)
+            mtm_by_contract[key] = {
+                **mtm,
+                "symbol": raw_symbol,
+                "underlying": underlying,
+                "expiry": expiry,
+                "right": right,
+                "strike": strike,
+                "side": "POSITION",
+                "contracts": abs(signed_position) if signed_position is not None else None,
+                "signed_contracts": signed_position,
+                "multiplier": multiplier,
+                "currency": str(row.get("Currency") or "").strip().upper(),
+                "trade_date": _format_ibkr_date(str(row.get("ReportDate") or row.get("Date/Time") or "")),
+                "source": "IBKR open position",
+            }
+            continue
+        quantity = _ibkr_quantity(row)
+        if quantity is None or quantity <= 0:
+            continue
         side = str(row.get("Buy/Sell") or "").strip().upper()
         signed_contracts = quantity if side == "BUY" else -quantity if side == "SELL" else quantity
         net_cash_native = _safe_float(row.get("NetCash") or row.get("NetCashWithBillable"))
@@ -257,8 +278,7 @@ def _extract_ibkr_option_legs(paths: list[Path]) -> list[dict[str, Any]]:
             else net_cash_gbp
         )
         trade_price = _safe_float(row.get("TradePrice") or row.get("Price"))
-        legs.append(
-            {
+        leg = {
                 "symbol": raw_symbol,
                 "underlying": underlying,
                 "expiry": expiry,
@@ -279,7 +299,28 @@ def _extract_ibkr_option_legs(paths: list[Path]) -> list[dict[str, Any]]:
                 "trade_date": _format_ibkr_date(str(row.get("TradeDate") or row.get("Date/Time") or "")),
                 "source": "IBKR statement",
             }
+        leg.update(mtm_by_contract.get(key, {}))
+        legs.append(leg)
+    for leg in legs:
+        key = _option_contract_key(
+            str(leg.get("underlying") or ""),
+            str(leg.get("expiry") or ""),
+            str(leg.get("right") or ""),
+            _safe_float(leg.get("strike")),
         )
+        leg.update(mtm_by_contract.get(key, {}))
+    seen_contracts = {
+        _option_contract_key(
+            str(leg.get("underlying") or ""),
+            str(leg.get("expiry") or ""),
+            str(leg.get("right") or ""),
+            _safe_float(leg.get("strike")),
+        )
+        for leg in legs
+    }
+    for key, mtm_leg in mtm_by_contract.items():
+        if key not in seen_contracts:
+            legs.append(mtm_leg)
     return sorted(
         legs,
         key=lambda item: (
@@ -289,6 +330,45 @@ def _extract_ibkr_option_legs(paths: list[Path]) -> list[dict[str, Any]]:
             float(item.get("strike") or 0),
         ),
     )
+
+
+def _ibkr_is_position_row(row: dict[str, str]) -> bool:
+    return str(row.get("LevelOfDetail") or "").strip().upper() == "POSITION"
+
+
+def _option_contract_key(
+    underlying: str,
+    expiry: str,
+    right: str,
+    strike: float | None,
+) -> tuple[str, str, str, float | None]:
+    return (underlying.strip().upper(), expiry, right.strip().upper(), strike)
+
+
+def _ibkr_option_mtm(
+    row: dict[str, str],
+    signed_contracts: float | None,
+    multiplier: float,
+    fx_rates_to_base: dict[tuple[str, str], float] | None = None,
+) -> dict[str, float | None]:
+    mark_price = _safe_float(row.get("MarkPrice") or row.get("ClosePrice") or row.get("MarketPrice") or row.get("LastPrice"))
+    direct_market_value = _safe_float(row.get("MarketValue") or row.get("PositionValue"))
+    if direct_market_value is not None:
+        market_value_native = direct_market_value
+    elif mark_price is not None and signed_contracts is not None:
+        market_value_native = signed_contracts * multiplier * mark_price
+    else:
+        market_value_native = None
+    market_value_gbp = (
+        _ibkr_amount_in_base_currency(row, market_value_native, fx_rates_to_base)
+        if market_value_native is not None
+        else None
+    )
+    return {
+        "mark_price": mark_price,
+        "market_value_native": market_value_native,
+        "market_value_gbp": market_value_gbp,
+    }
 
 
 def _option_underlying(row: dict[str, str], raw_symbol: str) -> str:
@@ -343,9 +423,10 @@ def _unique_ibkr_rows(paths: list[Path]) -> tuple[list[dict[str, str]], int]:
     duplicate_count = 0
     for path in paths:
         for row in _iter_ibkr_rows(path):
-            if str(row.get("LevelOfDetail") or "").upper() != "EXECUTION":
+            level = str(row.get("LevelOfDetail") or "").upper()
+            if level not in {"EXECUTION", "POSITION"}:
                 continue
-            if not (row.get("Buy/Sell") or row.get("TransactionType")):
+            if level == "EXECUTION" and not (row.get("Buy/Sell") or row.get("TransactionType")):
                 continue
             identifiers = _ibkr_identity_keys(row)
             if any(identifier in seen_identifiers for identifier in identifiers):
@@ -381,6 +462,9 @@ def _iter_ibkr_xml_rows(path: Path):
             tag = _xml_tag(element)
             if tag in {"Trade", "TradeConfirm"}:
                 yield _normalize_ibkr_xml_row(element.attrib, row_kind="TRADE")
+                element.clear()
+            elif tag == "OpenPosition":
+                yield _normalize_ibkr_xml_row(element.attrib, row_kind="POSITION")
                 element.clear()
             elif tag == "CashTransaction":
                 yield _normalize_ibkr_xml_row(element.attrib, row_kind="CASH")
@@ -430,6 +514,10 @@ def _normalize_ibkr_csv_row(row: dict[str, str]) -> dict[str, str]:
         "PutCall": pick("PutCall", "Right"),
         "Strike": pick("Strike"),
         "Expiry": pick("Expiry", "ExpiryDate", "Maturity"),
+        "MarkPrice": pick("MarkPrice", "Mark", "MarketPrice", "ClosePrice", "LastPrice"),
+        "ClosePrice": pick("ClosePrice", "LastPrice"),
+        "MarketValue": pick("MarketValue", "PositionValue", "Value"),
+        "Position": pick("Position", "Quantity"),
     }
 
 
@@ -472,6 +560,29 @@ def _normalize_ibkr_xml_row(attrs: dict[str, str], *, row_kind: str) -> dict[str
             "Tax": pick("tax", "taxes"),
             "Currency": pick("currency", "currencyPrimary"),
             "FxRateToBase": pick("fxRateToBase"),
+        }
+    if row_kind == "POSITION":
+        return {
+            **normalized,
+            "ClientAccountID": pick("accountId", "acctId", "account"),
+            "LevelOfDetail": "POSITION",
+            "AssetCategory": pick("assetCategory"),
+            "Symbol": pick("symbol", "underlyingSymbol"),
+            "UnderlyingSymbol": pick("underlyingSymbol"),
+            "ReportDate": pick("reportDate", "dateTime", "date"),
+            "Date/Time": pick("dateTime", "reportDate", "date"),
+            "Quantity": pick("position", "quantity"),
+            "TradeQuantity": pick("position", "quantity"),
+            "Currency": pick("currency", "currencyPrimary"),
+            "FxRateToBase": pick("fxRateToBase"),
+            "Multiplier": pick("multiplier"),
+            "PutCall": pick("putCall", "right"),
+            "Strike": pick("strike"),
+            "Expiry": pick("expiry", "expiryDate", "maturity"),
+            "MarkPrice": pick("markPrice", "mark", "marketPrice", "closePrice", "lastPrice"),
+            "ClosePrice": pick("closePrice", "lastPrice"),
+            "MarketValue": pick("marketValue", "positionValue", "value"),
+            "Position": pick("position", "quantity"),
         }
     return {
         **normalized,

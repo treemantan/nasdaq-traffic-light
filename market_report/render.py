@@ -769,7 +769,7 @@ def _render_option_risk_panel(positions: list[PortfolioPosition]) -> str:
     leg_rows = "\n".join(_render_option_leg_row(leg) for leg in legs)
     return f"""<div class="portfolio-notes">
       <strong>IBKR期权风险（成本与结构识别）</strong>
-      <div class="small-note">期权已从普通股票/ETF持仓中剥离。当前使用IBKR statement成交现金流识别成本、方向、到期与行权价；实时mark、delta、gamma、theta、vega和POP需要IBKR期权行情或模型输入，未取得时不做伪精确估算。</div>
+      <div class="small-note">期权已从普通股票/ETF持仓中剥离。当前使用IBKR statement成交现金流识别成本、方向、到期与行权价；如Flex/OpenPosition提供mark或market value，则显示当前MTM。delta、gamma、theta、vega和POP仍需要IBKR期权行情或模型输入，未取得时不做伪精确估算。</div>
       <div class="portfolio-table-scroll">
         <table class="portfolio-table">
           <thead><tr><th>策略/标的</th><th>到期</th><th>结构</th><th>净现金流</th><th>盈亏边界</th><th>数据状态</th></tr></thead>
@@ -780,7 +780,7 @@ def _render_option_risk_panel(positions: list[PortfolioPosition]) -> str:
         <summary>查看期权腿明细</summary>
         <div class="portfolio-table-scroll">
           <table class="portfolio-table">
-            <thead><tr><th>合约</th><th>方向</th><th>数量</th><th>成交价</th><th>Net cash</th><th>手续费</th><th>来源</th></tr></thead>
+            <thead><tr><th>合约</th><th>方向</th><th>数量</th><th>成交价</th><th>Mark</th><th>当前MTM</th><th>Net cash</th><th>手续费</th><th>来源</th></tr></thead>
             <tbody>{leg_rows}</tbody>
           </table>
         </div>
@@ -806,7 +806,22 @@ def _render_option_strategy_row(underlying: str, expiry: str, legs: list[dict[st
     currency = _option_currency(legs)
     net_cash = sum(_option_cash_after_fee_native(leg) for leg in legs)
     net_cash_gbp = sum(_option_cash_after_fee_gbp(leg) for leg in legs)
+    market_value_native = _option_group_market_value_native(legs)
+    market_value_gbp = _option_group_market_value_gbp(legs)
+    mtm_pnl_gbp = net_cash_gbp + market_value_gbp if market_value_gbp is not None else None
     boundary = _option_boundary_text(strategy, legs, net_cash, net_cash_gbp)
+    mtm_line = (
+        f"当前MTM {escape(_fmt_signed_gbp(market_value_gbp))}"
+        if market_value_gbp is not None
+        else "当前MTM缺失"
+    )
+    if market_value_native is not None:
+        mtm_line += f"；原币 {escape(_fmt_option_cash(market_value_native, currency))}"
+    pnl_line = (
+        f"MTM未实现 {escape(_fmt_signed_gbp(mtm_pnl_gbp))}"
+        if mtm_pnl_gbp is not None
+        else "MTM未实现待确认"
+    )
     structure = "；".join(
         _option_leg_label(leg)
         for leg in sorted(legs, key=lambda item: (_option_float(item.get("strike")) or 0))
@@ -815,9 +830,9 @@ def _render_option_strategy_row(underlying: str, expiry: str, legs: list[dict[st
       <td><strong>{escape(underlying or "UNKNOWN")}</strong><br><span class="portfolio-scope">{escape(strategy)}</span></td>
       <td>{escape(expiry or "到期日待确认")}</td>
       <td>{escape(structure)}</td>
-      <td>{escape(_fmt_signed_gbp(net_cash_gbp))}<br><span class="portfolio-scope">扣费后；原币 {escape(_fmt_option_cash(net_cash, currency))}</span></td>
+      <td>{escape(_fmt_signed_gbp(net_cash_gbp))}<br><span class="portfolio-scope">扣费后；原币 {escape(_fmt_option_cash(net_cash, currency))}</span><br><span class="portfolio-scope">{mtm_line}</span><br><span class="portfolio-scope">{pnl_line}</span></td>
       <td>{escape(boundary)}</td>
-      <td>成交已识别；实时mark/Greeks/POP待IBKR行情或模型估算</td>
+      <td>成交已识别；MTM取自Flex/OpenPosition；Greeks/POP待IBKR行情或模型估算</td>
     </tr>"""
 
 
@@ -886,11 +901,20 @@ def _option_boundary_text(
 
 def _render_option_leg_row(leg: dict[str, object]) -> str:
     currency = str(leg.get("currency") or "")
+    market_value_native = _option_float(leg.get("market_value_native"))
+    market_value_gbp = _option_float(leg.get("market_value_gbp"))
+    mtm_cell = (
+        f"{escape(_fmt_signed_gbp(market_value_gbp))}<br><span class=\"portfolio-scope\">{escape(_fmt_option_cash(market_value_native or 0.0, currency))}</span>"
+        if market_value_gbp is not None or market_value_native is not None
+        else "MTM缺失"
+    )
     return f"""<tr>
       <td><strong>{escape(str(leg.get("symbol") or ""))}</strong><br><span class="portfolio-scope">{escape(str(leg.get("expiry") or ""))} {escape(str(leg.get("right") or ""))}{escape(_fmt_option_number(leg.get("strike")))}</span></td>
       <td>{escape(str(leg.get("side") or ""))}</td>
       <td>{escape(_fmt_option_number(leg.get("contracts")))}</td>
       <td>{escape(_fmt_option_number(leg.get("trade_price")))}</td>
+      <td>{escape(_fmt_option_number(leg.get("mark_price")))}</td>
+      <td>{mtm_cell}</td>
       <td>{escape(_fmt_option_cash(_option_cash_after_fee_native(leg), currency))}<br><span class="portfolio-scope">原始netCash {escape(_fmt_option_cash(_option_float(leg.get("net_cash_native")) or 0, currency))}；GBP {escape(_fmt_signed_gbp(_option_cash_after_fee_gbp(leg)))}</span></td>
       <td>{escape(_fmt_option_cash(_option_float(leg.get("commission_native")) or 0, currency))}</td>
       <td>{escape(str(leg.get("source") or "IBKR statement"))}</td>
@@ -934,6 +958,18 @@ def _option_cash_after_fee_gbp(leg: dict[str, object]) -> float:
     if net_cash is not None and commission is not None:
         return net_cash + commission
     return net_cash or 0.0
+
+
+def _option_group_market_value_native(legs: list[dict[str, object]]) -> float | None:
+    values = [_option_float(leg.get("market_value_native")) for leg in legs]
+    present = [value for value in values if value is not None]
+    return sum(present) if present else None
+
+
+def _option_group_market_value_gbp(legs: list[dict[str, object]]) -> float | None:
+    values = [_option_float(leg.get("market_value_gbp")) for leg in legs]
+    present = [value for value in values if value is not None]
+    return sum(present) if present else None
 
 
 def _option_float(value: object) -> float | None:
