@@ -42,7 +42,9 @@
 
 `ERNS.L` 这类超短债现金替代产品通常不应按权益 ETF 的“年内高点回撤”框架解读。季度分派型产品在除息日附近，价格会从含息净值切换为除息净值；表面上可能出现接近一个季度收益幅度的回落，但经济含义是“部分收益从价格转为现金分派”，不是普通权益资产的趋势破坏。
 
-报告会尝试从 Yahoo dividend events 中读取最近除息日和每份分派金额，并在持仓行显示 `distribution_ex_date`、`distribution_amount_native` 和分派周期说明。Yahoo 通常只提供 ex-dividend date，不一定提供 payment date；实际到账日以发行商 payment date 以及 Revolut/托管行入账节奏为准。若最近发生除息，Revolut 里看到现金入账可能在 payment date 当日或之后若干个工作日出现。
+报告通过 `market_report/distribution_calendar.py` 统一管理现金/短债 ETF 的分派日历。数据优先级为：已人工校验的 override（包含 source/source_url） > Yahoo dividend events > 温和 fallback 说明。Yahoo 通常只提供 ex-dividend date 和 amount，不一定提供 payment date；DividendMax、DividendData 或发行商页面可作为人工校验来源写入 override。这样做的原则是：分派日期可以逐步自动化和缓存，但外部网页结构变化不能让日报失败。
+
+报告会在持仓行显示 `distribution_ex_date`、`distribution_amount_native` 和分派周期说明。实际到账日以发行商 payment date 以及 Revolut/托管行入账节奏为准。若最近发生除息，Revolut 里看到现金入账可能在 payment date 当日或之后若干个工作日出现。
 
 截至当前手动校验，ERNS 2026 年 6 月这次分派为：Declaration date `2026-06-11`，Ex-dividend date `2026-06-18`，Record date `2026-06-19`，Pay date `2026-06-30`，Distribution `102.11p / £1.0211 per share`。因此 2026-06-18 附近约 1% 的价格回落更应优先解释为除息调整；若 2026-06-17 收盘前已经持有，现金分派通常要等 2026-06-30 或之后几个工作日才会在 Revolut 里显示。
 

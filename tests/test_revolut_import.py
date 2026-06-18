@@ -9,6 +9,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from market_report import distribution_calendar
+
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "import_revolut_statement.py"
 SPEC = spec_from_file_location("import_revolut_statement", SCRIPT)
 assert SPEC and SPEC.loader
@@ -397,7 +399,7 @@ class RevolutImportTests(unittest.TestCase):
         self.assertIsNotNone(snapshot[3])
 
     def test_cash_like_distribution_fields_use_latest_dividend_event(self) -> None:
-        with patch.object(MODULE, "CASH_LIKE_DISTRIBUTION_SYMBOLS", {"CASH.L"}):
+        with patch.object(distribution_calendar, "CASH_LIKE_DISTRIBUTION_SYMBOLS", {"CASH.L"}):
             fields = MODULE._cash_like_distribution_fields(
                 "CASH.L",
                 {"_dividend_events": [{"ex_date": "2026-06-18", "amount": 1.02}]},
@@ -416,7 +418,7 @@ class RevolutImportTests(unittest.TestCase):
         self.assertIn("Revolut可能", fields["distribution_cycle_note"])
 
     def test_cash_like_distribution_fields_fall_back_without_event(self) -> None:
-        with patch.object(MODULE, "CASH_LIKE_DISTRIBUTION_OVERRIDES", {}):
+        with patch.object(distribution_calendar, "MANUAL_DISTRIBUTION_EVENTS", {}):
             fields = MODULE._cash_like_distribution_fields("ERNS.L", {})
 
         self.assertEqual(fields["distribution_ex_date"], "")

@@ -13,6 +13,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from market_report.technical_indicators import ema as shared_ema
+from market_report.distribution_calendar import (
+    CASH_LIKE_DISTRIBUTION_SYMBOLS,
+    distribution_fields,
+)
 from market_report.etf_monitor import (
     DEFAULT_ETF_SPECS,
     ETF_CACHE_PATH,
@@ -59,17 +63,6 @@ _PORTFOLIO_QUOTE_CACHE: dict[str, dict[str, object]] | None = None
 _PORTFOLIO_QUOTE_CACHE_DIRTY = False
 _QUOTE_SOURCES: dict[str, str] = {}
 _QUOTE_META: dict[str, dict[str, object]] = {}
-CASH_LIKE_DISTRIBUTION_SYMBOLS = {"ERNS", "ERNS.L"}
-CASH_LIKE_DISTRIBUTION_OVERRIDES: dict[str, dict[str, object]] = {
-    "ERNS.L": {
-        "declaration_date": "2026-06-11",
-        "ex_date": "2026-06-18",
-        "record_date": "2026-06-19",
-        "pay_date": "2026-06-30",
-        "amount": 1.0211,
-        "source": "DividendMax / DividendData manual check",
-    }
-}
 
 
 def main() -> int:
@@ -664,92 +657,7 @@ def _cash_like_distribution_fields(
     symbol: str,
     meta: dict[str, object],
 ) -> dict[str, object]:
-    normalized_symbol = symbol.upper()
-    if normalized_symbol not in CASH_LIKE_DISTRIBUTION_SYMBOLS:
-        return {
-            "distribution_ex_date": "",
-            "distribution_amount_native": None,
-            "distribution_cycle_note": "",
-        }
-    override = _distribution_override_for_symbol(normalized_symbol)
-    if override:
-        return _distribution_fields_from_override(override)
-    event = _latest_distribution_event(meta)
-    if event:
-        ex_date, amount = event
-        amount_text = f"{amount:.4f}" if amount is not None else "待确认"
-        note = (
-            f"现金/超短债分派周期：Yahoo记录最近除息日 {ex_date}，每份分派约 {amount_text}；"
-            "净值回落应与分派现金合并观察，不按权益式趋势破坏处理。"
-            "Revolut到账日取决于发行商payment date和券商入账节奏。"
-        )
-        return {
-            "distribution_ex_date": ex_date,
-            "distribution_amount_native": amount,
-            "distribution_cycle_note": note,
-        }
-    return {
-        "distribution_ex_date": "",
-        "distribution_amount_native": None,
-        "distribution_cycle_note": (
-            "现金/超短债分派周期：未从Yahoo确认最新除息日；若发行商近期除息，"
-            "约一个季度收益幅度的价格回落应按净值除息处理，到账日以Revolut入账为准。"
-        ),
-    }
-
-
-def _distribution_override_for_symbol(symbol: str) -> dict[str, object] | None:
-    direct = CASH_LIKE_DISTRIBUTION_OVERRIDES.get(symbol)
-    if direct:
-        return direct
-    if not symbol.endswith(".L"):
-        return CASH_LIKE_DISTRIBUTION_OVERRIDES.get(f"{symbol}.L")
-    return None
-
-
-def _distribution_fields_from_override(event: dict[str, object]) -> dict[str, object]:
-    ex_date = str(event.get("ex_date") or "")
-    pay_date = str(event.get("pay_date") or "")
-    record_date = str(event.get("record_date") or "")
-    declaration_date = str(event.get("declaration_date") or "")
-    source = str(event.get("source") or "manual check")
-    amount = _safe_float(event.get("amount"))
-    amount_text = f"£{amount:.4f}" if amount is not None else "待确认"
-    note = (
-        f"现金/超短债分派周期：Declaration {declaration_date or '待确认'}，"
-        f"Ex-dividend {ex_date or '待确认'}，Record {record_date or '待确认'}，"
-        f"Pay date {pay_date or '待确认'}，每份分派 {amount_text}（{source}）。"
-        "除息日附近的价格回落应与分派现金合并观察，不按权益式趋势破坏处理；"
-        "Revolut可能在pay date当日或之后若干个工作日入账。"
-    )
-    return {
-        "distribution_ex_date": ex_date,
-        "distribution_amount_native": amount,
-        "distribution_cycle_note": note,
-    }
-
-
-def _latest_distribution_event(meta: dict[str, object]) -> tuple[str, float | None] | None:
-    raw_events = meta.get("_dividend_events")
-    if not isinstance(raw_events, list):
-        return None
-    parsed: list[tuple[date, str, float | None]] = []
-    today = date.today()
-    for item in raw_events:
-        if not isinstance(item, dict):
-            continue
-        ex_date_raw = str(item.get("ex_date") or "")
-        try:
-            ex_day = date.fromisoformat(ex_date_raw)
-        except ValueError:
-            continue
-        if ex_day > today:
-            continue
-        parsed.append((ex_day, ex_date_raw, _safe_float(item.get("amount"))))
-    if not parsed:
-        return None
-    _, ex_date, amount = max(parsed, key=lambda item: item[0])
-    return ex_date, amount
+    return distribution_fields(symbol, meta)
 
 
 def _price_matches_cost_basis(price_gbp: float | None, average_cost_gbp: float) -> bool:
