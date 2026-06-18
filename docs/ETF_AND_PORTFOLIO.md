@@ -38,6 +38,12 @@
 
 现金/超短债 ETF 不使用 200 日均线作为趋势破坏信号。由于这类产品价格会受到派息、除息和短端利率 carry 影响，报告会更关注 TER、AUM、成交额、短期价格稳定性、价差和利率环境。
 
+### ERNS / 现金替代 ETF 的派息周期
+
+`ERNS.L` 这类超短债现金替代产品通常不应按权益 ETF 的“年内高点回撤”框架解读。季度分派型产品在除息日附近，价格会从含息净值切换为除息净值；表面上可能出现接近一个季度收益幅度的回落，但经济含义是“部分收益从价格转为现金分派”，不是普通权益资产的趋势破坏。
+
+报告会尝试从 Yahoo dividend events 中读取最近除息日和每份分派金额，并在持仓行显示 `distribution_ex_date`、`distribution_amount_native` 和分派周期说明。Yahoo 通常只提供 ex-dividend date，不一定提供 payment date；实际到账日以发行商 payment date 以及 Revolut/托管行入账节奏为准。若最近发生除息，Revolut 里看到现金入账可能在 payment date 当日或之后若干个工作日出现。
+
 ## Revolut 组合导入字段
 
 运行：

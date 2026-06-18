@@ -1934,9 +1934,10 @@ def _fmt_peak_watch(position: PortfolioPosition) -> str:
     peak = _fmt_native(position.year_peak_price_native, position.native_currency)
     if "现金/短债" in position.drawdown_regime:
         sigma = f" · 回撤约{_fmt_plain(position.pullback_sigma_1m)}σ(1M)" if position.pullback_sigma_1m is not None else ""
+        cycle = f" · {position.distribution_cycle_note}" if position.distribution_cycle_note else ""
         return (
             f"{_fmt_pct(position.drawdown_from_year_peak_pct)} · 峰值 {peak}"
-            f"（{position.year_peak_date or '日期待确认'}）{sigma} · {position.drawdown_regime}"
+            f"（{position.year_peak_date or '日期待确认'}）{sigma} · {position.drawdown_regime}{cycle}"
         )
     sma = (
         f" · SMA200 {_fmt_native(position.sma200_native, position.native_currency)}"

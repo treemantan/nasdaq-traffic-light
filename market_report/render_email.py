@@ -1125,6 +1125,10 @@ def _fmt_breakeven(position: PortfolioPosition) -> str:
 def _fmt_peak_watch(position: PortfolioPosition) -> str:
     if position.drawdown_from_year_peak_pct is None:
         return "N/A"
+    if "现金/短债" in position.drawdown_regime:
+        sigma = f" · 约{_fmt_plain(position.pullback_sigma_1m)}σ(1M)" if position.pullback_sigma_1m is not None else ""
+        cycle = f" · {position.distribution_cycle_note}" if position.distribution_cycle_note else ""
+        return f"{_fmt_pct(position.drawdown_from_year_peak_pct)}{sigma} · {position.drawdown_regime}{cycle}"
     sma = f" · 距SMA200 {_fmt_pct(position.distance_sma200_pct)}" if position.distance_sma200_pct is not None else ""
     sigma = f" · 约{_fmt_plain(position.pullback_sigma_1m)}σ(1M)" if position.pullback_sigma_1m is not None else ""
     return f"{_fmt_pct(position.drawdown_from_year_peak_pct)}{sma}{sigma} · {position.drawdown_regime or position.peak_watch or '回撤观察'}"

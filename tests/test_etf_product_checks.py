@@ -44,6 +44,7 @@ class ETFProductCheckTests(unittest.TestCase):
                         },
                         "timestamp": [1780444800],
                         "indicators": {"quote": [{"close": [138.64], "volume": [1000]}]},
+                        "events": {"dividends": {"1780358400": {"date": 1780358400, "amount": 0.25}}},
                     }
                 ]
             }
@@ -53,6 +54,7 @@ class ETFProductCheckTests(unittest.TestCase):
 
         self.assertEqual(data.history[-1][1], 138.91)
         self.assertEqual(data.meta["_price_source"], "regularMarketPrice")
+        self.assertEqual(data.meta["_dividend_events"][0]["amount"], 0.25)
 
     def test_erns_is_default_cash_like_etf(self) -> None:
         erns = next(spec for spec in DEFAULT_ETF_SPECS if spec.symbol == "ERNS.L")
@@ -181,7 +183,8 @@ class ETFProductCheckTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "portfolio.csv"
             path.write_text(
-                "symbol,weight_pct,drawdown_from_year_peak_pct,distance_sma200_pct\nERNS.L,100,-0.2,-1.0\n",
+                "symbol,weight_pct,drawdown_from_year_peak_pct,distance_sma200_pct,distribution_cycle_note\n"
+                "ERNS.L,100,-0.2,-1.0,现金/超短债分派周期：最近除息日已确认\n",
                 encoding="utf-8",
             )
             _, _, positions, _ = _load_portfolio_summary(
@@ -190,6 +193,7 @@ class ETFProductCheckTests(unittest.TestCase):
             )
 
         self.assertIn("现金/短债", positions[0].drawdown_regime)
+        self.assertIn("除息日", positions[0].distribution_cycle_note)
 
     def test_portfolio_summary_flags_high_beta_single_name_pullback(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

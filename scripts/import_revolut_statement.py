@@ -58,6 +58,8 @@ PORTFOLIO_QUOTE_CACHE_MAX_AGE = timedelta(days=7)
 _PORTFOLIO_QUOTE_CACHE: dict[str, dict[str, object]] | None = None
 _PORTFOLIO_QUOTE_CACHE_DIRTY = False
 _QUOTE_SOURCES: dict[str, str] = {}
+_QUOTE_META: dict[str, dict[str, object]] = {}
+CASH_LIKE_DISTRIBUTION_SYMBOLS = {"ERNS", "ERNS.L"}
 
 
 def main() -> int:
@@ -449,6 +451,10 @@ def _build_portfolio_rows(positions: dict[str, dict[str, object]]) -> list[dict[
             yellow_drawdown_threshold_pct,
             red_drawdown_threshold_pct,
         )
+        distribution_fields = _cash_like_distribution_fields(
+            monitor_symbol or ticker,
+            _QUOTE_META.get(yahoo_symbol) or {},
+        )
         valued.append(
             {
                 "symbol": monitor_symbol or ticker,
@@ -485,6 +491,9 @@ def _build_portfolio_rows(positions: dict[str, dict[str, object]]) -> list[dict[
                 "yellow_drawdown_threshold_pct": yellow_drawdown_threshold_pct,
                 "red_drawdown_threshold_pct": red_drawdown_threshold_pct,
                 "drawdown_regime": drawdown_regime,
+                "distribution_ex_date": distribution_fields["distribution_ex_date"],
+                "distribution_amount_native": distribution_fields["distribution_amount_native"],
+                "distribution_cycle_note": distribution_fields["distribution_cycle_note"],
                 "fx_pair": fx_pair,
                 "fx_rate": fx_rate,
                 "fx_as_of": fx_as_of,
@@ -613,6 +622,9 @@ def _build_portfolio_rows(positions: dict[str, dict[str, object]]) -> list[dict[
                 "yellow_drawdown_threshold_pct": _fmt_number(item["yellow_drawdown_threshold_pct"]),
                 "red_drawdown_threshold_pct": _fmt_number(item["red_drawdown_threshold_pct"]),
                 "drawdown_regime": str(item["drawdown_regime"]),
+                "distribution_ex_date": str(item["distribution_ex_date"]),
+                "distribution_amount_native": _fmt_number(item["distribution_amount_native"]),
+                "distribution_cycle_note": str(item["distribution_cycle_note"]),
                 "fx_pair": str(item["fx_pair"]),
                 "fx_rate": _fmt_number(item["fx_rate"]),
                 "fx_as_of": str(item["fx_as_of"]),
@@ -636,6 +648,63 @@ def _quote_in_gbp(
         fx_rate = fx_quotes[native_currency][0]
     price_gbp = price / fx_rate if price is not None and fx_rate not in (None, 0) else None
     return price_gbp, fx_pair, fx_rate
+
+
+def _cash_like_distribution_fields(
+    symbol: str,
+    meta: dict[str, object],
+) -> dict[str, object]:
+    if symbol.upper() not in CASH_LIKE_DISTRIBUTION_SYMBOLS:
+        return {
+            "distribution_ex_date": "",
+            "distribution_amount_native": None,
+            "distribution_cycle_note": "",
+        }
+    event = _latest_distribution_event(meta)
+    if event:
+        ex_date, amount = event
+        amount_text = f"{amount:.4f}" if amount is not None else "待确认"
+        note = (
+            f"现金/超短债分派周期：Yahoo记录最近除息日 {ex_date}，每份分派约 {amount_text}；"
+            "净值回落应与分派现金合并观察，不按权益式趋势破坏处理。"
+            "Revolut到账日取决于发行商payment date和券商入账节奏。"
+        )
+        return {
+            "distribution_ex_date": ex_date,
+            "distribution_amount_native": amount,
+            "distribution_cycle_note": note,
+        }
+    return {
+        "distribution_ex_date": "",
+        "distribution_amount_native": None,
+        "distribution_cycle_note": (
+            "现金/超短债分派周期：未从Yahoo确认最新除息日；若发行商近期除息，"
+            "约一个季度收益幅度的价格回落应按净值除息处理，到账日以Revolut入账为准。"
+        ),
+    }
+
+
+def _latest_distribution_event(meta: dict[str, object]) -> tuple[str, float | None] | None:
+    raw_events = meta.get("_dividend_events")
+    if not isinstance(raw_events, list):
+        return None
+    parsed: list[tuple[date, str, float | None]] = []
+    today = date.today()
+    for item in raw_events:
+        if not isinstance(item, dict):
+            continue
+        ex_date_raw = str(item.get("ex_date") or "")
+        try:
+            ex_day = date.fromisoformat(ex_date_raw)
+        except ValueError:
+            continue
+        if ex_day > today:
+            continue
+        parsed.append((ex_day, ex_date_raw, _safe_float(item.get("amount"))))
+    if not parsed:
+        return None
+    _, ex_date, amount = max(parsed, key=lambda item: item[0])
+    return ex_date, amount
 
 
 def _price_matches_cost_basis(price_gbp: float | None, average_cost_gbp: float) -> bool:
@@ -699,6 +768,7 @@ def _latest_quote(symbol: str) -> tuple[float | None, float | None, str, list[tu
                 latest_price = history[-1][1]
                 previous = history[-2][1] if len(history) > 1 else None
             _store_portfolio_quote_cache(symbol, latest_price, previous, currency, history)
+            _QUOTE_META[symbol] = dict(price_data.meta or {})
             source_kind = (
                 "Yahoo quote"
                 if latest_price is not None and quote

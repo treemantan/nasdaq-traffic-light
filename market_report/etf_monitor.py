@@ -117,6 +117,9 @@ class PortfolioPosition:
     ibkr_trade_file_updated: str = ""
     ibkr_data_warning: str = ""
     option_legs_json: str = ""
+    distribution_ex_date: str = ""
+    distribution_amount_native: float | None = None
+    distribution_cycle_note: str = ""
 
 
 @dataclass(frozen=True)
@@ -762,8 +765,8 @@ def _fetch_yahoo_history(symbol: str) -> list[tuple[date, float]]:
 def _fetch_yahoo_price_data(symbol: str, timeout: int = 15, attempts: int = 3) -> ETFPriceData:
     encoded = urllib.parse.quote(symbol, safe="")
     urls = [
-        f"https://query2.finance.yahoo.com/v8/finance/chart/{encoded}?range=5y&interval=1d",
-        f"https://query1.finance.yahoo.com/v8/finance/chart/{encoded}?range=5y&interval=1d",
+        f"https://query2.finance.yahoo.com/v8/finance/chart/{encoded}?range=5y&interval=1d&events=div",
+        f"https://query1.finance.yahoo.com/v8/finance/chart/{encoded}?range=5y&interval=1d&events=div",
     ]
     errors: list[str] = []
     for url in urls:
@@ -804,6 +807,20 @@ def _fetch_yahoo_price_data(symbol: str, timeout: int = 15, attempts: int = 3) -
         elif not pairs or pairs[-1][0] < quote_day:
             pairs.append((quote_day, quote_value))
             meta["_price_source"] = "regularMarketPrice"
+    dividend_events = []
+    for raw_event in (result.get("events", {}).get("dividends", {}) or {}).values():
+        timestamp = _safe_float(raw_event.get("date"))
+        amount = _safe_float(raw_event.get("amount"))
+        if timestamp is None or amount is None:
+            continue
+        dividend_events.append(
+            {
+                "ex_date": datetime.fromtimestamp(timestamp, timezone.utc).date().isoformat(),
+                "amount": amount * scale,
+            }
+        )
+    if dividend_events:
+        meta["_dividend_events"] = sorted(dividend_events, key=lambda item: item["ex_date"])
     return ETFPriceData(history=pairs, volumes=volumes, meta=meta)
 
 
@@ -2435,6 +2452,9 @@ def _load_portfolio_summary(
             ibkr_trade_file_updated=str(row.get("ibkr_trade_file_updated") or ""),
             ibkr_data_warning=str(row.get("ibkr_data_warning") or ""),
             option_legs_json=str(row.get("option_legs_json") or ""),
+            distribution_ex_date=str(row.get("distribution_ex_date") or ""),
+            distribution_amount_native=_safe_float(row.get("distribution_amount_native")),
+            distribution_cycle_note=str(row.get("distribution_cycle_note") or ""),
         )
         for row in rows
         if str(row.get("symbol") or "").strip()
@@ -2612,10 +2632,19 @@ def _adjust_portfolio_position_for_asset_type(
 ) -> PortfolioPosition:
     if asset is None or not _is_cash_like_theme(asset.theme):
         return position
-    return replace(
+    adjusted = replace(
         position,
         peak_watch=position.peak_watch or "现金替代观察",
         drawdown_regime="现金/短债：SMA200不作为趋势破坏核心依据；重点看分派收益、短端利率、久期与流动性。",
+    )
+    if adjusted.distribution_cycle_note:
+        return adjusted
+    return replace(
+        adjusted,
+        distribution_cycle_note=(
+            "现金/超短债分派周期：若近期发生除息，净值回落应与分派现金合并观察，"
+            "不按权益式趋势破坏处理；到账日以券商入账为准。"
+        ),
     )
 
 

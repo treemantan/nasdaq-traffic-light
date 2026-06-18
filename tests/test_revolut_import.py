@@ -396,6 +396,22 @@ class RevolutImportTests(unittest.TestCase):
         self.assertIsNotNone(snapshot[2])
         self.assertIsNotNone(snapshot[3])
 
+    def test_cash_like_distribution_fields_use_latest_dividend_event(self) -> None:
+        fields = MODULE._cash_like_distribution_fields(
+            "ERNS.L",
+            {"_dividend_events": [{"ex_date": "2026-06-18", "amount": 1.02}]},
+        )
+
+        self.assertEqual(fields["distribution_ex_date"], "2026-06-18")
+        self.assertEqual(fields["distribution_amount_native"], 1.02)
+        self.assertIn("最近除息日 2026-06-18", fields["distribution_cycle_note"])
+
+    def test_cash_like_distribution_fields_fall_back_without_event(self) -> None:
+        fields = MODULE._cash_like_distribution_fields("ERNS.L", {})
+
+        self.assertEqual(fields["distribution_ex_date"], "")
+        self.assertIn("Revolut入账", fields["distribution_cycle_note"])
+
     def test_adaptive_drawdown_thresholds_scale_with_robust_monthly_volatility(self) -> None:
         low_volatility = MODULE._adaptive_drawdown_thresholds(0.5)
         high_volatility = MODULE._adaptive_drawdown_thresholds(3.0)
