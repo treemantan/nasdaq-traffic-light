@@ -418,7 +418,7 @@ class RevolutImportTests(unittest.TestCase):
         self.assertIn("Revolut可能", fields["distribution_cycle_note"])
 
     def test_cash_like_distribution_fields_fall_back_without_event(self) -> None:
-        with patch.object(distribution_calendar, "MANUAL_DISTRIBUTION_EVENTS", {}):
+        with patch.object(distribution_calendar, "MANUAL_DISTRIBUTION_SCHEDULES", {}):
             fields = MODULE._cash_like_distribution_fields("ERNS.L", {})
 
         self.assertEqual(fields["distribution_ex_date"], "")

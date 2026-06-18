@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+from datetime import date
 from unittest.mock import patch
 
 from market_report import distribution_calendar as dc
 
 
 def test_erns_manual_distribution_event_has_payment_context() -> None:
-    event = dc.cash_like_distribution_event("ERNS", {})
+    event = dc.cash_like_distribution_event("ERNS", {}, as_of=date(2026, 6, 19))
 
     assert event is not None
     assert event.ex_date == "2026-06-18"
@@ -31,6 +32,20 @@ def test_yahoo_distribution_event_is_used_when_no_manual_override() -> None:
     assert event.ex_date == "2026-06-18"
     assert event.amount == 1.02
     assert event.source == "Yahoo dividend events"
+
+
+def test_erns_schedule_rolls_to_next_forecast_after_payment_window() -> None:
+    event = dc.cash_like_distribution_event("ERNS.L", {}, as_of=date(2026, 7, 10))
+
+    assert event is not None
+    assert event.status == "forecast"
+    assert event.ex_date == "2026-09-17"
+    assert event.pay_date == "2026-09-30"
+    assert event.amount is None
+
+    fields = dc.distribution_fields("ERNS.L", {}, as_of=date(2026, 7, 10))
+    assert fields["distribution_ex_date"] == "2026-09-17"
+    assert "Pay date 2026-09-30" in fields["distribution_cycle_note"]
 
 
 def test_distribution_fields_for_non_cash_like_symbol_are_empty() -> None:
