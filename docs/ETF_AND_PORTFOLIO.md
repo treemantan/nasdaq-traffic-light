@@ -44,6 +44,8 @@
 
 报告会尝试从 Yahoo dividend events 中读取最近除息日和每份分派金额，并在持仓行显示 `distribution_ex_date`、`distribution_amount_native` 和分派周期说明。Yahoo 通常只提供 ex-dividend date，不一定提供 payment date；实际到账日以发行商 payment date 以及 Revolut/托管行入账节奏为准。若最近发生除息，Revolut 里看到现金入账可能在 payment date 当日或之后若干个工作日出现。
 
+截至当前手动校验，ERNS 2026 年 6 月这次分派为：Declaration date `2026-06-11`，Ex-dividend date `2026-06-18`，Record date `2026-06-19`，Pay date `2026-06-30`，Distribution `102.11p / £1.0211 per share`。因此 2026-06-18 附近约 1% 的价格回落更应优先解释为除息调整；若 2026-06-17 收盘前已经持有，现金分派通常要等 2026-06-30 或之后几个工作日才会在 Revolut 里显示。
+
 ## Revolut 组合导入字段
 
 运行：

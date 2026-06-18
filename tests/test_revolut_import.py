@@ -397,17 +397,27 @@ class RevolutImportTests(unittest.TestCase):
         self.assertIsNotNone(snapshot[3])
 
     def test_cash_like_distribution_fields_use_latest_dividend_event(self) -> None:
-        fields = MODULE._cash_like_distribution_fields(
-            "ERNS.L",
-            {"_dividend_events": [{"ex_date": "2026-06-18", "amount": 1.02}]},
-        )
+        with patch.object(MODULE, "CASH_LIKE_DISTRIBUTION_SYMBOLS", {"CASH.L"}):
+            fields = MODULE._cash_like_distribution_fields(
+                "CASH.L",
+                {"_dividend_events": [{"ex_date": "2026-06-18", "amount": 1.02}]},
+            )
 
         self.assertEqual(fields["distribution_ex_date"], "2026-06-18")
         self.assertEqual(fields["distribution_amount_native"], 1.02)
         self.assertIn("最近除息日 2026-06-18", fields["distribution_cycle_note"])
 
-    def test_cash_like_distribution_fields_fall_back_without_event(self) -> None:
+    def test_erns_distribution_override_includes_pay_date(self) -> None:
         fields = MODULE._cash_like_distribution_fields("ERNS.L", {})
+
+        self.assertEqual(fields["distribution_ex_date"], "2026-06-18")
+        self.assertEqual(fields["distribution_amount_native"], 1.0211)
+        self.assertIn("Pay date 2026-06-30", fields["distribution_cycle_note"])
+        self.assertIn("Revolut可能", fields["distribution_cycle_note"])
+
+    def test_cash_like_distribution_fields_fall_back_without_event(self) -> None:
+        with patch.object(MODULE, "CASH_LIKE_DISTRIBUTION_OVERRIDES", {}):
+            fields = MODULE._cash_like_distribution_fields("ERNS.L", {})
 
         self.assertEqual(fields["distribution_ex_date"], "")
         self.assertIn("Revolut入账", fields["distribution_cycle_note"])
