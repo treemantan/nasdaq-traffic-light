@@ -654,12 +654,40 @@ def _validate_metric(metric: MarketMetric, spec: MetricSpec) -> MarketMetric:
     if spec.key in {"treasury_2y", "treasury_10y"} and metric.value < 1:
         status = "suspicious"
         warnings.append(f"{spec.label}低于1%，与2026年利率环境不匹配，需核验是否存在小数点移位。")
+    if (
+        status == "ok"
+        and freshness == "live"
+        and spec.source == "Yahoo"
+        and metric.as_of is not None
+        and _is_yahoo_live_quote_unexpectedly_old(metric.as_of, _safe_today())
+    ):
+        status = "stale"
+        freshness = "stale"
+        warnings.append(
+            f"{spec.label}Yahoo行情最近有效值为{metric.as_of.isoformat()}，"
+            "未覆盖当前可接受交易日窗口，已标记为非实时。"
+        )
+    elif status == "ok" and freshness == "live" and spec.source == "Yahoo" and metric.as_of is not None:
+        if metric.as_of < _safe_today():
+            freshness = "recent-valid"
     if metric.as_of is not None and (_safe_today() - metric.as_of).days > spec.stale_days:
         if status == "ok":
             status = "stale"
             freshness = "stale"
         warnings.append(f"{spec.label}最近有效值为{metric.as_of.isoformat()}，超出常规新鲜度窗口。")
     return _replace_metric(metric, status=status, warnings=tuple(dict.fromkeys(warnings)), freshness=freshness)
+
+
+def _is_yahoo_live_quote_unexpectedly_old(as_of: date, today: date) -> bool:
+    age_days = (today - as_of).days
+    if age_days <= 1:
+        return False
+    # Friday close is still the latest normal quote through the weekend and early Monday.
+    if today.weekday() == 6 and age_days <= 2:
+        return False
+    if today.weekday() == 0 and age_days <= 3:
+        return False
+    return True
 
 
 def _metric_from_cache(
