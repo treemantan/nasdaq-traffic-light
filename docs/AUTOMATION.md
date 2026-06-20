@@ -227,6 +227,9 @@ python scripts/send_portfolio_event_reminders.py --lookahead-hours 7
 - 有精确时刻的事件在首次进入约 7 小时观察窗口时提醒；这使现有定时任务能够覆盖“事件前约 6 小时”的需求。
 - 只有日期的事件会在事件当天、美股开盘前首次检查时提醒。
 - 已发送事件写入 `output/cache/portfolio_event_reminders.json`，并随 GitHub Actions cache 延续，避免重复提醒。
+- 期权持仓会额外检查 `option_legs_json` 中的 delayed mark 与 IV：首次观察只建立基线；之后若 IV 或 mark 出现显著跳变，会通过同一封 `PORTFOLIO_EMAIL_TO` 私密提醒邮件提示人工复核。已发送状态写入 `output/cache/option_risk_alerts.json`，避免同一合约同一风险在 24 小时内反复提醒。
+- 如果期权 mark / IV 缺失，系统只记录数据不足，不会生成误报；期权提醒不是交易信号，也不替代 IBKR Greeks / POP / 实时行情。
+- 默认阈值：IV 变化超过 5 vol points 或相对变化超过 20% 触发黄色提醒；超过 10 vol points 或相对变化超过 40% 触发红色提醒。Mark 相对变化超过 25% 触发黄色提醒，超过 50% 触发红色提醒。
 - 每个事件包含官方来源或可审计的进展链接。预计日期和媒体报道会明确标记，不应误读为公司已经正式确认。
 - 所有红色回撤预警 ticker 都会进入事件复核覆盖检查。若尚未登记未来窗口，私人报告会显示“红色预警待补充事件来源”，提醒人工检查公司 IR、SEC 披露和行业监管进展。
 
