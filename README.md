@@ -32,23 +32,21 @@ output/market-report-YYYY-MM-DD.json
 双击 `run_full_local_pipeline.bat` 会执行接近 GitHub Actions 的本地流程：
 
 - 复制 OneDrive 中的 Revolut / IBKR statement 到 `.cloud-statements`
-- 如当前进程存在 IBKR Flex 临时环境变量，则先尝试下载最新 IBKR Flex 数据
+- 如 `secrets/local_pipeline.env` 存在 IBKR Flex 配置，则先尝试下载最新 IBKR Flex 数据
 - 导入 `.cloud-statements` 中的 CSV/XML statement，自动去重
 - 生成本地报告，默认 dry-run，不发送邮件
 - 日志写入 `logs/full-local-pipeline-YYYY-MM-DD.log`
 
-IBKR Flex 使用与 GitHub Actions Secrets 同名的临时环境变量，不需要写入 Windows 永久环境变量：
+IBKR Flex 使用与 GitHub Actions Secrets 同名的本地配置项，不需要写入 Windows 永久环境变量。配置文件为 `secrets/local_pipeline.env`，该目录已被 git 忽略，不会提交到 GitHub：
 
-```powershell
-$env:IBKR_FLEX_TOKEN = "你的 IBKR Flex token"
-$env:IBKR_ACTIVITY_QUERY_ID = "1531778"
-$env:IBKR_ACTIVITY_LIGHT_QUERY_ID = "你的 light activity query id"
-$env:IBKR_TRADE_CONFIRM_QUERY_ID = "1535495"
-
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_full_local_pipeline.ps1 -ProjectDir . -ConfigPath config.example.json
+```text
+IBKR_FLEX_TOKEN=你的 IBKR Flex token
+IBKR_ACTIVITY_QUERY_ID=1531778
+IBKR_ACTIVITY_LIGHT_QUERY_ID=你的 light activity query id
+IBKR_TRADE_CONFIRM_QUERY_ID=1535495
 ```
 
-这些变量只在当前 PowerShell 会话里有效。若直接双击 BAT，它不会继承你在另一个 PowerShell 窗口里输入的临时变量；这种情况下会跳过 IBKR Flex 实时下载，并使用 OneDrive 里最新的手动导出文件兜底。若要本地发送邮件：
+双击 `run_full_local_pipeline.bat` 会自动读取这个文件。若文件不存在或 token 为空，会跳过 IBKR Flex 实时下载，并使用 OneDrive 里最新的手动导出文件兜底。若要本地发送邮件：
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_full_local_pipeline.ps1 -ProjectDir . -ConfigPath config.email.json -SendEmail

@@ -3,10 +3,14 @@ param(
     [string]$ConfigPath = "config.example.json",
     [string]$LogDir = "logs",
     [string]$CloudStatementDir = ".cloud-statements",
+    [string]$LocalEnvPath = "secrets\local_pipeline.env",
     [string]$RevolutStatementDir = "",
     [string]$IbkrStatementDir = "",
     [string]$RevolutPattern = "*.csv",
     [string]$IbkrPatterns = "*.csv,*.xml",
+    [string]$IbkrActivityQueryId = "1531778",
+    [string]$IbkrActivityLightQueryId = "",
+    [string]$IbkrTradeConfirmQueryId = "1535495",
     [switch]$SendEmail
 )
 
@@ -130,6 +134,49 @@ function Get-EnvValue {
     return $value
 }
 
+function Set-ProcessEnvIfMissing {
+    param(
+        [string]$Name,
+        [string]$Value
+    )
+    if ((-not (Get-EnvValue $Name)) -and $Value) {
+        [Environment]::SetEnvironmentVariable($Name, $Value, "Process")
+    }
+}
+
+function Import-LocalEnvFile {
+    param([string]$Path)
+    if (-not $Path) {
+        return
+    }
+
+    $resolvedPath = $Path
+    if (-not [System.IO.Path]::IsPathRooted($resolvedPath)) {
+        $resolvedPath = Join-Path $ProjectDir $resolvedPath
+    }
+    if (-not (Test-Path -LiteralPath $resolvedPath)) {
+        Write-Log "Local env file not found; using process environment only: $resolvedPath" "WARN"
+        return
+    }
+
+    foreach ($line in Get-Content -LiteralPath $resolvedPath -Encoding UTF8) {
+        $trimmed = $line.Trim()
+        if (-not $trimmed -or $trimmed.StartsWith("#")) {
+            continue
+        }
+        $parts = $trimmed -split "=", 2
+        if ($parts.Count -ne 2) {
+            continue
+        }
+        $name = $parts[0].Trim()
+        $value = $parts[1].Trim().Trim('"').Trim("'")
+        if ($name -and $value) {
+            Set-ProcessEnvIfMissing -Name $name -Value $value
+        }
+    }
+    Write-Log "Loaded local pipeline env file for this process only: $resolvedPath"
+}
+
 Set-Location $ProjectDir
 $fullLogDir = Join-Path $ProjectDir $LogDir
 New-Item -ItemType Directory -Force -Path $fullLogDir | Out-Null
@@ -145,6 +192,11 @@ Write-Log "ProjectDir=$ProjectDir"
 Write-Log "ConfigPath=$ConfigPath"
 
 try {
+    Import-LocalEnvFile -Path $LocalEnvPath
+    Set-ProcessEnvIfMissing -Name "IBKR_ACTIVITY_QUERY_ID" -Value $IbkrActivityQueryId
+    Set-ProcessEnvIfMissing -Name "IBKR_ACTIVITY_LIGHT_QUERY_ID" -Value $IbkrActivityLightQueryId
+    Set-ProcessEnvIfMissing -Name "IBKR_TRADE_CONFIRM_QUERY_ID" -Value $IbkrTradeConfirmQueryId
+
     $statementDir = Join-Path $ProjectDir $CloudStatementDir
     New-Item -ItemType Directory -Force -Path $statementDir | Out-Null
 
