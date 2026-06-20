@@ -4,8 +4,11 @@ import argparse
 import csv
 import importlib.util
 import json
+import math
 import re
 import sys
+import urllib.parse
+import urllib.request
 import xml.etree.ElementTree as ET
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -248,6 +251,7 @@ def _extract_ibkr_option_legs(paths: list[Path]) -> list[dict[str, Any]]:
                 "currency": str(row.get("Currency") or "").strip().upper(),
                 "trade_date": _format_ibkr_date(str(row.get("ReportDate") or row.get("Date/Time") or "")),
                 "source": "IBKR open position",
+                "fx_rate_to_base": _safe_float(row.get("FxRateToBase")),
             }
             continue
         quantity = _ibkr_quantity(row)
@@ -298,6 +302,7 @@ def _extract_ibkr_option_legs(paths: list[Path]) -> list[dict[str, Any]]:
                 "net_cash_after_fee_gbp": net_cash_after_fee_gbp,
                 "trade_date": _format_ibkr_date(str(row.get("TradeDate") or row.get("Date/Time") or "")),
                 "source": "IBKR statement",
+                "fx_rate_to_base": _safe_float(row.get("FxRateToBase")),
             }
         leg.update(mtm_by_contract.get(key, {}))
         legs.append(leg)
@@ -321,6 +326,7 @@ def _extract_ibkr_option_legs(paths: list[Path]) -> list[dict[str, Any]]:
     for key, mtm_leg in mtm_by_contract.items():
         if key not in seen_contracts:
             legs.append(mtm_leg)
+    _enrich_option_legs_with_yahoo_fallback(legs, fx_rates_to_base)
     return sorted(
         legs,
         key=lambda item: (
@@ -369,6 +375,224 @@ def _ibkr_option_mtm(
         "market_value_native": market_value_native,
         "market_value_gbp": market_value_gbp,
     }
+
+
+_YAHOO_OPTION_CACHE: dict[tuple[str, str], dict[str, Any] | None] = {}
+
+
+def _enrich_option_legs_with_yahoo_fallback(
+    legs: list[dict[str, Any]],
+    fx_rates_to_base: dict[tuple[str, str], float] | None = None,
+) -> None:
+    for leg in legs:
+        if _safe_float(leg.get("mark_price")) is not None and _safe_float(leg.get("market_value_native")) is not None:
+            continue
+        quote = _yahoo_option_quote_for_leg(leg)
+        if not quote:
+            continue
+        mark = _option_quote_mark(quote)
+        signed_contracts = _safe_float(leg.get("signed_contracts"))
+        multiplier = _safe_float(leg.get("multiplier")) or 100.0
+        if _safe_float(leg.get("mark_price")) is None and mark is not None:
+            leg["mark_price"] = mark
+        if _safe_float(leg.get("market_value_native")) is None and mark is not None and signed_contracts is not None:
+            leg["market_value_native"] = signed_contracts * multiplier * mark
+        if _safe_float(leg.get("market_value_gbp")) is None and _safe_float(leg.get("market_value_native")) is not None:
+            fx_rate = _option_leg_fx_rate_to_base(leg, fx_rates_to_base)
+            if fx_rate is not None:
+                leg["market_value_gbp"] = (_safe_float(leg.get("market_value_native")) or 0.0) * fx_rate
+        _enrich_option_leg_greeks(leg, quote)
+        source = str(leg.get("source") or "IBKR statement")
+        if "Yahoo option chain" not in source:
+            leg["source"] = f"{source} + Yahoo option chain"
+        leg["market_data_source"] = "Yahoo delayed option chain"
+        leg["market_data_time"] = _format_yahoo_timestamp(quote.get("lastTradeDate"))
+
+
+def _yahoo_option_quote_for_leg(leg: dict[str, Any]) -> dict[str, Any] | None:
+    underlying = str(leg.get("underlying") or "").strip().upper()
+    expiry = str(leg.get("expiry") or "").strip()
+    right = str(leg.get("right") or "").strip().upper()
+    strike = _safe_float(leg.get("strike"))
+    if not underlying or not expiry or right not in {"C", "P"} or strike is None:
+        return None
+    for yahoo_symbol in _yahoo_underlying_candidates(underlying):
+        payload = _fetch_yahoo_option_chain(yahoo_symbol, expiry)
+        quote = _match_yahoo_option_quote(payload, leg, right, strike)
+        if quote:
+            return quote
+    return None
+
+
+def _yahoo_underlying_candidates(underlying: str) -> list[str]:
+    candidates = [underlying]
+    if underlying == "VIX":
+        candidates.insert(0, "^VIX")
+    if "." in underlying:
+        candidates.append(underlying.replace(".", "-"))
+    seen: set[str] = set()
+    return [item for item in candidates if item and not (item in seen or seen.add(item))]
+
+
+def _fetch_yahoo_option_chain(yahoo_symbol: str, expiry: str) -> dict[str, Any] | None:
+    key = (yahoo_symbol, expiry)
+    if key in _YAHOO_OPTION_CACHE:
+        return _YAHOO_OPTION_CACHE[key]
+    try:
+        expiry_ts = int(datetime.strptime(expiry, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp())
+    except ValueError:
+        _YAHOO_OPTION_CACHE[key] = None
+        return None
+    encoded_symbol = urllib.parse.quote(yahoo_symbol, safe="")
+    url = f"https://query2.finance.yahoo.com/v7/finance/options/{encoded_symbol}?date={expiry_ts}"
+    try:
+        payload = _read_yahoo_option_json(url)
+    except Exception:
+        payload = None
+    _YAHOO_OPTION_CACHE[key] = payload
+    return payload
+
+
+def _read_yahoo_option_json(url: str) -> dict[str, Any] | None:
+    request = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "Mozilla/5.0 Macro Regime Radar option fallback",
+            "Accept": "application/json",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=6) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def _match_yahoo_option_quote(
+    payload: dict[str, Any] | None,
+    leg: dict[str, Any],
+    right: str,
+    strike: float,
+) -> dict[str, Any] | None:
+    if not payload:
+        return None
+    result = (((payload.get("optionChain") or {}).get("result") or []) or [None])[0]
+    if not isinstance(result, dict):
+        return None
+    options = (result.get("options") or []) or []
+    if not options or not isinstance(options[0], dict):
+        return None
+    candidates = options[0].get("calls" if right == "C" else "puts") or []
+    normalized_symbol = _normalize_option_contract_symbol(str(leg.get("symbol") or ""))
+    best: dict[str, Any] | None = None
+    for quote in candidates:
+        if not isinstance(quote, dict):
+            continue
+        contract_symbol = _normalize_option_contract_symbol(str(quote.get("contractSymbol") or ""))
+        quote_strike = _safe_float(quote.get("strike"))
+        if normalized_symbol and contract_symbol and normalized_symbol == contract_symbol:
+            best = quote
+            break
+        if quote_strike is not None and abs(quote_strike - strike) < 0.001:
+            best = quote
+    if best and isinstance(result.get("quote"), dict):
+        best = {**best, "_underlying_price": _safe_float(result["quote"].get("regularMarketPrice"))}
+    return best
+
+
+def _normalize_option_contract_symbol(value: str) -> str:
+    return re.sub(r"[^A-Z0-9]", "", value.upper())
+
+
+def _option_quote_mark(quote: dict[str, Any]) -> float | None:
+    bid = _safe_float(quote.get("bid"))
+    ask = _safe_float(quote.get("ask"))
+    if bid is not None and ask is not None and bid > 0 and ask > 0 and ask >= bid:
+        return (bid + ask) / 2
+    return _safe_float(quote.get("lastPrice") or quote.get("regularMarketPrice"))
+
+
+def _option_leg_fx_rate_to_base(
+    leg: dict[str, Any],
+    fx_rates_to_base: dict[tuple[str, str], float] | None = None,
+) -> float | None:
+    direct = _safe_float(leg.get("fx_rate_to_base"))
+    if direct is not None and direct > 0:
+        return direct
+    native_cash = _safe_float(leg.get("net_cash_after_fee_native") or leg.get("net_cash_native"))
+    gbp_cash = _safe_float(leg.get("net_cash_after_fee_gbp") or leg.get("net_cash_gbp"))
+    if native_cash not in (None, 0) and gbp_cash is not None:
+        return abs(gbp_cash / native_cash)
+    currency = str(leg.get("currency") or "").strip().upper()
+    trade_date = str(leg.get("trade_date") or "").strip()
+    if fx_rates_to_base and currency and trade_date:
+        return fx_rates_to_base.get((currency, trade_date)) or fx_rates_to_base.get((currency, ""))
+    if currency in {"", "GBP"}:
+        return 1.0
+    return None
+
+
+def _enrich_option_leg_greeks(leg: dict[str, Any], quote: dict[str, Any]) -> None:
+    iv = _safe_float(quote.get("impliedVolatility"))
+    underlying_price = _safe_float(quote.get("_underlying_price"))
+    strike = _safe_float(leg.get("strike"))
+    expiry = str(leg.get("expiry") or "")
+    right = str(leg.get("right") or "").upper()
+    signed_contracts = _safe_float(leg.get("signed_contracts")) or 0.0
+    multiplier = _safe_float(leg.get("multiplier")) or 100.0
+    if iv is not None:
+        leg["implied_volatility"] = iv
+    if iv is None or iv <= 0 or underlying_price is None or strike is None or strike <= 0 or right not in {"C", "P"}:
+        return
+    try:
+        expiry_date = datetime.strptime(expiry, "%Y-%m-%d").date()
+    except ValueError:
+        return
+    days = max((expiry_date - datetime.now(timezone.utc).date()).days, 1)
+    t = days / 365.0
+    risk_free = 0.045
+    sqrt_t = math.sqrt(t)
+    d1 = (math.log(underlying_price / strike) + (risk_free + 0.5 * iv * iv) * t) / (iv * sqrt_t)
+    d2 = d1 - iv * sqrt_t
+    nd1 = _normal_cdf(d1)
+    nd2 = _normal_cdf(d2)
+    pdf_d1 = _normal_pdf(d1)
+    unit_delta = nd1 if right == "C" else nd1 - 1
+    unit_gamma = pdf_d1 / (underlying_price * iv * sqrt_t)
+    call_theta = (
+        -(underlying_price * pdf_d1 * iv) / (2 * sqrt_t)
+        - risk_free * strike * math.exp(-risk_free * t) * nd2
+    ) / 365.0
+    put_theta = (
+        -(underlying_price * pdf_d1 * iv) / (2 * sqrt_t)
+        + risk_free * strike * math.exp(-risk_free * t) * _normal_cdf(-d2)
+    ) / 365.0
+    unit_theta = call_theta if right == "C" else put_theta
+    unit_vega = underlying_price * pdf_d1 * sqrt_t / 100.0
+    leg["underlying_price"] = underlying_price
+    leg["unit_delta"] = unit_delta
+    leg["position_delta"] = unit_delta * signed_contracts * multiplier
+    leg["unit_gamma"] = unit_gamma
+    leg["position_gamma"] = unit_gamma * signed_contracts * multiplier
+    leg["unit_theta"] = unit_theta
+    leg["position_theta"] = unit_theta * signed_contracts * multiplier
+    leg["unit_vega"] = unit_vega
+    leg["position_vega"] = unit_vega * signed_contracts * multiplier
+
+
+def _normal_cdf(value: float) -> float:
+    return 0.5 * (1.0 + math.erf(value / math.sqrt(2.0)))
+
+
+def _normal_pdf(value: float) -> float:
+    return math.exp(-0.5 * value * value) / math.sqrt(2.0 * math.pi)
+
+
+def _format_yahoo_timestamp(value: object) -> str:
+    timestamp = _safe_float(value)
+    if timestamp is None:
+        return ""
+    try:
+        return datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat()
+    except (OverflowError, OSError, ValueError):
+        return ""
 
 
 def _option_underlying(row: dict[str, str], raw_symbol: str) -> str:

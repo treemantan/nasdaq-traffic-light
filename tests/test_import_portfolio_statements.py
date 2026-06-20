@@ -7,6 +7,7 @@ import unittest
 from datetime import datetime, timezone
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
+from unittest.mock import patch
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "import_portfolio_statements.py"
@@ -393,6 +394,61 @@ class ImportPortfolioStatementsTests(unittest.TestCase):
         self.assertAlmostEqual(option_legs[0]["mark_price"], 1.20)
         self.assertAlmostEqual(option_legs[0]["market_value_native"], -120.0)
         self.assertAlmostEqual(option_legs[0]["market_value_gbp"], -90.0)
+
+    def test_ibkr_option_missing_mtm_uses_yahoo_option_chain_fallback(self) -> None:
+        content = """<?xml version="1.0" encoding="UTF-8"?>
+<FlexQueryResponse>
+  <FlexStatements>
+    <FlexStatement accountId="U1" fromDate="20260616" toDate="20260616">
+      <Trades>
+        <Trade accountId="U1" assetCategory="OPT" symbol="NFLX 260724P00070000"
+          underlyingSymbol="NFLX" tradeID="nflx-short" ibExecID="opt-exec-1"
+          tradeDate="20260616" buySell="SELL" quantity="1" tradePrice="1.50"
+          currency="USD" netCash="150" ibCommission="-0.65"
+          fxRateToBase="0.75" levelOfDetail="EXECUTION" />
+      </Trades>
+    </FlexStatement>
+  </FlexStatements>
+</FlexQueryResponse>
+"""
+        payload = {
+            "optionChain": {
+                "result": [
+                    {
+                        "quote": {"regularMarketPrice": 82.5},
+                        "options": [
+                            {
+                                "puts": [
+                                    {
+                                        "contractSymbol": "NFLX260724P00070000",
+                                        "strike": 70,
+                                        "bid": 1.10,
+                                        "ask": 1.30,
+                                        "lastPrice": 1.25,
+                                        "impliedVolatility": 0.45,
+                                        "lastTradeDate": 1782259200,
+                                    }
+                                ]
+                            }
+                        ],
+                    }
+                ]
+            }
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "ibkr-options.xml"
+            path.write_text(content, encoding="utf-8")
+            MODULE._YAHOO_OPTION_CACHE.clear()
+            with patch.object(MODULE, "_read_yahoo_option_json", return_value=payload):
+                option_legs = MODULE._extract_ibkr_option_legs([path])
+
+        self.assertEqual(len(option_legs), 1)
+        self.assertAlmostEqual(option_legs[0]["mark_price"], 1.20)
+        self.assertAlmostEqual(option_legs[0]["market_value_native"], -120.0)
+        self.assertAlmostEqual(option_legs[0]["market_value_gbp"], -90.0)
+        self.assertEqual(option_legs[0]["market_data_source"], "Yahoo delayed option chain")
+        self.assertIn("Yahoo option chain", option_legs[0]["source"])
+        self.assertIn("position_delta", option_legs[0])
 
     def test_ibkr_trade_confirm_xml_rows_are_supported(self) -> None:
         content = """<?xml version="1.0" encoding="UTF-8"?>

@@ -780,7 +780,7 @@ def _render_option_risk_panel(positions: list[PortfolioPosition]) -> str:
         <summary>查看期权腿明细</summary>
         <div class="portfolio-table-scroll">
           <table class="portfolio-table">
-            <thead><tr><th>合约</th><th>方向</th><th>数量</th><th>成交价</th><th>Mark</th><th>当前MTM</th><th>Net cash</th><th>手续费</th><th>来源</th></tr></thead>
+            <thead><tr><th>合约</th><th>方向</th><th>数量</th><th>成交价</th><th>Mark</th><th>IV/Greeks</th><th>当前MTM</th><th>Net cash</th><th>手续费</th><th>来源</th></tr></thead>
             <tbody>{leg_rows}</tbody>
           </table>
         </div>
@@ -914,11 +914,36 @@ def _render_option_leg_row(leg: dict[str, object]) -> str:
       <td>{escape(_fmt_option_number(leg.get("contracts")))}</td>
       <td>{escape(_fmt_option_number(leg.get("trade_price")))}</td>
       <td>{escape(_fmt_option_number(leg.get("mark_price")))}</td>
+      <td>{_option_greeks_text(leg)}</td>
       <td>{mtm_cell}</td>
       <td>{escape(_fmt_option_cash(_option_cash_after_fee_native(leg), currency))}<br><span class="portfolio-scope">原始netCash {escape(_fmt_option_cash(_option_float(leg.get("net_cash_native")) or 0, currency))}；GBP {escape(_fmt_signed_gbp(_option_cash_after_fee_gbp(leg)))}</span></td>
       <td>{escape(_fmt_option_cash(_option_float(leg.get("commission_native")) or 0, currency))}</td>
       <td>{escape(str(leg.get("source") or "IBKR statement"))}</td>
     </tr>"""
+
+
+def _option_greeks_text(leg: dict[str, object]) -> str:
+    iv = _option_float(leg.get("implied_volatility"))
+    delta = _option_float(leg.get("unit_delta"))
+    gamma = _option_float(leg.get("unit_gamma"))
+    theta = _option_float(leg.get("unit_theta"))
+    vega = _option_float(leg.get("unit_vega"))
+    fields: list[str] = []
+    if iv is not None:
+        fields.append(f"IV {iv * 100:.1f}%")
+    if delta is not None:
+        fields.append(f"Δ {delta:.2f}")
+    if gamma is not None:
+        fields.append(f"Γ {gamma:.4f}")
+    if theta is not None:
+        fields.append(f"Θ {theta:.3f}/day")
+    if vega is not None:
+        fields.append(f"Vega {vega:.3f}")
+    if not fields:
+        return "N/A"
+    source = str(leg.get("market_data_source") or "")
+    source_note = f'<br><span class="portfolio-scope">{escape(source)}</span>' if source else ""
+    return escape(" · ".join(fields)) + source_note
 
 
 def _option_leg_label(leg: dict[str, object]) -> str:
