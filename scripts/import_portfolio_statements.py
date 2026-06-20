@@ -447,7 +447,12 @@ def _iter_ibkr_rows(path: Path):
         for raw in csv.reader(handle):
             if not raw:
                 continue
-            if "ClientAccountID" in raw and "LevelOfDetail" in raw:
+            compact_header = {_compact_ibkr_field_name(value) for value in raw}
+            if "levelofdetail" in compact_header and (
+                "assetcategory" in compact_header
+                or "assetclass" in compact_header
+                or "symbol" in compact_header
+            ):
                 header = raw
                 continue
             if header is None or len(raw) != len(header):
@@ -476,10 +481,13 @@ def _iter_ibkr_xml_rows(path: Path):
 def _normalize_ibkr_csv_row(row: dict[str, str]) -> dict[str, str]:
     normalized = {str(key): str(value) for key, value in row.items()}
     lower = {key.lower(): value for key, value in normalized.items()}
+    compact = {_compact_ibkr_field_name(key): value for key, value in normalized.items()}
 
     def pick(*names: str) -> str:
         for name in names:
             value = lower.get(name.lower())
+            if value in (None, ""):
+                value = compact.get(_compact_ibkr_field_name(name))
             if value not in (None, ""):
                 return value
         return ""
@@ -525,10 +533,13 @@ def _normalize_ibkr_csv_row(row: dict[str, str]) -> dict[str, str]:
 def _normalize_ibkr_xml_row(attrs: dict[str, str], *, row_kind: str) -> dict[str, str]:
     normalized = {key: str(value) for key, value in attrs.items()}
     lower = {key.lower(): value for key, value in normalized.items()}
+    compact = {_compact_ibkr_field_name(key): value for key, value in normalized.items()}
 
     def pick(*names: str) -> str:
         for name in names:
             value = lower.get(name.lower())
+            if value in (None, ""):
+                value = compact.get(_compact_ibkr_field_name(name))
             if value not in (None, ""):
                 return value
         return ""
@@ -606,6 +617,10 @@ def _normalize_ibkr_xml_row(attrs: dict[str, str], *, row_kind: str) -> dict[str
 
 def _xml_tag(element: ET.Element) -> str:
     return element.tag.rsplit("}", 1)[-1]
+
+
+def _compact_ibkr_field_name(name: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(name).lower())
 
 
 def _ibkr_fingerprint(row: dict[str, str]) -> tuple[str, ...]:

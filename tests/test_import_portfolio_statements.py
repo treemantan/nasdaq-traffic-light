@@ -375,6 +375,25 @@ class ImportPortfolioStatementsTests(unittest.TestCase):
         self.assertAlmostEqual(option_legs[0]["market_value_native"], -120.0)
         self.assertAlmostEqual(option_legs[0]["market_value_gbp"], -90.0)
 
+    def test_ibkr_option_open_position_csv_with_spaced_headers_updates_mtm(self) -> None:
+        content = "\n".join(
+            [
+                "Asset Class,Level of Detail,Symbol,Underlying Symbol,Report Date,Quantity,Mark Price,Position Value,Currency,Multiplier,FX Rate To Base,Put/Call,Strike,Expiry",
+                "OPT,POSITION,NFLX 260724P00070000,NFLX,20260617,-1,1.20,-120.00,USD,100,0.75,P,70,20260724",
+            ]
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "ibkr-open-positions.csv"
+            path.write_text(content, encoding="utf-8")
+
+            option_legs = MODULE._extract_ibkr_option_legs([path])
+
+        self.assertEqual(len(option_legs), 1)
+        self.assertEqual(option_legs[0]["source"], "IBKR open position")
+        self.assertAlmostEqual(option_legs[0]["mark_price"], 1.20)
+        self.assertAlmostEqual(option_legs[0]["market_value_native"], -120.0)
+        self.assertAlmostEqual(option_legs[0]["market_value_gbp"], -90.0)
+
     def test_ibkr_trade_confirm_xml_rows_are_supported(self) -> None:
         content = """<?xml version="1.0" encoding="UTF-8"?>
 <FlexQueryResponse>
