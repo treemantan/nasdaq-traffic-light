@@ -77,6 +77,24 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_full_local_pipel
 
 它是风险管理提示，不是机械加减仓信号。详细逻辑见 [ETF 与组合文档](docs/ETF_AND_PORTFOLIO.md)。
 
+## 关于相关性与 Beta
+
+相关性 `ρ` 衡量“像不像”，范围为 `-1` 到 `+1`。`ρ` 越接近 `+1`，说明该 ETF 或持仓最近 60 个交易日越倾向于和对应因子同涨同跌；越接近 `-1`，说明越倾向于反向变化；接近 `0` 则表示关系不稳定。
+
+Beta 衡量“有多敏感”。报告中的近似回归形式为：
+
+```text
+ETF_return = alpha + beta × factor_return + error
+```
+
+因此 Nasdaq beta `1.2` 可以理解为：过去 60 日里，Nasdaq 100 日涨跌 `1%` 时，该资产平均约涨跌 `1.2%`。它不是 alpha，也不等于相关性。两者关系可以写成：
+
+```text
+beta = ρ × (资产波动率 / 因子波动率)
+```
+
+所以 `ρ=0.8`、Nasdaq beta `1.2` 的含义是：资产与 Nasdaq 同步性较高，同时自身波动率约为 Nasdaq 的 `1.5` 倍。相关性说明方向跟随程度，Beta 说明放大或缩小倍数；二者都是最近 60 日统计关系，不代表未来因果或交易信号。
+
 ## 关于 MAD
 
 MAD 是“中位绝对偏差”，用于让不同 ETF 的相似环境尺度自动适配自身历史波动。它比普通标准差更不容易被少量极端行情扭曲。详细公式、例子和防止未来信息泄漏的约束见 [方法论文档](docs/METHODOLOGY.md)。
