@@ -756,18 +756,29 @@ def _render_portfolio_panel(
 
 def _render_option_risk_panel(positions: list[PortfolioPosition]) -> str:
     legs = _portfolio_option_legs(positions)
-    if not legs:
+    lifecycle_events = _portfolio_option_lifecycle_events(positions)
+    if not legs and not lifecycle_events:
         return ""
     groups: dict[tuple[str, str], list[dict[str, object]]] = {}
     for leg in legs:
         key = (str(leg.get("underlying") or ""), str(leg.get("expiry") or ""))
         groups.setdefault(key, []).append(leg)
-    strategy_rows = "\n".join(
-        _render_option_strategy_row(underlying, expiry, group_legs)
-        for (underlying, expiry), group_legs in sorted(groups.items())
+    strategy_rows = (
+        "\n".join(
+            _render_option_strategy_row(underlying, expiry, group_legs)
+            for (underlying, expiry), group_legs in sorted(groups.items())
+        )
+        if groups
+        else '<tr><td colspan="6">暂无开放/成交期权腿；仅发现生命周期诊断记录。</td></tr>'
     )
-    leg_rows = "\n".join(_render_option_leg_row(leg) for leg in legs)
+    leg_rows = (
+        "\n".join(_render_option_leg_row(leg) for leg in legs)
+        if legs
+        else '<tr><td colspan="10">暂无期权腿明细。</td></tr>'
+    )
+    lifecycle_status = _render_option_lifecycle_status(lifecycle_events)
     return f"""<div class="portfolio-notes">
+      {lifecycle_status}
       <strong>IBKR期权风险（成本与结构识别）</strong>
       <div class="small-note">期权已从普通股票/ETF持仓中剥离。当前使用IBKR statement成交现金流识别成本、方向、到期与行权价；如Flex/OpenPosition提供mark或market value，则显示当前MTM。delta、gamma、theta、vega和POP仍需要IBKR期权行情或模型输入，未取得时不做伪精确估算。</div>
       <div class="portfolio-table-scroll">
@@ -799,6 +810,68 @@ def _portfolio_option_legs(positions: list[PortfolioPosition]) -> list[dict[str,
         if isinstance(raw, list):
             return [item for item in raw if isinstance(item, dict)]
     return []
+
+
+def _portfolio_option_lifecycle_events(positions: list[PortfolioPosition]) -> list[dict[str, object]]:
+    for position in positions:
+        raw_json = getattr(position, "option_lifecycle_json", "")
+        if not raw_json:
+            continue
+        try:
+            raw = json.loads(raw_json)
+        except json.JSONDecodeError:
+            return []
+        if isinstance(raw, list):
+            return [item for item in raw if isinstance(item, dict)]
+    return []
+
+
+def _render_option_lifecycle_status(events: list[dict[str, object]]) -> str:
+    if not events:
+        return (
+            '<div class="small-note">'
+            "到期/行权/指派记录：Flex Query 已配置为可接收；当前样本未出现相关事件，"
+            "realized P/L 入账规则待真实样本验证。"
+            "</div>"
+        )
+    rows = "\n".join(_render_option_lifecycle_row(event) for event in events[:20])
+    return f"""<div class="small-note">
+        到期/行权/指派记录：已捕获 {len(events)} 条；当前仅作诊断展示，尚未自动计入收益。
+      </div>
+      <details>
+        <summary>查看到期/行权/指派诊断记录</summary>
+        <div class="portfolio-table-scroll">
+          <table class="portfolio-table">
+            <thead><tr><th>事件</th><th>标的</th><th>到期</th><th>结构</th><th>数量</th><th>金额GBP</th><th>日期</th><th>来源</th></tr></thead>
+            <tbody>{rows}</tbody>
+          </table>
+        </div>
+      </details>"""
+
+
+def _render_option_lifecycle_row(event: dict[str, object]) -> str:
+    event_label = {
+        "assignment": "指派",
+        "exercise": "行权",
+        "expiration": "到期",
+    }.get(str(event.get("event_type") or ""), "生命周期事件")
+    right = str(event.get("right") or "")
+    strike = event.get("strike")
+    structure = f"{right}{strike}" if right or strike not in (None, "") else "N/A"
+    amount = event.get("amount_gbp")
+    amount_text = _fmt_signed_gbp(amount) if isinstance(amount, (int, float)) else "N/A"
+    quantity = event.get("quantity")
+    quantity_text = f"{quantity:.2f}" if isinstance(quantity, (int, float)) else "N/A"
+    return f"""<tr>
+      <td>{escape(event_label)}</td>
+      <td><strong>{escape(str(event.get("underlying") or event.get("symbol") or "UNKNOWN"))}</strong><br><span class="portfolio-scope">{escape(str(event.get("symbol") or ""))}</span></td>
+      <td>{escape(str(event.get("expiry") or ""))}</td>
+      <td>{escape(structure)}</td>
+      <td>{escape(quantity_text)}</td>
+      <td>{escape(amount_text)}</td>
+      <td>{escape(str(event.get("date") or ""))}</td>
+      <td>{escape(str(event.get("source_file") or ""))}</td>
+    </tr>"""
 
 
 def _render_option_strategy_row(underlying: str, expiry: str, legs: list[dict[str, object]]) -> str:

@@ -117,6 +117,7 @@ class PortfolioPosition:
     ibkr_trade_file_updated: str = ""
     ibkr_data_warning: str = ""
     option_legs_json: str = ""
+    option_lifecycle_json: str = ""
     distribution_ex_date: str = ""
     distribution_amount_native: float | None = None
     distribution_cycle_note: str = ""
@@ -2452,6 +2453,7 @@ def _load_portfolio_summary(
             ibkr_trade_file_updated=str(row.get("ibkr_trade_file_updated") or ""),
             ibkr_data_warning=str(row.get("ibkr_data_warning") or ""),
             option_legs_json=str(row.get("option_legs_json") or ""),
+            option_lifecycle_json=str(row.get("option_lifecycle_json") or ""),
             distribution_ex_date=str(row.get("distribution_ex_date") or ""),
             distribution_amount_native=_safe_float(row.get("distribution_amount_native")),
             distribution_cycle_note=str(row.get("distribution_cycle_note") or ""),

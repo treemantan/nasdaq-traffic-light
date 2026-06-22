@@ -64,6 +64,7 @@ def main() -> int:
         _reconstruct_ibkr_positions(ibkr_paths) if ibkr_paths else {},
     )
     option_legs = _extract_ibkr_option_legs(ibkr_paths) if ibkr_paths else []
+    option_lifecycle = _extract_ibkr_option_lifecycle_events(ibkr_paths) if ibkr_paths else []
     if not positions:
         raise SystemExit("No open positions found in supported portfolio statements.")
 
@@ -71,6 +72,12 @@ def main() -> int:
     if rows and option_legs:
         rows[0]["option_legs_json"] = json.dumps(option_legs, ensure_ascii=False, separators=(",", ":"))
         _apply_closed_option_realized_pnl(rows, _closed_option_realized_summary(option_legs))
+    if rows:
+        rows[0]["option_lifecycle_json"] = json.dumps(
+            option_lifecycle,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
     ibkr_health = _ibkr_data_health(
         ibkr_paths,
         Path(args.ibkr_diagnostics) if args.ibkr_diagnostics else None,
@@ -417,6 +424,79 @@ def _apply_closed_option_realized_pnl(rows: list[dict[str, str]], summary: dict[
 
 def _fmt_import_number(value: float | None) -> str:
     return "" if value is None else f"{value:.4f}"
+
+
+def _extract_ibkr_option_lifecycle_events(paths: list[Path]) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    seen: set[tuple[str, ...]] = set()
+    for path in paths:
+        for row in _iter_ibkr_rows(path):
+            if not _is_option_lifecycle_row(row):
+                continue
+            raw_symbol = str(row.get("Symbol") or row.get("UnderlyingSymbol") or "").strip().upper()
+            underlying = _option_underlying(row, raw_symbol) or str(row.get("UnderlyingSymbol") or "").strip().upper()
+            event = {
+                "event_type": _option_lifecycle_type(row),
+                "symbol": raw_symbol,
+                "underlying": underlying,
+                "expiry": _option_expiry(row, raw_symbol),
+                "right": _option_right(row, raw_symbol),
+                "strike": _option_strike(row, raw_symbol),
+                "quantity": _safe_float(row.get("Quantity") or row.get("TradeQuantity") or row.get("Position")),
+                "amount_gbp": _ibkr_amount_in_base_currency(row, _safe_float(row.get("Amount")) or 0.0)
+                if row.get("Amount")
+                else None,
+                "currency": str(row.get("Currency") or "").strip().upper(),
+                "date": _format_ibkr_date(str(row.get("TradeDate") or row.get("ReportDate") or row.get("Date/Time") or "")),
+                "source_file": path.name,
+                "status": "captured_not_booked",
+            }
+            fingerprint = tuple(str(event.get(key) or "") for key in ("event_type", "symbol", "date", "quantity", "amount_gbp"))
+            if fingerprint in seen:
+                continue
+            seen.add(fingerprint)
+            events.append(event)
+    return sorted(
+        events,
+        key=lambda item: (str(item.get("date") or ""), str(item.get("underlying") or ""), str(item.get("event_type") or "")),
+        reverse=True,
+    )
+
+
+def _is_option_lifecycle_row(row: dict[str, str]) -> bool:
+    text = " ".join(
+        str(row.get(key) or "")
+        for key in (
+            "LevelOfDetail",
+            "Type",
+            "DividendType",
+            "Code",
+            "Description",
+            "TransactionType",
+            "ActivityType",
+            "AssetCategory",
+            "Symbol",
+        )
+    ).upper()
+    if not any(token in text for token in ("EXERCI", "ASSIGN", "EXPIR", "LAPSE")):
+        return False
+    asset_category = str(row.get("AssetCategory") or "").strip().upper()
+    symbol = str(row.get("Symbol") or "").strip().upper()
+    return asset_category in {"", "OPT"} or bool(re.search(r"\d{6}[CP]\d{8}$", symbol))
+
+
+def _option_lifecycle_type(row: dict[str, str]) -> str:
+    text = " ".join(
+        str(row.get(key) or "")
+        for key in ("Type", "Description", "TransactionType", "ActivityType", "LevelOfDetail", "Code")
+    ).upper()
+    if "ASSIGN" in text:
+        return "assignment"
+    if "EXERCI" in text:
+        return "exercise"
+    if "EXPIR" in text or "LAPSE" in text:
+        return "expiration"
+    return "option_lifecycle"
 
 
 def _ibkr_is_position_row(row: dict[str, str]) -> bool:
@@ -776,6 +856,9 @@ def _iter_ibkr_xml_rows(path: Path):
             elif tag == "OpenPosition":
                 yield _normalize_ibkr_xml_row(element.attrib, row_kind="POSITION")
                 element.clear()
+            elif _is_ibkr_option_lifecycle_tag(tag):
+                yield _normalize_ibkr_xml_row(element.attrib, row_kind="OPTION_LIFECYCLE")
+                element.clear()
             elif tag == "CashTransaction":
                 yield _normalize_ibkr_xml_row(element.attrib, row_kind="CASH")
                 element.clear()
@@ -804,6 +887,11 @@ def _normalize_ibkr_csv_row(row: dict[str, str]) -> dict[str, str]:
         "AssetCategory": pick("AssetCategory", "AssetClass"),
         "Symbol": pick("Symbol", "UnderlyingSymbol"),
         "UnderlyingSymbol": pick("UnderlyingSymbol"),
+        "Type": pick("Type", "TransactionType", "Description"),
+        "Description": pick("Description", "TransactionType", "Type"),
+        "TransactionType": pick("TransactionType", "Type", "Description"),
+        "ActivityType": pick("ActivityType"),
+        "Code": pick("Code"),
         "TradeID": pick("TradeID", "TradeId"),
         "OrderID": pick("OrderID", "OrderId"),
         "ExecID": pick("IBExecID", "ExecID", "ExecutionID"),
@@ -902,6 +990,33 @@ def _normalize_ibkr_xml_row(attrs: dict[str, str], *, row_kind: str) -> dict[str
             "MarketValue": pick("marketValue", "positionValue", "value"),
             "Position": pick("position", "quantity"),
         }
+    if row_kind == "OPTION_LIFECYCLE":
+        return {
+            **normalized,
+            "ClientAccountID": pick("accountId", "acctId", "account"),
+            "LevelOfDetail": (pick("levelOfDetail") or "OPTION_LIFECYCLE").upper(),
+            "AssetCategory": pick("assetCategory") or "OPT",
+            "Symbol": pick("symbol", "underlyingSymbol"),
+            "UnderlyingSymbol": pick("underlyingSymbol"),
+            "Type": pick("type", "transactionType", "description") or row_kind,
+            "Description": pick("description", "transactionType", "type"),
+            "TransactionType": pick("transactionType", "type", "description"),
+            "ActivityType": pick("activityType"),
+            "Code": pick("code"),
+            "TransactionID": pick("transactionID", "transactionId"),
+            "ReportDate": pick("reportDate", "dateTime", "date"),
+            "TradeDate": pick("tradeDate", "dateTime", "date"),
+            "Date/Time": pick("dateTime", "tradeDate", "reportDate", "date"),
+            "Quantity": pick("quantity", "tradeQuantity", "position"),
+            "TradeQuantity": pick("tradeQuantity", "quantity", "position"),
+            "Amount": pick("amount", "netCash", "proceeds"),
+            "Currency": pick("currency", "currencyPrimary"),
+            "FxRateToBase": pick("fxRateToBase"),
+            "Multiplier": pick("multiplier"),
+            "PutCall": pick("putCall", "right"),
+            "Strike": pick("strike"),
+            "Expiry": pick("expiry", "expiryDate", "maturity"),
+        }
     return {
         **normalized,
         "ClientAccountID": pick("accountId", "acctId", "account"),
@@ -911,6 +1026,10 @@ def _normalize_ibkr_xml_row(attrs: dict[str, str], *, row_kind: str) -> dict[str
         "UnderlyingSymbol": pick("underlyingSymbol"),
         "Type": pick("type", "transactionType", "description"),
         "DividendType": pick("type", "transactionType", "description"),
+        "Description": pick("description", "transactionType", "type"),
+        "TransactionType": pick("transactionType", "type", "description"),
+        "ActivityType": pick("activityType"),
+        "Code": pick("code"),
         "TransactionID": pick("transactionID", "transactionId"),
         "ReportDate": pick("reportDate", "dateTime", "date"),
         "Date/Time": pick("dateTime", "reportDate", "date"),
@@ -922,6 +1041,14 @@ def _normalize_ibkr_xml_row(attrs: dict[str, str], *, row_kind: str) -> dict[str
 
 def _xml_tag(element: ET.Element) -> str:
     return element.tag.rsplit("}", 1)[-1]
+
+
+def _is_ibkr_option_lifecycle_tag(tag: str) -> bool:
+    compact = _compact_ibkr_field_name(tag)
+    return "option" in compact and any(
+        token in compact
+        for token in ("exercise", "assignment", "expiration", "expire", "expiry")
+    )
 
 
 def _compact_ibkr_field_name(name: str) -> str:

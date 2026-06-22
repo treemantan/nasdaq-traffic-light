@@ -505,6 +505,52 @@ class ImportPortfolioStatementsTests(unittest.TestCase):
         self.assertIn("Yahoo option chain", option_legs[0]["source"])
         self.assertIn("position_delta", option_legs[0])
 
+    def test_ibkr_option_lifecycle_xml_rows_are_captured_for_diagnostics_only(self) -> None:
+        content = """<?xml version="1.0" encoding="UTF-8"?>
+<FlexQueryResponse>
+  <FlexStatements>
+    <FlexStatement accountId="U1" fromDate="20260724" toDate="20260724">
+      <OptionExercisesAssignmentsAndExpirations>
+        <OptionExpiration accountId="U1" symbol="NFLX 260724P00060000"
+          underlyingSymbol="NFLX" expiry="20260724" putCall="P" strike="60"
+          quantity="1" amount="0" currency="USD" fxRateToBase="0.75"
+          dateTime="20260724;235959" transactionID="exp-1"
+          description="Option expiration" />
+      </OptionExercisesAssignmentsAndExpirations>
+    </FlexStatement>
+  </FlexStatements>
+</FlexQueryResponse>
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "ibkr-activity.xml"
+            path.write_text(content, encoding="utf-8")
+
+            events = MODULE._extract_ibkr_option_lifecycle_events([path])
+
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["event_type"], "expiration")
+        self.assertEqual(events[0]["underlying"], "NFLX")
+        self.assertEqual(events[0]["expiry"], "2026-07-24")
+        self.assertEqual(events[0]["status"], "captured_not_booked")
+
+    def test_ibkr_option_lifecycle_csv_rows_are_captured_for_diagnostics_only(self) -> None:
+        content = (
+            "ClientAccountID,LevelOfDetail,AssetCategory,Symbol,UnderlyingSymbol,"
+            "TransactionType,TradeDate,Quantity,Amount,Currency,Expiry,PutCall,Strike\n"
+            "U1,DETAIL,OPT,VIX 260722C00017000,VIX,Option Assignment,"
+            "20260722,-1,0,USD,20260722,C,17\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "ibkr-activity.csv"
+            path.write_text(content, encoding="utf-8")
+
+            events = MODULE._extract_ibkr_option_lifecycle_events([path])
+
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["event_type"], "assignment")
+        self.assertEqual(events[0]["underlying"], "VIX")
+        self.assertEqual(events[0]["right"], "C")
+
     def test_ibkr_trade_confirm_xml_rows_are_supported(self) -> None:
         content = """<?xml version="1.0" encoding="UTF-8"?>
 <FlexQueryResponse>
