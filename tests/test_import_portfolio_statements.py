@@ -225,6 +225,61 @@ class ImportPortfolioStatementsTests(unittest.TestCase):
         self.assertAlmostEqual(net_cash_native, 22.0)
         self.assertAlmostEqual(net_cash_gbp, 16.41, places=2)
 
+    def test_closed_ibkr_option_cashflows_are_realized_only_when_contract_is_flat(self) -> None:
+        header = (
+            "ClientAccountID,AssetClass,Symbol,UnderlyingSymbol,TradeID,ExecID,TradeDate,Buy/Sell,"
+            "Quantity,TradePrice,NetCash,Commission,CurrencyPrimary,CommissionCurrency,FxRateToBase,"
+            "Multiplier,PutCall,Strike,Expiry,LevelOfDetail\n"
+        )
+        content = (
+            header
+            + "U1,OPT,NFLX 260724P00070000,NFLX,nflx-open-short,exec1,20260616,SELL,"
+            "1,1.50,150,-1,USD,USD,0.75,100,P,70,20260724,EXECUTION\n"
+            + "U1,OPT,NFLX 260724P00070000,NFLX,nflx-close-short,exec2,20260622,BUY,"
+            "1,0.50,-50,-1,USD,USD,0.75,100,P,70,20260724,EXECUTION\n"
+            + "U1,OPT,NFLX 260724P00060000,NFLX,nflx-open-long,exec3,20260616,BUY,"
+            "1,0.25,-25,-1,USD,USD,0.75,100,P,60,20260724,EXECUTION\n"
+            + "U1,OPT,NFLX 260724P00060000,NFLX,nflx-close-long,exec4,20260622,SELL,"
+            "1,0.10,10,-1,USD,USD,0.75,100,P,60,20260724,EXECUTION\n"
+            + "U1,OPT,DRAM 260724P00060500,DRAM,dram-open-short,exec5,20260622,SELL,"
+            "1,2.00,200,-1,USD,USD,0.75,100,P,60.5,20260724,EXECUTION\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "ibkr-options.csv"
+            path.write_text(content, encoding="utf-8")
+
+            option_legs = MODULE._extract_ibkr_option_legs([path])
+            summary = MODULE._closed_option_realized_summary(option_legs)
+
+        self.assertAlmostEqual(summary["realized_pnl_gbp"], 60.75)
+        self.assertEqual(len(summary["closed_options"]), 2)
+        self.assertEqual({item["underlying"] for item in summary["closed_options"]}, {"NFLX"})
+
+    def test_closed_option_realized_pnl_is_added_to_account_summary_fields(self) -> None:
+        rows = [
+            {
+                "symbol": "NVDA",
+                "account_realized_pnl_gbp": "100.0000",
+                "account_total_return_gbp": "250.0000",
+            },
+            {
+                "symbol": "MSFT",
+                "account_realized_pnl_gbp": "100.0000",
+                "account_total_return_gbp": "250.0000",
+            },
+        ]
+        summary = {
+            "realized_pnl_gbp": 16.5,
+            "closed_options": [{"underlying": "VIX", "realized_pnl_gbp": 16.5}],
+        }
+
+        MODULE._apply_closed_option_realized_pnl(rows, summary)
+
+        self.assertEqual(rows[0]["account_realized_pnl_gbp"], "116.5000")
+        self.assertEqual(rows[1]["account_realized_pnl_gbp"], "116.5000")
+        self.assertEqual(rows[0]["account_total_return_gbp"], "266.5000")
+        self.assertIn("closed_option_trades_json", rows[0])
+
     def test_ibkr_option_trades_are_extracted_as_option_legs_not_stock_positions(self) -> None:
         content = """<?xml version="1.0" encoding="UTF-8"?>
 <FlexQueryResponse>

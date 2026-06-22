@@ -70,6 +70,7 @@ def main() -> int:
     rows = _build_portfolio_rows(positions)
     if rows and option_legs:
         rows[0]["option_legs_json"] = json.dumps(option_legs, ensure_ascii=False, separators=(",", ":"))
+        _apply_closed_option_realized_pnl(rows, _closed_option_realized_summary(option_legs))
     ibkr_health = _ibkr_data_health(
         ibkr_paths,
         Path(args.ibkr_diagnostics) if args.ibkr_diagnostics else None,
@@ -336,6 +337,86 @@ def _extract_ibkr_option_legs(paths: list[Path]) -> list[dict[str, Any]]:
             float(item.get("strike") or 0),
         ),
     )
+
+
+def _closed_option_realized_summary(option_legs: list[dict[str, Any]]) -> dict[str, Any]:
+    by_contract: dict[tuple[str, str, str, float | None], list[dict[str, Any]]] = defaultdict(list)
+    for leg in option_legs:
+        key = _option_contract_key(
+            str(leg.get("underlying") or ""),
+            str(leg.get("expiry") or ""),
+            str(leg.get("right") or ""),
+            _safe_float(leg.get("strike")),
+        )
+        if not key[0] or not key[1] or not key[2]:
+            continue
+        by_contract[key].append(leg)
+
+    closed_options: list[dict[str, Any]] = []
+    realized_total_gbp = 0.0
+    for (underlying, expiry, right, strike), legs in by_contract.items():
+        trade_legs = [
+            leg
+            for leg in legs
+            if str(leg.get("side") or "").upper() in {"BUY", "SELL"}
+            and _safe_float(leg.get("net_cash_after_fee_gbp")) is not None
+        ]
+        if not trade_legs:
+            continue
+        open_positions = [
+            leg
+            for leg in legs
+            if str(leg.get("side") or "").upper() == "POSITION"
+            or str(leg.get("source") or "").lower().startswith("ibkr open position")
+        ]
+        if any(abs(_safe_float(leg.get("signed_contracts")) or 0.0) > 1e-6 for leg in open_positions):
+            continue
+        net_contracts = sum(_safe_float(leg.get("signed_contracts")) or 0.0 for leg in trade_legs)
+        if abs(net_contracts) > 1e-6:
+            continue
+        realized_gbp = sum(_safe_float(leg.get("net_cash_after_fee_gbp")) or 0.0 for leg in trade_legs)
+        realized_native = sum(_safe_float(leg.get("net_cash_after_fee_native")) or 0.0 for leg in trade_legs)
+        realized_total_gbp += realized_gbp
+        closed_options.append(
+            {
+                "underlying": underlying,
+                "expiry": expiry,
+                "right": right,
+                "strike": strike,
+                "legs": len(trade_legs),
+                "opened_at": min(str(leg.get("trade_date") or "") for leg in trade_legs),
+                "closed_at": max(str(leg.get("trade_date") or "") for leg in trade_legs),
+                "realized_pnl_gbp": realized_gbp,
+                "realized_pnl_native": realized_native,
+                "currency": str(trade_legs[0].get("currency") or ""),
+            }
+        )
+    return {
+        "realized_pnl_gbp": realized_total_gbp,
+        "closed_options": sorted(
+            closed_options,
+            key=lambda item: (str(item.get("closed_at") or ""), str(item.get("underlying") or "")),
+            reverse=True,
+        ),
+    }
+
+
+def _apply_closed_option_realized_pnl(rows: list[dict[str, str]], summary: dict[str, Any]) -> None:
+    realized_gbp = _safe_float(summary.get("realized_pnl_gbp")) or 0.0
+    closed_options = summary.get("closed_options")
+    if not rows or abs(realized_gbp) < 1e-9 or not isinstance(closed_options, list):
+        return
+    for row in rows:
+        account_realized = _safe_float(row.get("account_realized_pnl_gbp")) or 0.0
+        account_total = _safe_float(row.get("account_total_return_gbp")) or 0.0
+        row["account_realized_pnl_gbp"] = _fmt_import_number(account_realized + realized_gbp)
+        row["account_total_return_gbp"] = _fmt_import_number(account_total + realized_gbp)
+    rows[0]["closed_option_realized_pnl_gbp"] = _fmt_import_number(realized_gbp)
+    rows[0]["closed_option_trades_json"] = json.dumps(closed_options, ensure_ascii=False, separators=(",", ":"))
+
+
+def _fmt_import_number(value: float | None) -> str:
+    return "" if value is None else f"{value:.4f}"
 
 
 def _ibkr_is_position_row(row: dict[str, str]) -> bool:
