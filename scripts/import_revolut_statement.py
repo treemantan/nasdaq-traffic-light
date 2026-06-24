@@ -222,8 +222,23 @@ def _reconstruct_positions(paths: list[Path]) -> dict[str, dict[str, object]]:
             assert isinstance(closed, list)
             closed.extend(closed_trades)
         elif transaction_type == "STOCK SPLIT":
-            positions[ticker]["quantity"] = float(positions[ticker]["quantity"]) + quantity
+            _apply_stock_split(positions[ticker], quantity)
     return positions
+
+
+def _apply_stock_split(position: dict[str, object], added_quantity: float) -> None:
+    current_quantity = float(position["quantity"])
+    new_quantity = current_quantity + added_quantity
+    if current_quantity <= 1e-10 or new_quantity <= 0:
+        position["quantity"] = new_quantity
+        return
+
+    split_ratio = new_quantity / current_quantity
+    lots = position.get("lots")
+    if isinstance(lots, list):
+        for lot in lots:
+            lot["quantity"] = float(lot.get("quantity") or 0.0) * split_ratio
+    position["quantity"] = new_quantity
 
 
 def _buy_cash_cost(total_amount: object, gross_cost: float) -> float:

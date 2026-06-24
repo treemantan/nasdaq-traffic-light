@@ -173,6 +173,11 @@ def _reconstruct_ibkr_positions(paths: list[Path]) -> dict[str, dict[str, Any]]:
             continue
         if asset_category == "OPT":
             continue
+        if _ibkr_is_position_row(row):
+            # OpenPosition rows are snapshots, not cash-flow executions. Counting
+            # them here can double count holdings and dilute cost basis after a
+            # partial sale. Option MTM still uses POSITION rows separately.
+            continue
         symbol = str(row.get("Symbol") or row.get("UnderlyingSymbol") or "").strip().upper()
         if not symbol or symbol == "GBP":
             continue
@@ -184,9 +189,16 @@ def _reconstruct_ibkr_positions(paths: list[Path]) -> dict[str, dict[str, Any]]:
             cost = _ibkr_cash_amount(row, buy=True, fx_rates_to_base=fx_rates_to_base)
             positions[symbol]["quantity"] += quantity
             positions[symbol]["cost_gbp"] += cost
+            positions[symbol]["lots"].append(
+                {
+                    "quantity": quantity,
+                    "cost_gbp": cost,
+                    "opened_at": _format_ibkr_date(str(row.get("TradeDate") or row.get("Date/Time") or "")),
+                    "broker": "IBKR",
+                }
+            )
         elif activity == "SELL":
             current_quantity = positions[symbol]["quantity"]
-            average_cost = positions[symbol]["cost_gbp"] / current_quantity if current_quantity else 0.0
             matched_quantity = min(quantity, max(current_quantity, 0))
             proceeds = _ibkr_cash_amount(row, buy=False, fx_rates_to_base=fx_rates_to_base)
             matched_proceeds = proceeds * (matched_quantity / quantity) if quantity else 0.0
@@ -198,7 +210,15 @@ def _reconstruct_ibkr_positions(paths: list[Path]) -> dict[str, dict[str, Any]]:
                 or row.get("CurrencyPrimary")
                 or ""
             ).strip().upper()
-            positions[symbol]["realized_pnl_gbp"] += matched_proceeds - average_cost * matched_quantity
+            realized_pnl, consumed_cost, closed_trades = _consume_ibkr_lots_fifo(
+                symbol=symbol,
+                lots=positions[symbol].setdefault("lots", []),
+                quantity=matched_quantity,
+                net_proceeds_gbp=matched_proceeds,
+                closed_at=_format_ibkr_date(str(row.get("TradeDate") or row.get("Date/Time") or "")),
+            )
+            positions[symbol]["realized_pnl_gbp"] += realized_pnl
+            positions[symbol]["closed_trades"].extend(closed_trades)
             unmatched_proceeds = proceeds * (unmatched_quantity / quantity) if quantity else 0.0
             if currency in {"", "GBP"}:
                 positions[symbol]["unmatched_sell_proceeds_gbp"] += unmatched_proceeds
@@ -221,9 +241,75 @@ def _reconstruct_ibkr_positions(paths: list[Path]) -> dict[str, dict[str, Any]]:
                     }
                 )
             positions[symbol]["quantity"] -= matched_quantity
-            positions[symbol]["cost_gbp"] -= average_cost * matched_quantity
+            positions[symbol]["cost_gbp"] = max(positions[symbol]["cost_gbp"] - consumed_cost, 0.0)
     _add_ibkr_dividends(paths, positions)
     return dict(positions)
+
+
+def _consume_ibkr_lots_fifo(
+    *,
+    symbol: str,
+    lots: object,
+    quantity: float,
+    net_proceeds_gbp: float,
+    closed_at: str,
+) -> tuple[float, float, list[dict[str, Any]]]:
+    if not isinstance(lots, list) or quantity <= 0:
+        return 0.0, 0.0, []
+    remaining = quantity
+    realized_pnl = 0.0
+    consumed_cost = 0.0
+    closed_trades: list[dict[str, Any]] = []
+    while remaining > 1e-10 and lots:
+        lot = lots[0]
+        lot_quantity = float(lot.get("quantity") or 0.0)
+        lot_cost = float(lot.get("cost_gbp") or 0.0)
+        if lot_quantity <= 1e-10:
+            lots.pop(0)
+            continue
+        matched = min(remaining, lot_quantity)
+        lot_ratio = matched / lot_quantity
+        sale_ratio = matched / quantity if quantity else 0.0
+        cost_basis = lot_cost * lot_ratio
+        allocated_net = net_proceeds_gbp * sale_ratio
+        pnl = allocated_net - cost_basis
+        opened_at = str(lot.get("opened_at") or "")
+        holding_days = _holding_days(opened_at, closed_at)
+        closed_trades.append(
+            {
+                "symbol": symbol,
+                "opened_at": opened_at,
+                "closed_at": closed_at,
+                "holding_days": holding_days,
+                "quantity": round(matched, 8),
+                "cost_basis_gbp": round(cost_basis, 4),
+                "gross_proceeds_gbp": round(allocated_net, 4),
+                "net_proceeds_gbp": round(allocated_net, 4),
+                "implied_trading_cost_gbp": 0.0,
+                "realized_pnl_gbp": round(pnl, 4),
+                "broker": "IBKR",
+            }
+        )
+        realized_pnl += pnl
+        consumed_cost += cost_basis
+        remaining -= matched
+        remaining_quantity = lot_quantity - matched
+        remaining_cost = lot_cost - cost_basis
+        if remaining_quantity <= 1e-10:
+            lots.pop(0)
+        else:
+            lot["quantity"] = remaining_quantity
+            lot["cost_gbp"] = remaining_cost
+    return realized_pnl, consumed_cost, closed_trades
+
+
+def _holding_days(opened_at: str, closed_at: str) -> int | None:
+    try:
+        opened = datetime.fromisoformat(opened_at).date()
+        closed = datetime.fromisoformat(closed_at).date()
+    except ValueError:
+        return None
+    return max((closed - opened).days, 0)
 
 
 def _extract_ibkr_option_legs(paths: list[Path]) -> list[dict[str, Any]]:
