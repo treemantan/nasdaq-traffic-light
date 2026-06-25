@@ -1198,25 +1198,66 @@ def _render_closed_trade_group(symbol: str, trades: list) -> str:
     net_proceeds = sum(trade.net_proceeds_gbp for trade in trades)
     implied_cost = sum(trade.implied_trading_cost_gbp for trade in trades)
     realized_pnl = sum(trade.realized_pnl_gbp for trade in trades)
+    average_cost_pnl = _sum_optional(
+        getattr(trade, "average_cost_realized_pnl_gbp", None) for trade in trades
+    )
     opened_dates = [trade.opened_at for trade in trades if trade.opened_at]
     closed_dates = [trade.closed_at for trade in trades if trade.closed_at]
     window = f"{min(opened_dates) if opened_dates else 'N/A'} → {max(closed_dates) if closed_dates else 'N/A'}"
-    details = "".join(
-        f"<li>{escape(trade.opened_at or 'N/A')} → {escape(trade.closed_at or 'N/A')} · "
-        f"{escape(_fmt_holding_days(trade.holding_days))} · "
-        f"数量 {escape(_fmt_quantity(trade.quantity))} · 成本 {escape(_fmt_gbp(trade.cost_basis_gbp))} · "
-        f"净卖出 {escape(_fmt_gbp(trade.net_proceeds_gbp))} · "
-        f"<span class=\"{_pnl_class(trade.realized_pnl_gbp)}\">{escape(_fmt_signed_gbp(trade.realized_pnl_gbp))}</span></li>"
-        for trade in trades
-    )
+    details = _render_closed_trade_lot_details(trades)
     return f"""<tr>
       <td>{escape(symbol)}<br><span class="portfolio-scope">{len(trades)}个买入批次</span></td>
-      <td>{escape(window)}<br><details><summary class="portfolio-scope">查看批次明细</summary><ul class="portfolio-scope">{details}</ul></details></td>
+      <td>{escape(window)}<br><details><summary class="portfolio-scope">查看 FIFO 批次计算明细</summary>{details}</details></td>
       <td>{escape(_fmt_quantity(quantity))}</td>
       <td>{escape(_fmt_gbp(cost_basis))}</td>
       <td>{escape(_fmt_gbp(net_proceeds))}<br><span class="portfolio-scope">毛额 {escape(_fmt_gbp(gross_proceeds))} · 成本 {escape(_fmt_gbp(implied_cost))}</span></td>
-      <td class="{_pnl_class(realized_pnl)}">{escape(_fmt_signed_gbp(realized_pnl))}</td>
+      <td class="{_pnl_class(realized_pnl)}">{escape(_fmt_signed_gbp(realized_pnl))}<br><span class="portfolio-scope">均价口径 {escape(_fmt_signed_gbp(average_cost_pnl))}</span></td>
     </tr>"""
+
+
+def _render_closed_trade_lot_details(trades: list) -> str:
+    rows = "".join(
+        f"""<tr>
+          <td>{escape(trade.opened_at or 'N/A')}</td>
+          <td>{escape(trade.closed_at or 'N/A')}</td>
+          <td>{escape(_fmt_holding_days(trade.holding_days))}</td>
+          <td>{escape(_fmt_quantity(trade.quantity))}</td>
+          <td>{escape(_fmt_gbp(trade.cost_basis_gbp))}</td>
+          <td>{escape(_fmt_gbp(getattr(trade, "average_cost_basis_gbp", None)))}</td>
+          <td>{escape(_fmt_gbp(trade.gross_proceeds_gbp))}</td>
+          <td>{escape(_fmt_gbp(trade.implied_trading_cost_gbp))}</td>
+          <td>{escape(_fmt_gbp(trade.net_proceeds_gbp))}</td>
+          <td>{escape(_fmt_gbp(_safe_divide(trade.cost_basis_gbp, trade.quantity)))}</td>
+          <td>{escape(_fmt_gbp(getattr(trade, "average_cost_per_share_gbp", None)))}</td>
+          <td>{escape(_fmt_gbp(_safe_divide(trade.net_proceeds_gbp, trade.quantity)))}</td>
+          <td class="{_pnl_class(trade.realized_pnl_gbp)}">{escape(_fmt_signed_gbp(trade.realized_pnl_gbp))}</td>
+          <td class="{_pnl_class(getattr(trade, "average_cost_realized_pnl_gbp", None))}">{escape(_fmt_signed_gbp(getattr(trade, "average_cost_realized_pnl_gbp", None)))}</td>
+        </tr>"""
+        for trade in trades
+    )
+    return f"""<div class="portfolio-table-scroll">
+        <table class="portfolio-table">
+          <thead><tr><th>买入日期</th><th>卖出日期</th><th>持有期</th><th>匹配数量</th><th>FIFO成本</th><th>均价成本</th><th>卖出毛额</th><th>交易成本</th><th>卖出净额</th><th>FIFO成本/股</th><th>均价成本/股</th><th>净卖出/股</th><th>FIFO盈亏</th><th>均价盈亏</th></tr></thead>
+          <tbody>{rows}</tbody>
+        </table>
+      </div>"""
+
+
+def _safe_divide(numerator: float | None, denominator: float | None) -> float | None:
+    if numerator is None or denominator is None or abs(denominator) < 1e-12:
+        return None
+    return numerator / denominator
+
+
+def _sum_optional(values) -> float | None:
+    total = 0.0
+    found = False
+    for value in values:
+        if value is None:
+            continue
+        total += value
+        found = True
+    return total if found else None
 
 
 def _fmt_holding_days(value: int | None) -> str:

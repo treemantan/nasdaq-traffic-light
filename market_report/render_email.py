@@ -578,6 +578,9 @@ def _closed_trade_groups_email(trades) -> list[tuple[str, list]]:
 
 def _render_closed_trade_group_email(symbol: str, trades: list) -> str:
     realized_pnl = sum(trade.realized_pnl_gbp for trade in trades)
+    average_cost_pnl = _sum_optional_email(
+        getattr(trade, "average_cost_realized_pnl_gbp", None) for trade in trades
+    )
     quantity = sum(trade.quantity for trade in trades)
     cost_basis = sum(trade.cost_basis_gbp for trade in trades)
     net_proceeds = sum(trade.net_proceeds_gbp for trade in trades)
@@ -588,9 +591,21 @@ def _render_closed_trade_group_email(symbol: str, trades: list) -> str:
         f'<li style="margin-top:4px;color:{_pnl_color(realized_pnl)};">'
         f'{escape(symbol)} {escape(_fmt_signed_gbp(realized_pnl))} · {len(trades)}个买入批次 · '
         f'{escape(window)} · 数量 {escape(_fmt_quantity(quantity))} · '
-        f'净卖出 {escape(_fmt_gbp(net_proceeds))} / 成本 {escape(_fmt_gbp(cost_basis))}'
+        f'净卖出 {escape(_fmt_gbp(net_proceeds))} / FIFO成本 {escape(_fmt_gbp(cost_basis))} / '
+        f'均价口径 {escape(_fmt_signed_gbp(average_cost_pnl))}'
         '</li>'
     )
+
+
+def _sum_optional_email(values) -> float | None:
+    total = 0.0
+    found = False
+    for value in values:
+        if value is None:
+            continue
+        total += value
+        found = True
+    return total if found else None
 
 
 def _fmt_holding_days_email(value: int | None) -> str:

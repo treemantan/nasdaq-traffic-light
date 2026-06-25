@@ -183,6 +183,9 @@ def _reconstruct_positions(paths: list[Path]) -> dict[str, dict[str, object]]:
             unmatched_quantity = max(quantity - matched_quantity, 0)
             matched_ratio = matched_quantity / quantity if quantity else 0.0
             unmatched_ratio = unmatched_quantity / quantity if quantity else 0.0
+            current_cost = float(positions[ticker]["cost_gbp"])
+            average_cost_per_share = current_cost / current_quantity if current_quantity > 1e-10 else 0.0
+            average_cost_basis = average_cost_per_share * matched_quantity
             realized_pnl, consumed_cost, closed_trades = _consume_lots_fifo(
                 ticker=ticker,
                 lots=positions[ticker]["lots"],
@@ -191,6 +194,7 @@ def _reconstruct_positions(paths: list[Path]) -> dict[str, dict[str, object]]:
                 net_proceeds=net_proceeds * matched_ratio,
                 implied_cost=implied_cost * matched_ratio,
                 closed_at=trade_date,
+                average_cost_basis=average_cost_basis,
             )
             positions[ticker]["realized_pnl_gbp"] = float(positions[ticker]["realized_pnl_gbp"]) + realized_pnl
             positions[ticker]["unmatched_sell_proceeds_gbp"] = (
@@ -298,6 +302,7 @@ def _consume_lots_fifo(
     net_proceeds: float,
     implied_cost: float,
     closed_at: date | None,
+    average_cost_basis: float | None = None,
 ) -> tuple[float, float, list[dict[str, object]]]:
     if not isinstance(lots, list) or quantity <= 0:
         return 0.0, 0.0, []
@@ -319,6 +324,9 @@ def _consume_lots_fifo(
         allocated_gross = gross_proceeds * sale_ratio
         allocated_net = net_proceeds * sale_ratio
         allocated_implied_cost = implied_cost * sale_ratio
+        allocated_average_cost_basis = (average_cost_basis or 0.0) * sale_ratio
+        average_cost_per_share = allocated_average_cost_basis / matched if matched > 1e-10 else 0.0
+        average_cost_realized_pnl = allocated_net - allocated_average_cost_basis
         pnl = allocated_net - cost_basis
         opened_at = _parse_statement_date(lot.get("opened_at"))
         holding_days = (
@@ -338,6 +346,9 @@ def _consume_lots_fifo(
                 "net_proceeds_gbp": round(allocated_net, 4),
                 "implied_trading_cost_gbp": round(allocated_implied_cost, 4),
                 "realized_pnl_gbp": round(pnl, 4),
+                "average_cost_basis_gbp": round(allocated_average_cost_basis, 4),
+                "average_cost_per_share_gbp": round(average_cost_per_share, 4),
+                "average_cost_realized_pnl_gbp": round(average_cost_realized_pnl, 4),
             }
         )
         realized_pnl += pnl

@@ -131,6 +131,25 @@ class RevolutImportTests(unittest.TestCase):
         self.assertAlmostEqual(positions["NFLX"]["realized_pnl_gbp"], 40)
         self.assertEqual(len(positions["NFLX"]["closed_trades"]), 2)
 
+    def test_partial_sale_records_average_cost_comparison_for_audit(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            statement = Path(directory) / "statement.csv"
+            statement.write_text(
+                "Date,Ticker,Type,Quantity,Price per share,Total Amount,Currency,FX Rate\n"
+                "2026-01-01T00:00:00Z,NFLX,BUY - MARKET,1,GBP 100,GBP 100,GBP,1.0000\n"
+                "2026-02-01T00:00:00Z,NFLX,STOCK SPLIT,9,,USD 0,USD,1.0000\n"
+                "2026-03-01T00:00:00Z,NFLX,BUY - MARKET,10,GBP 20,GBP 200,GBP,1.0000\n"
+                "2026-04-01T00:00:00Z,NFLX,SELL - MARKET,12,GBP 15,GBP 180,GBP,1.0000\n",
+                encoding="utf-8",
+            )
+            positions = _reconstruct_positions([statement])
+
+        closed_trades = positions["NFLX"]["closed_trades"]
+        self.assertAlmostEqual(sum(item["realized_pnl_gbp"] for item in closed_trades), 40)
+        self.assertAlmostEqual(sum(item["average_cost_basis_gbp"] for item in closed_trades), 180)
+        self.assertAlmostEqual(sum(item["average_cost_realized_pnl_gbp"] for item in closed_trades), 0)
+        self.assertAlmostEqual(closed_trades[0]["average_cost_per_share_gbp"], 15)
+
     def test_implied_trading_costs_reduce_net_return_and_record_closed_trade(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             statement = Path(directory) / "statement.csv"
