@@ -26,6 +26,8 @@ class PortfolioClosedTradeRenderTests(unittest.TestCase):
         self.assertIn("3个买入批次", html)
         self.assertIn("+£602.62", html)
         self.assertEqual(html.count("2025-10-28"), 2)
+        self.assertIn("GBP 会计口径", html)
+        self.assertIn("FIFO成本/股GBP", html)
 
     def test_email_closed_trade_breakdown_groups_all_lots_by_symbol(self) -> None:
         trades = (

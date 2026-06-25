@@ -1235,9 +1235,10 @@ def _render_closed_trade_lot_details(trades: list) -> str:
         </tr>"""
         for trade in trades
     )
-    return f"""<div class="portfolio-table-scroll">
+    return f"""<div class="small-note">以下 FIFO/均价/卖出金额均为 GBP 会计口径，用于和组合总收益对账；对美股等非GBP资产，这不是原生成交币种价格。</div>
+      <div class="portfolio-table-scroll">
         <table class="portfolio-table">
-          <thead><tr><th>买入日期</th><th>卖出日期</th><th>持有期</th><th>匹配数量</th><th>FIFO成本</th><th>均价成本</th><th>卖出毛额</th><th>交易成本</th><th>卖出净额</th><th>FIFO成本/股</th><th>均价成本/股</th><th>净卖出/股</th><th>FIFO盈亏</th><th>均价盈亏</th></tr></thead>
+          <thead><tr><th>买入日期</th><th>卖出日期</th><th>持有期</th><th>匹配数量</th><th>FIFO成本GBP</th><th>均价成本GBP</th><th>卖出毛额GBP</th><th>交易成本GBP</th><th>卖出净额GBP</th><th>FIFO成本/股GBP</th><th>均价成本/股GBP</th><th>净卖出/股GBP</th><th>FIFO盈亏GBP</th><th>均价盈亏GBP</th></tr></thead>
           <tbody>{rows}</tbody>
         </table>
       </div>"""
