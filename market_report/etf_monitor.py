@@ -106,6 +106,7 @@ class PortfolioPosition:
     breakeven_price_gbp: float | None = None
     breakeven_price_native: float | None = None
     _closed_trades_json: str = ""
+    _closed_option_trades_json: str = ""
     _transaction_costs_json: str = ""
     _unmatched_sells_json: str = ""
     ibkr_data_status: str = ""
@@ -138,6 +139,20 @@ class PortfolioClosedTrade:
     average_cost_basis_gbp: float | None = None
     average_cost_per_share_gbp: float | None = None
     average_cost_realized_pnl_gbp: float | None = None
+
+
+@dataclass(frozen=True)
+class PortfolioClosedOptionTrade:
+    underlying: str
+    expiry: str
+    right: str
+    strike: float | None
+    opened_at: str
+    closed_at: str
+    legs: int
+    currency: str
+    realized_pnl_native: float | None
+    realized_pnl_gbp: float
 
 
 @dataclass(frozen=True)
@@ -188,6 +203,7 @@ class PortfolioPerformance:
     total_return_gbp: float = 0
     unmatched_sell_proceeds_gbp: float = 0
     closed_trades: tuple[PortfolioClosedTrade, ...] = ()
+    closed_option_trades: tuple[PortfolioClosedOptionTrade, ...] = ()
     transaction_costs: tuple[PortfolioTransactionCost, ...] = ()
     unmatched_sells: tuple[PortfolioUnmatchedSell, ...] = ()
 
@@ -2445,6 +2461,7 @@ def _load_portfolio_summary(
             breakeven_price_gbp=_safe_float(row.get("breakeven_price_gbp")),
             breakeven_price_native=_safe_float(row.get("breakeven_price_native")),
             _closed_trades_json=str(row.get("closed_trades_json") or ""),
+            _closed_option_trades_json=str(row.get("closed_option_trades_json") or ""),
             _transaction_costs_json=str(row.get("transaction_costs_json") or ""),
             _unmatched_sells_json=str(row.get("unmatched_sells_json") or ""),
             ibkr_data_status=str(row.get("ibkr_data_status") or ""),
@@ -2688,6 +2705,7 @@ def _portfolio_performance_summary(positions: list[PortfolioPosition]) -> Portfo
         return None
     first = positions[0]
     closed_trades = _parse_closed_trades_from_position_row(first)
+    closed_option_trades = _parse_closed_option_trades_from_position_row(first)
     transaction_costs = _parse_transaction_costs_from_position_row(first)
     unmatched_sells = _parse_unmatched_sells_from_position_row(first)
     return PortfolioPerformance(
@@ -2707,6 +2725,7 @@ def _portfolio_performance_summary(positions: list[PortfolioPosition]) -> Portfo
         else sum(item.total_return_gbp or 0 for item in positions),
         unmatched_sell_proceeds_gbp=first.unmatched_sell_proceeds_gbp or 0,
         closed_trades=closed_trades,
+        closed_option_trades=closed_option_trades,
         transaction_costs=transaction_costs,
         unmatched_sells=unmatched_sells,
     )
@@ -2747,6 +2766,48 @@ def _parse_closed_trades_from_position_row(position: PortfolioPosition) -> tuple
             )
         )
     return tuple(trades)
+
+
+def _parse_closed_option_trades_from_position_row(
+    position: PortfolioPosition,
+) -> tuple[PortfolioClosedOptionTrade, ...]:
+    raw = getattr(position, "_closed_option_trades_json", "")
+    if not raw:
+        return ()
+    try:
+        payload = json.loads(raw)
+    except (TypeError, ValueError):
+        return ()
+    if not isinstance(payload, list):
+        return ()
+    trades = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        underlying = str(item.get("underlying") or "").strip().upper()
+        if not underlying:
+            continue
+        trades.append(
+            PortfolioClosedOptionTrade(
+                underlying=underlying,
+                expiry=str(item.get("expiry") or ""),
+                right=str(item.get("right") or "").upper(),
+                strike=_safe_float(item.get("strike")),
+                opened_at=str(item.get("opened_at") or ""),
+                closed_at=str(item.get("closed_at") or ""),
+                legs=_safe_int(item.get("legs")) or 0,
+                currency=str(item.get("currency") or "").upper(),
+                realized_pnl_native=_safe_float(item.get("realized_pnl_native")),
+                realized_pnl_gbp=_safe_float(item.get("realized_pnl_gbp")) or 0.0,
+            )
+        )
+    return tuple(
+        sorted(
+            trades,
+            key=lambda item: (item.closed_at or "", item.underlying, item.expiry, item.right),
+            reverse=True,
+        )
+    )
 
 
 def _parse_transaction_costs_from_position_row(position: PortfolioPosition) -> tuple[PortfolioTransactionCost, ...]:

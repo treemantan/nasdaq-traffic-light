@@ -1121,6 +1121,7 @@ def _render_portfolio_performance(monitor: ETFMonitor) -> str:
         '<div class="small-note">Revolut 隐含交易成本按 Total Amount 与 股数×成交价 的差额估算，可能包含佣金、税费、FX/执行价差与四舍五入；总收益已使用实际现金流口径，避免把费用当作利润。</div>'
         f'{_render_unmatched_sell_breakdown(performance)}'
         f'{_render_closed_trade_breakdown(performance)}'
+        f'{_render_closed_option_trade_breakdown(performance)}'
         f'{_render_transaction_cost_breakdown(performance)}'
     )
 
@@ -1173,6 +1174,41 @@ def _render_closed_trade_breakdown(performance) -> str:
         </table>
       </div>
     </details>"""
+
+
+def _render_closed_option_trade_breakdown(performance) -> str:
+    if not getattr(performance, "closed_option_trades", None):
+        return ""
+    rows = "".join(
+        f"""<tr>
+          <td><strong>{escape(item.underlying)}</strong><br><span class="portfolio-scope">{escape(_closed_option_contract_label(item))}</span></td>
+          <td>{escape(item.expiry or 'N/A')}</td>
+          <td>{escape(item.opened_at or 'N/A')} → {escape(item.closed_at or 'N/A')}<br><span class="portfolio-scope">{escape(str(item.legs))} 条成交腿</span></td>
+          <td>{escape(_fmt_option_cash(item.realized_pnl_native or 0.0, item.currency))}</td>
+          <td class="{_pnl_class(item.realized_pnl_gbp)}">{escape(_fmt_signed_gbp(item.realized_pnl_gbp))}</td>
+        </tr>"""
+        for item in performance.closed_option_trades
+    )
+    total = sum(item.realized_pnl_gbp for item in performance.closed_option_trades)
+    return f"""<details class="portfolio-notes" open>
+      <summary>已平仓期权现金流归因（IBKR）</summary>
+      <div class="small-note">这里展示已完全对冲或清仓的期权合约现金流，金额来自 IBKR Flex 的成交 net cash 扣费后折算 GBP；该金额已经计入上方“已实现交易盈亏”。当前为合约级归因，不替代券商账单。</div>
+      <div class="portfolio-table-scroll">
+        <table class="portfolio-table">
+          <thead><tr><th>标的/合约</th><th>到期</th><th>清仓窗口</th><th>原币已实现</th><th>GBP已实现</th></tr></thead>
+          <tbody>{rows}</tbody>
+          <tfoot><tr><td colspan="4">已平仓期权合计</td><td class="{_pnl_class(total)}">{escape(_fmt_signed_gbp(total))}</td></tr></tfoot>
+        </table>
+      </div>
+    </details>"""
+
+
+def _closed_option_contract_label(item) -> str:
+    strike = _fmt_option_number(getattr(item, "strike", None))
+    right = getattr(item, "right", "") or ""
+    if right or strike != "N/A":
+        return f"{strike}{right}"
+    return "Option round-trip"
 
 
 def _closed_trade_groups(trades) -> list[tuple[str, list]]:
