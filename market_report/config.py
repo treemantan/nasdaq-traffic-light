@@ -22,12 +22,25 @@ class EmailConfig:
 
 
 @dataclass(frozen=True)
+class OptionsGammaConfig:
+    enabled: bool
+    benchmark_tickers: list[str]
+    tickers: list[str]
+    expirations_to_include: int
+    max_days_to_expiry: int
+    min_volume_threshold: int
+    min_open_interest_threshold: int
+    include_single_names: bool
+
+
+@dataclass(frozen=True)
 class AppConfig:
     report_title: str
     report_timezone: str
     output_dir: Path
     weights: dict[str, float]
     swing_watchlist: list[str]
+    options_gamma: OptionsGammaConfig
     email: EmailConfig
 
 
@@ -43,8 +56,13 @@ def load_config(path: str) -> AppConfig:
     raw = json.loads(config_path.read_text(encoding="utf-8"))
     report = raw.get("report", {})
     email = raw.get("email", {})
+    options_gamma = raw.get("options_gamma", {})
     weights = _normalize_weights(raw.get("weights", {}))
     swing_watchlist = _env_list("SWING_WATCHLIST") or _as_list(raw.get("swing_watchlist", []))
+    gamma_tickers = _env_list("OPTIONS_GAMMA_TICKERS") or _as_list(options_gamma.get("tickers", []))
+    gamma_benchmarks = _env_list("OPTIONS_GAMMA_BENCHMARKS") or _as_list(
+        options_gamma.get("benchmark_tickers", ["SPY", "QQQ"])
+    )
 
     recipients = _env_list("REPORT_RECIPIENTS") or _as_list(email.get("to", []))
     username = os.environ.get("SMTP_USERNAME", email.get("username", ""))
@@ -56,6 +74,16 @@ def load_config(path: str) -> AppConfig:
         output_dir=Path(report.get("output_dir", "output")),
         weights=weights,
         swing_watchlist=swing_watchlist,
+        options_gamma=OptionsGammaConfig(
+            enabled=_env_bool("OPTIONS_GAMMA_ENABLED", bool(options_gamma.get("enabled", True))),
+            benchmark_tickers=gamma_benchmarks,
+            tickers=gamma_tickers,
+            expirations_to_include=int(options_gamma.get("expirations_to_include", 3)),
+            max_days_to_expiry=int(options_gamma.get("max_days_to_expiry", 30)),
+            min_volume_threshold=int(options_gamma.get("min_volume_threshold", 100)),
+            min_open_interest_threshold=int(options_gamma.get("min_open_interest_threshold", 100)),
+            include_single_names=bool(options_gamma.get("include_single_names", True)),
+        ),
         email=EmailConfig(
             enabled=_env_bool("EMAIL_ENABLED", bool(email.get("enabled", False))),
             smtp_host=os.environ.get("SMTP_HOST", email.get("smtp_host", "smtp.gmail.com")),

@@ -8,6 +8,7 @@
 - Nasdaq 100、S&P 500、Russell 2000、VIX、VVIX、MOVE、DXY、黄金、油价、信用利差和美债监控
 - Iron Condor 环境过滤器，仅评估区间型卖波动环境，不提供交易指令
 - UK 可交易 ETF 的估值、趋势、拥挤度、流动性、相关性和 beta 面板
+- Options Gamma / Dealer Hedging 启发式监控，覆盖 SPY、QQQ、ETF 观察池和实际持仓
 - Revolut statement 组合导入、GBP 参考估值、AI/HBM 持仓穿透和回撤风险复核
 - Serenity 私人持仓周报：每周从红色预警、核心仓位、AI/半导体链和临近事件中筛选重点复核对象
 - MAG7 企业资本关系图谱，区分具名股权投资、附条件投资权利、战略合作与聚合披露
@@ -94,6 +95,12 @@ beta = ρ × (资产波动率 / 因子波动率)
 ```
 
 所以 `ρ=0.8`、Nasdaq beta `1.2` 的含义是：资产与 Nasdaq 同步性较高，同时自身波动率约为 Nasdaq 的 `1.5` 倍。相关性说明方向跟随程度，Beta 说明放大或缩小倍数；二者都是最近 60 日统计关系，不代表未来因果或交易信号。
+
+## 关于 Options Gamma
+
+Options Gamma / Dealer Hedging 模块使用免费期权链里的 open interest、成交量、bid/ask/last 和 Black-Scholes gamma 近似，估计“OI 隐含 gamma 暴露”和可能的 dealer hedging 压力。它默认覆盖 `SPY`、`QQQ`、ETF 观察池和实际持仓；英国 UCITS ETF 通常没有可用期权链，会显示为数据不足而不是强行估算。
+
+该模块只能作为启发式监控：成交靠近 ask 会被视为可能的买方发起，靠近 bid 会被视为可能的卖方发起；大额 OTM call/put 买入更偏负 gamma、可能放大方向波动；高 OI 行权价附近且缺少方向性流量时，更偏 pinning/磁吸观察。报告不会声称直接知道 dealer book。
 
 ## 关于 MAD
 

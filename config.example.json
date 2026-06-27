@@ -11,6 +11,16 @@
     "dxy": 0.2
   },
   "swing_watchlist": [],
+  "options_gamma": {
+    "enabled": true,
+    "benchmark_tickers": ["SPY", "QQQ"],
+    "tickers": [],
+    "expirations_to_include": 3,
+    "max_days_to_expiry": 30,
+    "min_volume_threshold": 100,
+    "min_open_interest_threshold": 100,
+    "include_single_names": true
+  },
   "email": {
     "enabled": false,
     "smtp_host": "smtp.gmail.com",

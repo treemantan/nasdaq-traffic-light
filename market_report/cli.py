@@ -14,6 +14,8 @@ from .etf_monitor import fetch_etf_monitor
 from .mag7_capital_network import build_mag7_capital_network
 from .memory import load_previous_regime, save_current_regime
 from .news_monitor import fetch_news_monitor
+from .options_gamma import OptionsGammaConfig as GammaRuntimeConfig
+from .options_gamma import build_options_gamma_monitor
 from .portfolio_events import build_portfolio_event_monitor
 from .render import render_html_report
 from .scoring import score_snapshot
@@ -50,6 +52,19 @@ def main() -> int:
         os.environ.get("TECHNICAL_TICKERS", ""),
         asset_classes=asset_classes,
     )
+    options_gamma = build_options_gamma_monitor(
+        GammaRuntimeConfig(
+            enabled=config.options_gamma.enabled,
+            benchmark_tickers=tuple(config.options_gamma.benchmark_tickers),
+            extra_tickers=tuple(config.options_gamma.tickers),
+            expirations_to_include=config.options_gamma.expirations_to_include,
+            max_days_to_expiry=config.options_gamma.max_days_to_expiry,
+            min_volume_threshold=config.options_gamma.min_volume_threshold,
+            min_open_interest_threshold=config.options_gamma.min_open_interest_threshold,
+            include_single_names=config.options_gamma.include_single_names,
+        ),
+        etf_monitor,
+    )
     previous_regime = load_previous_regime(config.output_dir)
     scored = score_snapshot(
         snapshot,
@@ -61,6 +76,7 @@ def main() -> int:
         mag7_capital_network=mag7_capital_network,
         portfolio_event_monitor=portfolio_event_monitor,
         technical_swing=technical_swing,
+        options_gamma=options_gamma,
     )
     scored = replace(scored, market_shock_backtest=analyze_market_shock_history(snapshot.metrics))
 

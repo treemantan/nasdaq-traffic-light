@@ -8,6 +8,7 @@ from .data_sources import MarketMetric
 from .etf_monitor import ETFAssetMonitor, ETFMonitor, PortfolioPosition
 from .mag7_capital_network import AggregateCapitalDisclosure, CapitalRelation, Mag7CapitalNetwork
 from .news_monitor import NewsEvent, NewsMonitor
+from .options_gamma import OptionGammaAssessment, OptionsGammaMonitor
 from .portfolio_events import PortfolioEventMonitor
 from .scoring import IronCondorAssessment, ScoreDriver, ScoredMetric, ScoredReport
 from .shock_backtest import MarketShockBacktest, MarketShockSample
@@ -39,6 +40,7 @@ def render_html_report(report: ScoredReport, title: str) -> str:
     mag7_capital_network = _render_mag7_capital_network(report.mag7_capital_network)
     etf_monitor = _render_etf_monitor(report.etf_monitor, report.news_monitor, report.portfolio_event_monitor)
     technical_swing = _render_technical_swing(report.technical_swing)
+    options_gamma = _render_options_gamma(report.options_gamma)
 
     return f"""<!doctype html>
 <html lang="zh-CN">
@@ -138,6 +140,17 @@ def render_html_report(report: ScoredReport, title: str) -> str:
     .swing-zone-details {{ margin-top: 8px; color: var(--subtle); font-size: 12px; }}
     .swing-zone-details summary {{ cursor: pointer; color: #bfdbfe; }}
     .swing-zone-details ul {{ margin: 6px 0 0 18px; padding: 0; }}
+    .gamma-panel {{ margin-bottom: 14px; }}
+    .gamma-grid {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 12px; }}
+    .gamma-card {{ border: 1px solid var(--line); border-radius: 8px; padding: 12px; background: rgba(255,255,255,.025); min-width: 0; }}
+    .gamma-card-head {{ display: flex; justify-content: space-between; gap: 10px; align-items: start; }}
+    .gamma-title {{ font-weight: 760; font-size: 16px; }}
+    .gamma-regime {{ color: #bfdbfe; font-weight: 700; text-align: right; }}
+    .gamma-values {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; margin-top: 10px; }}
+    .gamma-value {{ border-top: 1px solid var(--line); padding-top: 7px; color: var(--subtle); font-size: 12px; min-width: 0; }}
+    .gamma-value strong {{ display: block; color: var(--text); font-size: 13px; overflow-wrap: anywhere; }}
+    .gamma-note {{ color: var(--subtle); font-size: 12px; margin-top: 9px; }}
+    .gamma-warning {{ color: #fcd34d; font-size: 12px; margin-top: 7px; }}
     .etf-summary {{ color: var(--subtle); margin-bottom: 12px; }}
     .portfolio-panel {{ margin: 12px 0; border: 1px solid var(--line); border-radius: 8px; background: rgba(255,255,255,.02); overflow: hidden; }}
     .portfolio-head {{ display: grid; grid-template-columns: 1fr auto; gap: 14px; padding: 14px; background: rgba(255,255,255,.025); }}
@@ -235,7 +248,7 @@ def render_html_report(report: ScoredReport, title: str) -> str:
     .driver-meta {{ grid-column: 1 / -1; color: var(--muted); font-size: 12px; }}
     .footer {{ margin-top: 16px; color: var(--muted); font-size: 12px; display: flex; justify-content: space-between; gap: 12px; border-top: 1px solid var(--line); padding-top: 12px; }}
     @media (max-width: 980px) {{
-      .hero, .grid, .columns, .strategy-head, .strategy-lists, .swing-grid {{ grid-template-columns: 1fr; }}
+      .hero, .grid, .columns, .strategy-head, .strategy-lists, .swing-grid, .gamma-grid {{ grid-template-columns: 1fr; }}
       .datebox {{ text-align: left; }}
       .etf-group-head {{ display: block; }}
       .etf-group-stats {{ text-align: left; margin-top: 7px; }}
@@ -250,6 +263,7 @@ def render_html_report(report: ScoredReport, title: str) -> str:
       .topbar, .metric-grid {{ grid-template-columns: 1fr; }}
       .etf-card-grid, .etf-card-lines {{ grid-template-columns: 1fr; }}
       .swing-values {{ grid-template-columns: 1fr 1fr; }}
+      .gamma-values {{ grid-template-columns: 1fr 1fr; }}
       .score {{ font-size: 52px; }}
     }}
   </style>
@@ -300,6 +314,7 @@ def render_html_report(report: ScoredReport, title: str) -> str:
     {news_monitor}
     {mag7_capital_network}
     {technical_swing}
+    {options_gamma}
     {etf_monitor}
 
     <section class="grid">{groups}</section>
@@ -344,6 +359,68 @@ def render_html_report(report: ScoredReport, title: str) -> str:
   </main>
 </body>
 </html>"""
+
+
+def _render_options_gamma(monitor: OptionsGammaMonitor | None) -> str:
+    if monitor is None:
+        return ""
+    cards = "".join(_render_options_gamma_card(item) for item in monitor.assessments)
+    warnings = "".join(f"<li>{escape(item)}</li>" for item in monitor.warnings[:6])
+    warning_block = f"<ul>{warnings}</ul>" if warnings else ""
+    empty = '<div class="muted">当前没有可分析的 benchmark、covered ETF 或持仓期权链。</div>'
+    return f"""<section class="panel gamma-panel">
+      <h2>Options Gamma / Dealer Hedging</h2>
+      <div class="summary">{escape(monitor.summary)}</div>
+      <div class="gamma-grid">{cards or empty}</div>
+      {warning_block}
+      <div class="disclaimer">Dealer gamma estimates are inferred from option-chain data, open interest, and trade-location heuristics. They are not direct observations of dealer books.</div>
+    </section>"""
+
+
+def _render_options_gamma_card(item: OptionGammaAssessment) -> str:
+    warning_text = "；".join(item.warnings[:3])
+    warning_html = f'<div class="gamma-warning">{escape(warning_text)}</div>' if warning_text else ""
+    return f"""<article class="gamma-card">
+      <div class="gamma-card-head">
+        <div>
+          <div class="gamma-title">{escape(item.symbol)}</div>
+          <div class="muted">{escape(item.origin)} · {escape(item.data_status)}</div>
+        </div>
+        <div class="gamma-regime">{escape(item.regime_label)}</div>
+      </div>
+      <div class="gamma-values">
+        <div class="gamma-value"><span>Spot / expiry</span><strong>{_fmt_plain(item.spot_price)} / {escape(item.nearest_expiry)}</strong></div>
+        <div class="gamma-value"><span>Call wall</span><strong>{_fmt_gamma_level(item.call_wall)}</strong></div>
+        <div class="gamma-value"><span>Put wall</span><strong>{_fmt_gamma_level(item.put_wall)}</strong></div>
+        <div class="gamma-value"><span>近 spot 高OI</span><strong>{_fmt_gamma_level(item.near_spot_oi_strike)}</strong></div>
+        <div class="gamma-value"><span>最大Gamma strike</span><strong>{_fmt_gamma_level(item.largest_gamma_strike)}</strong></div>
+        <div class="gamma-value"><span>Pin观察</span><strong>{_fmt_gamma_level(item.pin_strike)}</strong></div>
+        <div class="gamma-value"><span>Call gamma</span><strong>{_fmt_gamma_exposure(item.gross_call_gamma)}</strong></div>
+        <div class="gamma-value"><span>Put gamma</span><strong>{_fmt_gamma_exposure(item.gross_put_gamma)}</strong></div>
+        <div class="gamma-value"><span>来源</span><strong>Yahoo option chain</strong></div>
+      </div>
+      <div class="gamma-note">{escape(item.notable_flow)}</div>
+      <div class="gamma-note">{escape(item.interpretation)}</div>
+      {warning_html}
+    </article>"""
+
+
+def _fmt_gamma_level(value: float | None) -> str:
+    if value is None:
+        return "N/A"
+    return f"{value:.2f}".rstrip("0").rstrip(".")
+
+
+def _fmt_gamma_exposure(value: float | None) -> str:
+    if value is None:
+        return "N/A"
+    if abs(value) >= 1_000_000_000:
+        return f"{value / 1_000_000_000:.2f}B"
+    if abs(value) >= 1_000_000:
+        return f"{value / 1_000_000:.2f}M"
+    if abs(value) >= 1_000:
+        return f"{value / 1_000:.2f}K"
+    return f"{value:.2f}"
 
 
 def _render_technical_swing(report: TechnicalSwingReport | None) -> str:
