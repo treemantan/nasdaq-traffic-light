@@ -6,6 +6,7 @@ from .data_sources import MarketMetric
 from .etf_monitor import ETFAssetMonitor, ETFMonitor, PortfolioPosition
 from .mag7_capital_network import Mag7CapitalNetwork
 from .news_monitor import NewsMonitor
+from .policy_risk_monitor import PolicyRiskFactor, PolicyRiskMonitor
 from .portfolio_events import PortfolioEventMonitor
 from .scoring import IronCondorAssessment, ScoreDriver, ScoredMetric, ScoredReport
 from .shock_backtest import MarketShockBacktest, MarketShockSample
@@ -29,6 +30,7 @@ def render_email_report(report: ScoredReport) -> str:
     score_drivers = _render_score_drivers(report.score_drivers)
     iron_condor = _render_iron_condor(report.iron_condor)
     market_shock_backtest = _render_market_shock_backtest(report.market_shock_backtest)
+    policy_risk_monitor = _render_policy_risk_monitor(report.policy_risk_monitor)
     news_monitor = _render_news_monitor(report.news_monitor)
     mag7_capital_network = _render_mag7_capital_network(report.mag7_capital_network)
     etf_monitor = _render_etf_monitor(report.etf_monitor, report.news_monitor, report.portfolio_event_monitor)
@@ -90,6 +92,7 @@ def render_email_report(report: ScoredReport) -> str:
           {score_drivers}
           {iron_condor}
           {market_shock_backtest}
+          {policy_risk_monitor}
           {news_monitor}
           {mag7_capital_network}
           {technical_swing}
@@ -358,6 +361,44 @@ def _render_assessment_items(items: list[str]) -> str:
     if not items:
         return "<li>暂无明显信号。</li>"
     return "".join(f"<li>{escape(item)}</li>" for item in items)
+
+
+def _render_policy_risk_monitor(monitor: PolicyRiskMonitor | None) -> str:
+    if monitor is None:
+        return ""
+    if monitor.status == "no_data" or not monitor.factors:
+        return f"""<tr>
+      <td style="padding:0 24px 18px;">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#151f2d;border:1px solid #263244;border-radius:8px;">
+          <tr><td style="padding:12px;font-size:17px;font-weight:700;color:#f3f4f6;">政策与地缘事件风险雷达</td></tr>
+          <tr><td style="padding:0 12px 12px;font-size:13px;color:#d1d5db;">{escape(monitor.summary)}</td></tr>
+        </table>
+      </td>
+    </tr>"""
+    rows = "".join(_render_policy_risk_factor(factor) for factor in monitor.factors[:4])
+    return f"""<tr>
+      <td style="padding:0 24px 18px;">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#151f2d;border:1px solid #263244;border-radius:8px;">
+          <tr><td style="padding:12px 12px 4px;font-size:17px;font-weight:700;color:#f3f4f6;">政策与地缘事件风险雷达 · {monitor.overall_score}/100 · {escape(monitor.label)}</td></tr>
+          <tr><td style="padding:0 12px 8px;font-size:13px;color:#d1d5db;">{escape(monitor.summary)}</td></tr>
+          {rows}
+          <tr><td style="padding:8px 12px;color:#9ca3af;font-size:12px;">该模块是基于新闻主题、来源和方向的规则化聚合，保留原始新闻卡片用于人工复核。</td></tr>
+        </table>
+      </td>
+    </tr>"""
+
+
+def _render_policy_risk_factor(factor: PolicyRiskFactor) -> str:
+    tickers = "、".join(factor.affected_tickers[:8]) if factor.affected_tickers else "未映射"
+    evidence = "; ".join(item.title for item in factor.evidence[:2]) if factor.evidence else "暂无证据摘要"
+    return f"""<tr>
+      <td style="padding:8px 12px;border-top:1px solid #263244;">
+        <div style="font-size:14px;font-weight:700;color:#f3f4f6;">{escape(factor.label)} · {factor.score}/100 · {escape(factor.direction)}</div>
+        <div style="font-size:12px;color:#9ca3af;margin-top:4px;">置信度 {escape(factor.confidence)} · 相关Ticker：{escape(tickers)}</div>
+        <div style="font-size:13px;color:#d1d5db;margin-top:5px;">{escape(factor.summary)}</div>
+        <div style="font-size:12px;color:#9ca3af;margin-top:4px;">证据：{escape(evidence)}</div>
+      </td>
+    </tr>"""
 
 
 def _render_news_monitor(monitor: NewsMonitor | None) -> str:

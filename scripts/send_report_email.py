@@ -334,6 +334,11 @@ def _report_from_payload(payload: dict):
         ScoredReport,
     )
     from market_report.news_monitor import NewsEvent, NewsMonitor
+    from market_report.policy_risk_monitor import (
+        PolicyRiskEvidence,
+        PolicyRiskFactor,
+        PolicyRiskMonitor,
+    )
     from market_report.mag7_capital_network import AggregateCapitalDisclosure, CapitalRelation, Mag7CapitalNetwork
     from market_report.portfolio_events import PortfolioEventMonitor, PortfolioEventObservation
 
@@ -418,6 +423,32 @@ def _report_from_payload(payload: dict):
                 "warnings": lambda raw: tuple(raw or ()),
             },
         )
+    policy_risk_monitor = None
+    if isinstance(payload.get("policy_risk_monitor"), dict):
+        policy_risk_monitor = _dataclass_from_dict(
+            PolicyRiskMonitor,
+            payload["policy_risk_monitor"],
+            converters={
+                "factors": lambda raw: tuple(
+                    _dataclass_from_dict(
+                        PolicyRiskFactor,
+                        item,
+                        converters={
+                            "affected_assets": lambda values: tuple(values or ()),
+                            "affected_tickers": lambda values: tuple(values or ()),
+                            "evidence": lambda values: tuple(
+                                _dataclass_from_dict(PolicyRiskEvidence, evidence)
+                                for evidence in (values or [])
+                                if isinstance(evidence, dict)
+                            ),
+                        },
+                    )
+                    for item in (raw or [])
+                    if isinstance(item, dict)
+                ),
+                "warnings": lambda raw: tuple(raw or ()),
+            },
+        )
     mag7_capital_network = None
     if isinstance(payload.get("mag7_capital_network"), dict):
         mag7_capital_network = _dataclass_from_dict(
@@ -480,6 +511,7 @@ def _report_from_payload(payload: dict):
                 if isinstance(item, dict)
             ],
             "etf_monitor": lambda _raw: etf_monitor,
+            "policy_risk_monitor": lambda _raw: policy_risk_monitor,
             "news_monitor": lambda _raw: news_monitor,
             "mag7_capital_network": lambda _raw: mag7_capital_network,
             "portfolio_event_monitor": lambda _raw: portfolio_event_monitor,

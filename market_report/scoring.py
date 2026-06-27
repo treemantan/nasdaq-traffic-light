@@ -9,6 +9,7 @@ from .etf_monitor import ETFMonitor
 from .mag7_capital_network import Mag7CapitalNetwork
 from .news_monitor import NewsMonitor
 from .options_gamma import OptionsGammaMonitor
+from .policy_risk_monitor import PolicyRiskMonitor
 from .portfolio_events import PortfolioEventMonitor
 from .shock_backtest import MarketShockBacktest
 from .technical_swing import TechnicalSwingReport
@@ -81,6 +82,7 @@ class ScoredReport:
     data_health: dict[str, int]
     technical_swing: TechnicalSwingReport | None = None
     options_gamma: OptionsGammaMonitor | None = None
+    policy_risk_monitor: PolicyRiskMonitor | None = None
     news_monitor: NewsMonitor | None = None
     mag7_capital_network: Mag7CapitalNetwork | None = None
     portfolio_event_monitor: PortfolioEventMonitor | None = None
@@ -101,6 +103,7 @@ def score_snapshot(
     portfolio_event_monitor: PortfolioEventMonitor | None = None,
     technical_swing: TechnicalSwingReport | None = None,
     options_gamma: OptionsGammaMonitor | None = None,
+    policy_risk_monitor: PolicyRiskMonitor | None = None,
 ) -> ScoredReport:
     scored_metrics = {key: _score_metric(key, metric, snapshot.metrics) for key, metric in snapshot.metrics.items()}
     adaptive_weights = _adaptive_weights(snapshot.metrics)
@@ -139,6 +142,7 @@ def score_snapshot(
             summary="暂无技术波段分析标的。",
         ),
         options_gamma=options_gamma,
+        policy_risk_monitor=policy_risk_monitor,
         news_monitor=news_monitor,
         mag7_capital_network=mag7_capital_network,
         portfolio_event_monitor=portfolio_event_monitor,

@@ -16,6 +16,7 @@ from .memory import load_previous_regime, save_current_regime
 from .news_monitor import fetch_news_monitor
 from .options_gamma import OptionsGammaConfig as GammaRuntimeConfig
 from .options_gamma import build_options_gamma_monitor
+from .policy_risk_monitor import build_policy_risk_monitor
 from .portfolio_events import build_portfolio_event_monitor
 from .render import render_html_report
 from .scoring import score_snapshot
@@ -34,6 +35,7 @@ def main() -> int:
     snapshot = fetch_market_snapshot()
     etf_monitor = fetch_etf_monitor(macro_metrics=snapshot.metrics)
     news_monitor = fetch_news_monitor()
+    policy_risk_monitor = build_policy_risk_monitor(news_monitor)
     mag7_capital_network = build_mag7_capital_network()
     portfolio_event_monitor = build_portfolio_event_monitor(etf_monitor.portfolio_positions)
     asset_classes = {
@@ -77,6 +79,7 @@ def main() -> int:
         portfolio_event_monitor=portfolio_event_monitor,
         technical_swing=technical_swing,
         options_gamma=options_gamma,
+        policy_risk_monitor=policy_risk_monitor,
     )
     scored = replace(scored, market_shock_backtest=analyze_market_shock_history(snapshot.metrics))
 

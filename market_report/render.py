@@ -9,6 +9,7 @@ from .etf_monitor import ETFAssetMonitor, ETFMonitor, PortfolioPosition
 from .mag7_capital_network import AggregateCapitalDisclosure, CapitalRelation, Mag7CapitalNetwork
 from .news_monitor import NewsEvent, NewsMonitor
 from .options_gamma import OptionGammaAssessment, OptionsGammaMonitor
+from .policy_risk_monitor import PolicyRiskFactor, PolicyRiskMonitor
 from .portfolio_events import PortfolioEventMonitor
 from .scoring import IronCondorAssessment, ScoreDriver, ScoredMetric, ScoredReport
 from .shock_backtest import MarketShockBacktest, MarketShockSample
@@ -36,6 +37,7 @@ def render_html_report(report: ScoredReport, title: str) -> str:
     health_notes = _render_health_notes(report)
     iron_condor = _render_iron_condor(report.iron_condor)
     market_shock_backtest = _render_market_shock_backtest(report.market_shock_backtest)
+    policy_risk_monitor = _render_policy_risk_monitor(report.policy_risk_monitor)
     news_monitor = _render_news_monitor(report.news_monitor)
     mag7_capital_network = _render_mag7_capital_network(report.mag7_capital_network)
     etf_monitor = _render_etf_monitor(report.etf_monitor, report.news_monitor, report.portfolio_event_monitor)
@@ -311,6 +313,7 @@ def render_html_report(report: ScoredReport, title: str) -> str:
 
     {iron_condor}
     {market_shock_backtest}
+    {policy_risk_monitor}
     {news_monitor}
     {mag7_capital_network}
     {technical_swing}
@@ -643,6 +646,54 @@ def _render_market_shock_sample(sample: MarketShockSample) -> str:
       <td>{_fmt_pct(sample.forward_20d)}</td>
       <td>{_fmt_pct(sample.drawdown_20d)}</td>
     </tr>"""
+
+
+def _render_policy_risk_monitor(monitor: PolicyRiskMonitor | None) -> str:
+    if monitor is None:
+        return ""
+    if monitor.status == "no_data" or not monitor.factors:
+        return f"""<section class="panel news-panel">
+  <div class="news-head">
+    <div>
+      <h2>政策与地缘事件风险雷达</h2>
+      <div class="summary">{escape(monitor.summary)}</div>
+    </div>
+    <span class="tag">{escape(monitor.label)}</span>
+  </div>
+  <div class="muted">当前没有足够新闻证据形成可解释的政策风险聚合判断。</div>
+</section>"""
+    factors = "\n".join(_render_policy_risk_factor(factor) for factor in monitor.factors[:5])
+    warnings = "".join(f"<li>{escape(item)}</li>" for item in monitor.warnings)
+    return f"""<section class="panel news-panel">
+  <div class="news-head">
+    <div>
+      <h2>政策与地缘事件风险雷达</h2>
+      <div class="summary">{escape(monitor.summary)}</div>
+    </div>
+    <span class="tag">{monitor.overall_score}/100 · {escape(monitor.label)}</span>
+  </div>
+  <div class="capital-grid">{factors}</div>
+  {f'<ul class="small-note">{warnings}</ul>' if warnings else ''}
+  <div class="disclaimer">本模块基于新闻标题、来源、主题和影响方向进行规则化聚合，用于把定性新闻转成可复核的政策风险线索；不代表对政策路径、领导人表态或资产价格的确定性预测。</div>
+</section>"""
+
+
+def _render_policy_risk_factor(factor: PolicyRiskFactor) -> str:
+    assets = "、".join(factor.affected_assets) if factor.affected_assets else "未映射"
+    tickers = "、".join(factor.affected_tickers[:8]) if factor.affected_tickers else "未映射"
+    evidence = "".join(
+        f'<li><a href="{escape(item.url)}" target="_blank" rel="noopener noreferrer">{escape(item.title)}</a> '
+        f'<span class="muted">({escape(item.source)} · {escape(item.published_at)} · {escape(item.direction)})</span></li>'
+        for item in factor.evidence[:3]
+    )
+    return f"""<article class="capital-item">
+  <div class="capital-line"><strong>{escape(factor.label)}</strong><span>{factor.score}/100</span></div>
+  <div class="news-meta">{escape(factor.direction)} · 置信度 {escape(factor.confidence)} · 证据 {factor.event_count} 条</div>
+  <p>{escape(factor.summary)}</p>
+  <div class="news-meta">影响资产：{escape(assets)}</div>
+  <div class="news-meta">相关Ticker：{escape(tickers)}</div>
+  <details class="news-meta"><summary>查看证据新闻</summary><ul>{evidence or '<li>暂无可展开证据。</li>'}</ul></details>
+</article>"""
 
 
 def _render_news_monitor(monitor: NewsMonitor | None) -> str:
