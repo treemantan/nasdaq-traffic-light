@@ -10,7 +10,7 @@
     "treasury_10y": 0.2,
     "dxy": 0.2
   },
-  "swing_watchlist": [],
+  "swing_watchlist": ["GOOGL", "NWG.L", "JPM", "TSLA"],
   "options_gamma": {
     "enabled": true,
     "benchmark_tickers": ["SPY", "QQQ"],

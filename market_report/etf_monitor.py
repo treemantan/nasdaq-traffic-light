@@ -391,6 +391,7 @@ class ETFMonitor:
 DEFAULT_ETF_SPECS = [
     ETFSpec("vwrl", "Vanguard FTSE All-World UCITS ETF", "VWRL.L", "Global Equity", "Vanguard", ter=0.22),
     ETFSpec("vuag", "Vanguard S&P 500 UCITS ETF", "VUAG.L", "S&P 500", "Vanguard", ter=0.07),
+    ETFSpec("gspx", "iShares Core S&P 500 UCITS ETF", "GSPX.L", "S&P 500", "iShares", ter=0.07),
     ETFSpec("isf", "iShares Core FTSE 100 UCITS ETF", "ISF.L", "UK Large Cap", "iShares", ter=0.07),
     ETFSpec("cnx1", "iShares Nasdaq 100 UCITS ETF", "CNX1.L", "Nasdaq 100", "iShares", ter=0.33),
     ETFSpec("iitu", "iShares S&P 500 Information Technology Sector ETF", "IITU.L", "US Technology", "iShares", ter=0.15),
