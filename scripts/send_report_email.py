@@ -542,6 +542,7 @@ def _report_from_payload(payload: dict):
             "portfolio_event_monitor": lambda _raw: portfolio_event_monitor,
             "market_shock_backtest": _market_shock_backtest_from_payload,
             "technical_swing": _technical_swing_from_payload,
+            "options_gamma": _options_gamma_from_payload,
         },
     )
 
@@ -550,6 +551,34 @@ def _technical_swing_from_payload(raw: object):
     from market_report.technical_swing import technical_swing_from_payload
 
     return technical_swing_from_payload(raw if isinstance(raw, dict) else {})
+
+
+def _options_gamma_from_payload(raw: object):
+    from market_report.options_gamma import OptionGammaAssessment, OptionsGammaMonitor
+
+    if not isinstance(raw, dict):
+        return None
+    normalized = dict(raw)
+    normalized.setdefault("generated_at", "")
+    normalized.setdefault("summary", "")
+    normalized.setdefault("assessments", [])
+    normalized.setdefault("warnings", [])
+    return _dataclass_from_dict(
+        OptionsGammaMonitor,
+        normalized,
+        converters={
+            "assessments": lambda items: [
+                _dataclass_from_dict(
+                    OptionGammaAssessment,
+                    item,
+                    converters={"warnings": lambda warnings: list(warnings or [])},
+                )
+                for item in (items or [])
+                if isinstance(item, dict)
+            ],
+            "warnings": lambda warnings: list(warnings or []),
+        },
+    )
 
 
 def _market_metric_from_payload(raw: dict):

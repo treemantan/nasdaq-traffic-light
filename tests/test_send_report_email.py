@@ -238,6 +238,44 @@ class SendReportEmailTests(unittest.TestCase):
             "technical-swing-report-2026-06-14.html",
         )
 
+    def test_options_gamma_payload_rehydrates_for_renderer(self) -> None:
+        module = _load_send_report_email_module()
+        from market_report.render import _render_options_gamma
+
+        monitor = module._options_gamma_from_payload(
+            {
+                "generated_at": "2026-05-27T21:14:30+01:00",
+                "summary": "Options gamma test summary.",
+                "assessments": [
+                    {
+                        "symbol": "QQQ",
+                        "origin": "benchmark",
+                        "spot_price": 530.25,
+                        "nearest_expiry": "2026-05-29",
+                        "regime_label": "Mixed / unclear",
+                        "data_status": "available",
+                        "call_wall": 540.0,
+                        "put_wall": 520.0,
+                        "near_spot_oi_strike": 530.0,
+                        "largest_gamma_strike": 535.0,
+                        "pin_strike": 530.0,
+                        "gross_call_gamma": 1250000.0,
+                        "gross_put_gamma": 980000.0,
+                        "notable_flow": "OTM call flow elevated.",
+                        "interpretation": "Dealer gamma estimate remains heuristic.",
+                        "warnings": ["Gamma data is inferred."],
+                    }
+                ],
+                "warnings": [],
+            }
+        )
+
+        self.assertEqual(monitor.assessments[0].symbol, "QQQ")
+        html = _render_options_gamma(monitor)
+        self.assertIn("Options Gamma / Dealer Hedging", html)
+        self.assertIn("QQQ", html)
+        self.assertIn("Mixed / unclear", html)
+
 
 if __name__ == "__main__":
     unittest.main()
