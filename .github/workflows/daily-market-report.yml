@@ -72,6 +72,15 @@ jobs:
                   env.write(f"SHOULD_RUN={'true' if should_run else 'false'}\n")
                   if target_date:
                       env.write(f"TARGET_UK_DATE={target_date}\n")
+              summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+              if summary_path:
+                  with open(summary_path, "a", encoding="utf-8") as summary:
+                      summary.write("### Email mode resolution\n\n")
+                      summary.write(f"- EMAIL_MODE: `{mode}`\n")
+                      summary.write(f"- SHOULD_RUN: `{'true' if should_run else 'false'}`\n")
+                      if target_date:
+                          summary.write(f"- TARGET_UK_DATE: `{target_date}`\n")
+                      summary.write(f"- Detail: `{notice}`\n")
               print(notice)
 
           valid_modes = {"none", "pulse", "volatility", "full", "serenity", "technical", "auto"}
@@ -138,7 +147,7 @@ jobs:
           emit(
               mode,
               True,
-              f"schedule={schedule}, target_uk={target_hhmm}, "
+              f"mode={mode}, schedule={schedule}, target_uk={target_hhmm}, "
               + f"expected_utc={target_utc:%H:%M}, "
               + f"delay_minutes={delay_minutes:.1f}, "
               + "run=True",
