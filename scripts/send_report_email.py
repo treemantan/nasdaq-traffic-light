@@ -339,6 +339,7 @@ def _report_from_payload(payload: dict):
         PolicyRiskFactor,
         PolicyRiskMonitor,
     )
+    from market_report.event_risk_ledger import EventRiskLedger, EventRiskLedgerEntry
     from market_report.mag7_capital_network import AggregateCapitalDisclosure, CapitalRelation, Mag7CapitalNetwork
     from market_report.portfolio_events import PortfolioEventMonitor, PortfolioEventObservation
 
@@ -449,6 +450,29 @@ def _report_from_payload(payload: dict):
                 "warnings": lambda raw: tuple(raw or ()),
             },
         )
+    event_risk_ledger = None
+    if isinstance(payload.get("event_risk_ledger"), dict):
+        event_risk_ledger = _dataclass_from_dict(
+            EventRiskLedger,
+            payload["event_risk_ledger"],
+            converters={
+                "entries": lambda raw: tuple(
+                    _dataclass_from_dict(
+                        EventRiskLedgerEntry,
+                        item,
+                        converters={
+                            "affected_assets": lambda values: tuple(values or ()),
+                            "affected_tickers": lambda values: tuple(values or ()),
+                            "portfolio_symbols": lambda values: tuple(values or ()),
+                            "source_urls": lambda values: tuple(values or ()),
+                        },
+                    )
+                    for item in (raw or [])
+                    if isinstance(item, dict)
+                ),
+                "warnings": lambda raw: tuple(raw or ()),
+            },
+        )
     mag7_capital_network = None
     if isinstance(payload.get("mag7_capital_network"), dict):
         mag7_capital_network = _dataclass_from_dict(
@@ -512,6 +536,7 @@ def _report_from_payload(payload: dict):
             ],
             "etf_monitor": lambda _raw: etf_monitor,
             "policy_risk_monitor": lambda _raw: policy_risk_monitor,
+            "event_risk_ledger": lambda _raw: event_risk_ledger,
             "news_monitor": lambda _raw: news_monitor,
             "mag7_capital_network": lambda _raw: mag7_capital_network,
             "portfolio_event_monitor": lambda _raw: portfolio_event_monitor,

@@ -4,6 +4,7 @@ from html import escape
 
 from .data_sources import MarketMetric
 from .etf_monitor import ETFAssetMonitor, ETFMonitor, PortfolioPosition
+from .event_risk_ledger import EventRiskLedger, EventRiskLedgerEntry
 from .mag7_capital_network import Mag7CapitalNetwork
 from .news_monitor import NewsMonitor
 from .policy_risk_monitor import PolicyRiskFactor, PolicyRiskMonitor
@@ -31,6 +32,7 @@ def render_email_report(report: ScoredReport) -> str:
     iron_condor = _render_iron_condor(report.iron_condor)
     market_shock_backtest = _render_market_shock_backtest(report.market_shock_backtest)
     policy_risk_monitor = _render_policy_risk_monitor(report.policy_risk_monitor)
+    event_risk_ledger = _render_event_risk_ledger(report.event_risk_ledger)
     news_monitor = _render_news_monitor(report.news_monitor)
     mag7_capital_network = _render_mag7_capital_network(report.mag7_capital_network)
     etf_monitor = _render_etf_monitor(report.etf_monitor, report.news_monitor, report.portfolio_event_monitor)
@@ -93,6 +95,7 @@ def render_email_report(report: ScoredReport) -> str:
           {iron_condor}
           {market_shock_backtest}
           {policy_risk_monitor}
+          {event_risk_ledger}
           {news_monitor}
           {mag7_capital_network}
           {technical_swing}
@@ -399,6 +402,46 @@ def _render_policy_risk_factor(factor: PolicyRiskFactor) -> str:
         <div style="font-size:12px;color:#9ca3af;margin-top:4px;">证据：{escape(evidence)}</div>
       </td>
     </tr>"""
+
+
+def _render_event_risk_ledger(ledger: EventRiskLedger | None) -> str:
+    if ledger is None:
+        return ""
+    if ledger.status == "no_data" or not ledger.entries:
+        return f"""<tr>
+      <td style="padding:0 24px 18px;">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#151f2d;border:1px solid #263244;border-radius:8px;">
+          <tr><td style="padding:12px;font-size:17px;font-weight:700;color:#f3f4f6;">事件风险追踪</td></tr>
+          <tr><td style="padding:0 12px 12px;font-size:13px;color:#d1d5db;">{escape(ledger.summary)}</td></tr>
+        </table>
+      </td>
+    </tr>"""
+    rows = "".join(_render_event_risk_entry(entry) for entry in ledger.entries[:5])
+    return f"""<tr>
+      <td style="padding:0 24px 18px;">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#151f2d;border:1px solid #263244;border-radius:8px;">
+          <tr><td style="padding:12px 12px 4px;font-size:17px;font-weight:700;color:#f3f4f6;">事件风险追踪 · {len(ledger.entries)}个事件簇</td></tr>
+          <tr><td style="padding:0 12px 10px;font-size:13px;color:#d1d5db;">{escape(ledger.summary)}</td></tr>
+          {rows}
+          <tr><td style="padding:8px 12px 12px;font-size:11px;color:#9ca3af;">事件风险追踪用于把新闻事件、政策风险因子和组合暴露映射到同一复核清单；不代表确定性预测。</td></tr>
+        </table>
+      </td>
+    </tr>"""
+
+
+def _render_event_risk_entry(entry: EventRiskLedgerEntry) -> str:
+    portfolio = (
+        f"{'、'.join(entry.portfolio_symbols[:8])} · 约{entry.portfolio_weight_pct:.1f}%"
+        if entry.portfolio_symbols
+        else "暂无直接持仓映射"
+    )
+    tickers = "、".join(entry.affected_tickers[:8]) if entry.affected_tickers else "未映射"
+    return f"""<tr><td style="padding:8px 12px;border-top:1px solid #263244;">
+  <div style="font-size:14px;font-weight:700;color:#f3f4f6;">{escape(entry.label)} · {entry.risk_score}/100</div>
+  <div style="font-size:12px;color:#9ca3af;margin-top:4px;">{escape(entry.direction)} · 置信度 {escape(entry.confidence)} · 证据 {entry.evidence_count}条</div>
+  <div style="font-size:12px;color:#d1d5db;margin-top:5px;">{escape(entry.synthesis)}</div>
+  <div style="font-size:12px;color:#9ca3af;margin-top:4px;">组合映射：{escape(portfolio)} · 相关Ticker：{escape(tickers)}</div>
+</td></tr>"""
 
 
 def _render_news_monitor(monitor: NewsMonitor | None) -> str:

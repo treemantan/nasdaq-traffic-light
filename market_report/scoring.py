@@ -5,6 +5,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime
 
 from .data_sources import MarketMetric, MarketSnapshot
+from .event_risk_ledger import EventRiskLedger
 from .etf_monitor import ETFMonitor
 from .mag7_capital_network import Mag7CapitalNetwork
 from .news_monitor import NewsMonitor
@@ -83,6 +84,7 @@ class ScoredReport:
     technical_swing: TechnicalSwingReport | None = None
     options_gamma: OptionsGammaMonitor | None = None
     policy_risk_monitor: PolicyRiskMonitor | None = None
+    event_risk_ledger: EventRiskLedger | None = None
     news_monitor: NewsMonitor | None = None
     mag7_capital_network: Mag7CapitalNetwork | None = None
     portfolio_event_monitor: PortfolioEventMonitor | None = None
@@ -104,6 +106,7 @@ def score_snapshot(
     technical_swing: TechnicalSwingReport | None = None,
     options_gamma: OptionsGammaMonitor | None = None,
     policy_risk_monitor: PolicyRiskMonitor | None = None,
+    event_risk_ledger: EventRiskLedger | None = None,
 ) -> ScoredReport:
     scored_metrics = {key: _score_metric(key, metric, snapshot.metrics) for key, metric in snapshot.metrics.items()}
     adaptive_weights = _adaptive_weights(snapshot.metrics)
@@ -143,6 +146,7 @@ def score_snapshot(
         ),
         options_gamma=options_gamma,
         policy_risk_monitor=policy_risk_monitor,
+        event_risk_ledger=event_risk_ledger,
         news_monitor=news_monitor,
         mag7_capital_network=mag7_capital_network,
         portfolio_event_monitor=portfolio_event_monitor,

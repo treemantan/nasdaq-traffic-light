@@ -5,6 +5,7 @@ from datetime import datetime
 from html import escape
 
 from .data_sources import MarketMetric
+from .event_risk_ledger import EventRiskLedger, EventRiskLedgerEntry
 from .etf_monitor import ETFAssetMonitor, ETFMonitor, PortfolioPosition
 from .mag7_capital_network import AggregateCapitalDisclosure, CapitalRelation, Mag7CapitalNetwork
 from .news_monitor import NewsEvent, NewsMonitor
@@ -38,6 +39,7 @@ def render_html_report(report: ScoredReport, title: str) -> str:
     iron_condor = _render_iron_condor(report.iron_condor)
     market_shock_backtest = _render_market_shock_backtest(report.market_shock_backtest)
     policy_risk_monitor = _render_policy_risk_monitor(report.policy_risk_monitor)
+    event_risk_ledger = _render_event_risk_ledger(report.event_risk_ledger)
     news_monitor = _render_news_monitor(report.news_monitor)
     mag7_capital_network = _render_mag7_capital_network(report.mag7_capital_network)
     etf_monitor = _render_etf_monitor(report.etf_monitor, report.news_monitor, report.portfolio_event_monitor)
@@ -314,6 +316,7 @@ def render_html_report(report: ScoredReport, title: str) -> str:
     {iron_condor}
     {market_shock_backtest}
     {policy_risk_monitor}
+    {event_risk_ledger}
     {news_monitor}
     {mag7_capital_network}
     {technical_swing}
@@ -693,6 +696,61 @@ def _render_policy_risk_factor(factor: PolicyRiskFactor) -> str:
   <div class="news-meta">影响资产：{escape(assets)}</div>
   <div class="news-meta">相关Ticker：{escape(tickers)}</div>
   <details class="news-meta"><summary>查看证据新闻</summary><ul>{evidence or '<li>暂无可展开证据。</li>'}</ul></details>
+</article>"""
+
+
+def _render_event_risk_ledger(ledger: EventRiskLedger | None) -> str:
+    if ledger is None:
+        return ""
+    if ledger.status == "no_data" or not ledger.entries:
+        return f"""<section class="panel news-panel">
+  <div class="news-head">
+    <div>
+      <h2>事件风险追踪</h2>
+      <div class="summary">{escape(ledger.summary)}</div>
+    </div>
+    <span class="tag">{escape(ledger.status)}</span>
+  </div>
+  <div class="muted">当前没有足够事件簇形成组合暴露映射。</div>
+</section>"""
+    entries = "\n".join(_render_event_risk_entry(entry) for entry in ledger.entries[:6])
+    warnings = "".join(f"<li>{escape(item)}</li>" for item in ledger.warnings[:4])
+    return f"""<section class="panel news-panel">
+  <div class="news-head">
+    <div>
+      <h2>事件风险追踪</h2>
+      <div class="summary">{escape(ledger.summary)}</div>
+    </div>
+    <span class="tag">{escape(ledger.status)} · {len(ledger.entries)}个事件簇</span>
+  </div>
+  <div class="capital-grid">{entries}</div>
+  {f'<ul class="small-note">{warnings}</ul>' if warnings else ''}
+  <div class="disclaimer">事件风险追踪基于新闻事件簇、规则化政策风险因子和当前持仓映射生成。它用于把定性事件转化为可复核的风险线索，不代表确定性预测；价格确认与因果验证仍需人工复核。</div>
+</section>"""
+
+
+def _render_event_risk_entry(entry: EventRiskLedgerEntry) -> str:
+    assets = "、".join(entry.affected_assets[:5]) if entry.affected_assets else "未映射"
+    tickers = "、".join(entry.affected_tickers[:8]) if entry.affected_tickers else "未映射"
+    portfolio = (
+        f"{'、'.join(entry.portfolio_symbols[:8])} · 约{entry.portfolio_weight_pct:.1f}%"
+        if entry.portfolio_symbols
+        else "暂无直接持仓映射"
+    )
+    links = "".join(
+        f'<li><a href="{escape(url)}" target="_blank" rel="noopener noreferrer">{escape(url)}</a></li>'
+        for url in entry.source_urls[:3]
+    )
+    latest = f" · 最新证据 {escape(entry.latest_published_at)}" if entry.latest_published_at else ""
+    return f"""<article class="capital-item">
+  <div class="capital-line"><strong>{escape(entry.label)}</strong><span>{entry.risk_score}/100</span></div>
+  <div class="news-meta">{escape(entry.direction)} · 置信度 {escape(entry.confidence)} · 证据 {entry.evidence_count}条{latest}</div>
+  <p>{escape(entry.synthesis)}</p>
+  <div class="news-meta">组合映射：{escape(portfolio)}</div>
+  <div class="news-meta">影响资产：{escape(assets)}</div>
+  <div class="news-meta">相关Ticker：{escape(tickers)}</div>
+  <div class="news-meta">市场确认：{escape(entry.market_confirmation)} · {escape(entry.validation_note)}</div>
+  <details class="news-meta"><summary>查看来源链接</summary><ul>{links or '<li>暂无可展开来源链接。</li>'}</ul></details>
 </article>"""
 
 

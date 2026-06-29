@@ -9,6 +9,7 @@ from pathlib import Path
 
 from .config import load_config
 from .data_sources import fetch_market_snapshot
+from .event_risk_ledger import build_event_risk_ledger
 from .emailer import send_report_email
 from .etf_monitor import fetch_etf_monitor
 from .mag7_capital_network import build_mag7_capital_network
@@ -38,6 +39,12 @@ def main() -> int:
     policy_risk_monitor = build_policy_risk_monitor(news_monitor)
     mag7_capital_network = build_mag7_capital_network()
     portfolio_event_monitor = build_portfolio_event_monitor(etf_monitor.portfolio_positions)
+    event_risk_ledger = build_event_risk_ledger(
+        policy_risk_monitor,
+        news_monitor,
+        etf_monitor.portfolio_positions,
+        snapshot.metrics,
+    )
     asset_classes = {
         asset.symbol.upper(): (
             "cash_like"
@@ -80,6 +87,7 @@ def main() -> int:
         technical_swing=technical_swing,
         options_gamma=options_gamma,
         policy_risk_monitor=policy_risk_monitor,
+        event_risk_ledger=event_risk_ledger,
     )
     scored = replace(scored, market_shock_backtest=analyze_market_shock_history(snapshot.metrics))
 
