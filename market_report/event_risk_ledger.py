@@ -26,6 +26,7 @@ class EventRiskLedgerEntry:
     validation_note: str
     synthesis: str
     source_urls: tuple[str, ...] = ()
+    lifecycle: str = "待跟踪"
 
 
 @dataclass(frozen=True)
@@ -112,6 +113,7 @@ def _entry_from_factor(
         validation_note=validation_note,
         synthesis=synthesis,
         source_urls=source_urls,
+        lifecycle=_lifecycle(factor.event_count),
     )
 
 
@@ -306,6 +308,14 @@ def _event_id(factor: PolicyRiskFactor) -> str:
         )
     )
     return sha1(seed.encode("utf-8")).hexdigest()[:12]
+
+
+def _lifecycle(evidence_count: int) -> str:
+    if evidence_count >= 2:
+        return "延续事件"
+    if evidence_count == 1:
+        return "新事件"
+    return "待跟踪"
 
 
 def _summary(

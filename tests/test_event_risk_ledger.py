@@ -146,6 +146,32 @@ class EventRiskLedgerTests(unittest.TestCase):
         self.assertIn("6.2", web_html)
         self.assertIn("6.2", email_html)
 
+    def test_event_ledger_exposes_lifecycle_for_merged_event_cluster(self) -> None:
+        news = _news_monitor(
+            (
+                _event(
+                    "Trump announces new semiconductor tariff and China export control review",
+                    themes=("trade", "semiconductor"),
+                    tickers=("NVDA",),
+                ),
+                _event(
+                    "White House weighs further AI chip export restrictions",
+                    themes=("trade", "AI", "semiconductor"),
+                    tickers=("NVDA", "AVGO"),
+                ),
+            )
+        )
+
+        ledger = build_event_risk_ledger(build_policy_risk_monitor(news), news, ())
+
+        self.assertGreaterEqual(len(ledger.entries), 1)
+        entry = ledger.entries[0]
+        self.assertTrue(entry.event_id)
+        self.assertEqual(entry.lifecycle, "延续事件")
+        self.assertEqual(entry.evidence_count, 2)
+        self.assertIn(entry.event_id, render_web_event_ledger(ledger))
+        self.assertIn("延续事件", render_email_event_ledger(ledger))
+
     def test_cloud_payload_reconstruction_preserves_event_risk_ledger(self) -> None:
         from market_report.scoring import IronCondorAssessment, RegimeAssessment, ScoredReport
 

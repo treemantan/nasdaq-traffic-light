@@ -744,7 +744,7 @@ def _render_event_risk_entry(entry: EventRiskLedgerEntry) -> str:
     latest = f" · 最新证据 {escape(entry.latest_published_at)}" if entry.latest_published_at else ""
     return f"""<article class="capital-item">
   <div class="capital-line"><strong>{escape(entry.label)}</strong><span>{entry.risk_score}/100</span></div>
-  <div class="news-meta">{escape(entry.direction)} · 置信度 {escape(entry.confidence)} · 证据 {entry.evidence_count}条{latest}</div>
+  <div class="news-meta">事件ID {escape(entry.event_id)} · {escape(entry.lifecycle)} · {escape(entry.direction)} · 置信度 {escape(entry.confidence)} · 证据 {entry.evidence_count}条{latest}</div>
   <p>{escape(entry.synthesis)}</p>
   <div class="news-meta">组合映射：{escape(portfolio)}</div>
   <div class="news-meta">影响资产：{escape(assets)}</div>

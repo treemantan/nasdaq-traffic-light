@@ -30,6 +30,7 @@ News/Event Data
 - 事件风险追踪可以聚合事件、权重、来源、组合暴露和市场验证。
 - 市场验证已开始使用权益、美元、利率、波动率、黄金、油价和信用等价格行为。
 - Full report 和 full email 已能展示事件风险追踪。
+- 事件风险追踪已具备稳定 `event_id` 和第一版生命周期标签：`新事件`、`延续事件`、`待跟踪`。
 
 仍缺的部分：
 
@@ -38,14 +39,14 @@ News/Event Data
 - 市场确认目前是 cross-asset heuristic，不是完整因果验证。
 - 组合暴露已经能映射 ticker 和权重，但行业、供应链、政策敏感度仍可深化。
 - Agent Synthesis 目前还没有正式作为一层独立研究流程落地。
-- 缺少事件记忆和事件生命周期：首次出现、升级、缓和、失效、被市场证伪。
+- 事件记忆仍是轻量版：已经能标记新事件/延续事件，但尚未完整追踪升级、缓和、失效和被市场证伪。
 
 ## 分层进度
 
 | 层级 | 目标 | 当前状态 | 下一步 |
 | --- | --- | --- | --- |
 | News/Event Data | 抓取新闻、政策、公司事件、地缘事件和重要讲话 | 已有新闻卡片、政策/地缘事件、Google News/GDELT/白宫等来源 | 增加事件去重、来源分级、事件时间线 |
-| Event Risk Tracking | 把新闻转成可追踪事件，而不是孤立 headline | 已有事件风险追踪模块 | 增加事件 ID、生命周期、重复事件合并 |
+| Event Risk Tracking | 把新闻转成可追踪事件，而不是孤立 headline | 已有事件风险追踪模块，已显示事件 ID 与生命周期 | 增强重复事件合并、热度变化和失效判定 |
 | Market Confirmation / Validation | 判断价格行为是否支持事件叙事 | 已接入初版 cross-asset validation | 增加历史同类事件对照、确认强度、证伪条件 |
 | Portfolio Exposure Mapping | 映射组合对事件的直接/间接暴露 | 已能结合持仓权重和部分主题暴露 | 增加行业、供应链、国家、政策敏感度映射 |
 | Agent Synthesis | 多角度综合判断，不依赖单一规则 | 尚未正式落地 | 先做 deterministic synthesis，再考虑 LLM/Agent |
@@ -56,6 +57,13 @@ News/Event Data
 ### 1. 事件生命周期与去重
 
 为每个事件生成稳定 `event_id`，按主题、来源、ticker、地区和时间窗口合并相似新闻。
+
+当前已落地：
+
+- 每个事件簇显示稳定 `event_id`，方便在网页、邮件和 JSON payload 中追踪。
+- 多条证据合并的事件簇标记为 `延续事件`。
+- 单条证据事件标记为 `新事件`。
+- 暂无证据的占位事件标记为 `待跟踪`。
 
 目标：
 
@@ -176,4 +184,3 @@ News/Event Data
 4. Agent Synthesis deterministic 版本。
 5. 历史同类事件对照。
 6. 再考虑 LLM synthesis 与更高级的 agent workflow。
-

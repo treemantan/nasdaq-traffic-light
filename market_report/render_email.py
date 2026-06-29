@@ -438,7 +438,7 @@ def _render_event_risk_entry(entry: EventRiskLedgerEntry) -> str:
     tickers = "、".join(entry.affected_tickers[:8]) if entry.affected_tickers else "未映射"
     return f"""<tr><td style="padding:8px 12px;border-top:1px solid #263244;">
   <div style="font-size:14px;font-weight:700;color:#f3f4f6;">{escape(entry.label)} · {entry.risk_score}/100</div>
-  <div style="font-size:12px;color:#9ca3af;margin-top:4px;">{escape(entry.direction)} · 置信度 {escape(entry.confidence)} · 证据 {entry.evidence_count}条</div>
+  <div style="font-size:12px;color:#9ca3af;margin-top:4px;">事件ID {escape(entry.event_id)} · {escape(entry.lifecycle)} · {escape(entry.direction)} · 置信度 {escape(entry.confidence)} · 证据 {entry.evidence_count}条</div>
   <div style="font-size:12px;color:#d1d5db;margin-top:5px;">{escape(entry.synthesis)}</div>
   <div style="font-size:12px;color:#9ca3af;margin-top:4px;">组合映射：{escape(portfolio)} · 相关Ticker：{escape(tickers)}</div>
 </td></tr>"""
