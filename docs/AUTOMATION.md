@@ -105,6 +105,24 @@ SMTP_SECURITY
 
 多个收件人使用英文逗号分隔。`PORTFOLIO_EMAIL_TO` 可选：当 full 报告包含实际持仓时，公开与私人收件人的邮件正文均为去持仓版本，私人收件人另获完整私人组合 HTML 附件。若同一邮箱同时出现在 `REPORT_EMAIL_TO` 和 `PORTFOLIO_EMAIL_TO`，会从公开收件人中去重，避免重复邮件。`serenity` 模式必须配置 `PORTFOLIO_EMAIL_TO`，并且只向该私人名单发送。
 
+## Alpha Vantage Options Gamma
+
+Options Gamma 默认优先使用 Alpha Vantage，再回退到 Yahoo/yfinance。GitHub Actions 需要在 repository secrets 中配置：
+
+```text
+ALPHA_VANTAGE_API_KEY
+```
+
+兼容旧变量名 `ALPHAVANTAGE_API_KEY`，但建议统一使用带下划线的名称。可选环境变量：
+
+```text
+OPTIONS_GAMMA_DATA_SOURCES=alpha_vantage,yahoo
+OPTIONS_GAMMA_ALPHA_MAX_REQUESTS=8
+OPTIONS_GAMMA_ALPHA_FETCH_SPOT=true
+```
+
+免费额度较低时，不建议把 Options Gamma 扫描范围扩大到全部 ETF。当前默认更适合 `SPY`、`QQQ` 和组合里权重较高的少数美股个股。
+
 ## OneDrive 本地 inbox
 
 手机导出的 Revolut CSV 可保存到 Windows OneDrive 同步目录：

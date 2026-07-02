@@ -6,6 +6,15 @@
 
 混合数据源是有意设计：实时市场价格、低频宏观数据、基金静态资料和新闻事件不应被强制塞进同一个接口。
 
+## Options Gamma / Dealer Hedging 数据源
+
+- 首选 Alpha Vantage `HISTORICAL_OPTIONS`，需要 `ALPHA_VANTAGE_API_KEY`，读取 option chain、open interest、volume、bid/ask/last 和 implied volatility。
+- 如果期权链里缺少 spot，且 `alpha_vantage_fetch_spot_quote=true`，会用 Alpha Vantage `GLOBAL_QUOTE` 补充标的价格。
+- Alpha Vantage 免费额度有限；默认 `alpha_vantage_max_requests=8`，主要用于 `SPY`、`QQQ` 和组合里权重较高的少数美股个股。
+- Alpha Vantage 不可用、超额、返回错误或没有可用合约时，自动 fallback 到 Yahoo/yfinance option chain。
+- UK/LSE UCITS ETF 通常没有可用期权链；系统保留覆盖说明，但不生成大量 N/A 卡片。
+- Dealer gamma 只是基于 OI、成交量、成交位置和 Black-Scholes gamma 的启发式估计，不是直接观察 dealer books。
+
 ## 韧性策略
 
 - 外部请求使用重试和合理超时

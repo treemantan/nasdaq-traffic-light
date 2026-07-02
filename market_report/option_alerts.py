@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 import json
+import re
 from typing import Any, Iterable
 
 
@@ -20,6 +21,9 @@ class OptionRiskAlert:
     summary: str
     details: tuple[str, ...]
     source: str
+
+
+_OCC_SYMBOL_RE = re.compile(r"^\s*([A-Z0-9.\-]+)\s*(\d{6})([CP])(\d{8})\s*$")
 
 
 def build_option_risk_alerts(
@@ -119,8 +123,8 @@ def _evaluate_snapshot_change(snapshot: dict[str, Any], previous: dict[str, Any]
     underlying = str(snapshot.get("underlying") or "")
     summary = f"{underlying} 期权{label}波动提醒：{'; '.join(item[2] for item in triggers)}"
     details = [
-        f"合约：{snapshot.get('symbol') or snapshot.get('key')}",
-        f"到期/行权：{snapshot.get('expiry') or 'N/A'} {snapshot.get('right') or ''}{_fmt_strike(snapshot.get('strike'))}",
+        f"合约：{_format_option_contract(snapshot)}",
+        f"方向/数量：{_format_option_position(snapshot)}",
         f"当前MTM：{_fmt_signed_gbp(snapshot.get('market_value_gbp'))}",
         f"数据源：{snapshot.get('source') or 'statement/market-data cache'}",
     ]
@@ -176,6 +180,63 @@ def _contract_key(leg: dict[str, Any]) -> str:
         return f"{underlying}|{expiry}|{right}|{strike}"
     symbol = str(leg.get("symbol") or "").strip().upper()
     return symbol
+
+
+def _format_option_contract(snapshot: dict[str, Any]) -> str:
+    raw_symbol = str(snapshot.get("symbol") or "").strip()
+    underlying = str(snapshot.get("underlying") or "").strip().upper()
+    expiry = str(snapshot.get("expiry") or "").strip()
+    right = str(snapshot.get("right") or "").strip().upper()
+    strike = _num(snapshot.get("strike"))
+
+    parsed = _parse_occ_symbol(raw_symbol)
+    if parsed is not None:
+        parsed_underlying, parsed_expiry, parsed_right, parsed_strike = parsed
+        underlying = underlying or parsed_underlying
+        expiry = expiry or parsed_expiry
+        right = right or parsed_right
+        strike = strike if strike is not None else parsed_strike
+
+    strike_text = _fmt_strike(strike)
+    right_label = _format_right(right)
+    if underlying and expiry and right_label and strike_text:
+        readable = f"{underlying} {expiry} {strike_text} {right_label}"
+    else:
+        readable = raw_symbol or str(snapshot.get("key") or "N/A")
+
+    if raw_symbol and raw_symbol.upper() != readable.upper():
+        return f"{readable}（原始代码：{raw_symbol}）"
+    return readable
+
+
+def _format_option_position(snapshot: dict[str, Any]) -> str:
+    contracts = _num(snapshot.get("signed_contracts"))
+    side = str(snapshot.get("side") or "").strip().upper()
+    if contracts is not None and abs(contracts) > 1e-12:
+        direction = "short" if contracts < 0 else "long"
+        return f"{direction} {abs(contracts):g} 张"
+    if side:
+        return side
+    return "N/A"
+
+
+def _parse_occ_symbol(symbol: str) -> tuple[str, str, str, float] | None:
+    match = _OCC_SYMBOL_RE.match(symbol.upper())
+    if not match:
+        return None
+    underlying, date_part, right, strike_part = match.groups()
+    expiry = f"20{date_part[:2]}-{date_part[2:4]}-{date_part[4:6]}"
+    strike = int(strike_part) / 1000.0
+    return underlying, expiry, right, strike
+
+
+def _format_right(right: str) -> str:
+    normalized = right.strip().upper()
+    if normalized == "P":
+        return "Put"
+    if normalized == "C":
+        return "Call"
+    return normalized
 
 
 def _within_cooldown(sent_at: object, now: datetime, cooldown_hours: float) -> bool:

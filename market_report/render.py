@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import fields
 from datetime import datetime
 from html import escape
 
@@ -367,20 +368,122 @@ def render_html_report(report: ScoredReport, title: str) -> str:
 </html>"""
 
 
-def _render_options_gamma(monitor: OptionsGammaMonitor | None) -> str:
+def _render_options_gamma(monitor: OptionsGammaMonitor | dict | None) -> str:
+    monitor = _coerce_options_gamma_monitor(monitor)
     if monitor is None:
         return ""
-    cards = "".join(_render_options_gamma_card(item) for item in monitor.assessments)
-    warnings = "".join(f"<li>{escape(item)}</li>" for item in monitor.warnings[:6])
-    warning_block = f"<ul>{warnings}</ul>" if warnings else ""
-    empty = '<div class="muted">当前没有可分析的 benchmark、covered ETF 或持仓期权链。</div>'
-    return f"""<section class="panel gamma-panel">
+    available = [item for item in monitor.assessments if item.data_status != "insufficient"]
+    unavailable = [item for item in monitor.assessments if item.data_status == "insufficient"]
+    warning_block = _render_options_gamma_unavailable(unavailable, monitor.warnings)
+    if not available:
+        return f"""<section class="panel gamma-panel gamma-panel-compact">
       <h2>Options Gamma / Dealer Hedging</h2>
       <div class="summary">{escape(monitor.summary)}</div>
-      <div class="gamma-grid">{cards or empty}</div>
+      <div class="data-note">当前没有可用的免费期权链可用于 Gamma 估算；数据不足、UK/LSE 标的无可用期权链，或 Yahoo endpoint 被拒绝时仅合并显示原因。</div>
       {warning_block}
       <div class="disclaimer">Dealer gamma estimates are inferred from option-chain data, open interest, and trade-location heuristics. They are not direct observations of dealer books.</div>
     </section>"""
+
+    cards = "".join(_render_options_gamma_card(item) for item in available)
+    return f"""<section class="panel gamma-panel">
+      <h2>Options Gamma / Dealer Hedging</h2>
+      <div class="summary">{escape(monitor.summary)}</div>
+      <div class="gamma-grid">{cards}</div>
+      {warning_block}
+      <div class="disclaimer">Dealer gamma estimates are inferred from option-chain data, open interest, and trade-location heuristics. They are not direct observations of dealer books.</div>
+    </section>"""
+
+
+def _coerce_options_gamma_monitor(monitor: OptionsGammaMonitor | dict | None) -> OptionsGammaMonitor | None:
+    if monitor is None or isinstance(monitor, OptionsGammaMonitor):
+        return monitor
+    if not isinstance(monitor, dict):
+        return None
+
+    assessment_fields = {field.name for field in fields(OptionGammaAssessment)}
+    assessments: list[OptionGammaAssessment] = []
+    for item in monitor.get("assessments", []) or []:
+        if isinstance(item, OptionGammaAssessment):
+            assessments.append(item)
+        elif isinstance(item, dict):
+            payload = {key: value for key, value in item.items() if key in assessment_fields}
+            payload.setdefault("warnings", [])
+            try:
+                assessments.append(OptionGammaAssessment(**payload))
+            except TypeError:
+                continue
+
+    warnings = monitor.get("warnings", []) or []
+    return OptionsGammaMonitor(
+        generated_at=str(monitor.get("generated_at", "")),
+        summary=str(monitor.get("summary", "")),
+        assessments=assessments,
+        warnings=list(warnings) if isinstance(warnings, list) else [str(warnings)],
+    )
+
+
+def _render_options_gamma_unavailable(
+    unavailable: list[OptionGammaAssessment],
+    monitor_warnings: list[str],
+) -> str:
+    if not unavailable and not monitor_warnings:
+        return ""
+
+    uk_symbols: list[str] = []
+    unauthorized_symbols: list[str] = []
+    other_items: list[str] = []
+    covered_symbols: set[str] = set()
+
+    for item in unavailable:
+        symbol = item.symbol
+        warning_text = " ".join(item.warnings)
+        covered_symbols.add(symbol)
+        if symbol.upper().endswith(".L"):
+            uk_symbols.append(symbol)
+        elif "401" in warning_text or "Unauthorized" in warning_text:
+            unauthorized_symbols.append(symbol)
+        else:
+            reason = warning_text or item.notable_flow or "期权链数据不足"
+            other_items.append(f"{symbol}: {reason}")
+
+    list_items: list[str] = []
+    if uk_symbols:
+        list_items.append(
+            "UK/LSE UCITS 标的通常没有 Yahoo 可用期权链，保留在覆盖范围内但不展开 Gamma 卡片："
+            f"{escape(_compact_symbol_list(uk_symbols))}"
+        )
+    if unauthorized_symbols:
+        list_items.append(
+            "Yahoo 免费期权链接口返回 401，暂不生成逐项 N/A 卡片："
+            f"{escape(_compact_symbol_list(unauthorized_symbols))}"
+        )
+    if other_items:
+        list_items.append("其他数据不足：" + escape("; ".join(other_items[:6])))
+
+    extra_warnings = []
+    for warning in monitor_warnings:
+        if any(f"{symbol}:" in warning for symbol in covered_symbols):
+            continue
+        if warning not in extra_warnings:
+            extra_warnings.append(warning)
+    if extra_warnings:
+        list_items.append("补充提示：" + escape("; ".join(extra_warnings[:3])))
+
+    if not list_items:
+        return ""
+
+    bullets = "".join(f"<li>{item}</li>" for item in list_items)
+    return f"""<div class="gamma-warning">
+      <strong>数据不足与跳过项：</strong>
+      <ul>{bullets}</ul>
+    </div>"""
+
+
+def _compact_symbol_list(symbols: list[str], limit: int = 12) -> str:
+    unique = list(dict.fromkeys(symbols))
+    if len(unique) <= limit:
+        return ", ".join(unique)
+    return ", ".join(unique[:limit]) + f" 等{len(unique)}个"
 
 
 def _render_options_gamma_card(item: OptionGammaAssessment) -> str:

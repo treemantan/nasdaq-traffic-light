@@ -26,6 +26,10 @@ class OptionsGammaConfig:
     enabled: bool
     benchmark_tickers: list[str]
     tickers: list[str]
+    data_source_priority: list[str]
+    alpha_vantage_api_key_env: str
+    alpha_vantage_max_requests: int
+    alpha_vantage_fetch_spot_quote: bool
     expirations_to_include: int
     max_days_to_expiry: int
     min_volume_threshold: int
@@ -63,6 +67,9 @@ def load_config(path: str) -> AppConfig:
     gamma_benchmarks = _env_list("OPTIONS_GAMMA_BENCHMARKS") or _as_list(
         options_gamma.get("benchmark_tickers", ["SPY", "QQQ"])
     )
+    gamma_sources = _env_list("OPTIONS_GAMMA_DATA_SOURCES") or _as_list(
+        options_gamma.get("data_source_priority", ["alpha_vantage", "yahoo"])
+    )
 
     recipients = _env_list("REPORT_RECIPIENTS") or _as_list(email.get("to", []))
     username = os.environ.get("SMTP_USERNAME", email.get("username", ""))
@@ -78,6 +85,20 @@ def load_config(path: str) -> AppConfig:
             enabled=_env_bool("OPTIONS_GAMMA_ENABLED", bool(options_gamma.get("enabled", True))),
             benchmark_tickers=gamma_benchmarks,
             tickers=gamma_tickers,
+            data_source_priority=gamma_sources,
+            alpha_vantage_api_key_env=str(
+                os.environ.get(
+                    "OPTIONS_GAMMA_ALPHA_KEY_ENV",
+                    options_gamma.get("alpha_vantage_api_key_env", "ALPHA_VANTAGE_API_KEY"),
+                )
+            ),
+            alpha_vantage_max_requests=int(
+                os.environ.get("OPTIONS_GAMMA_ALPHA_MAX_REQUESTS", options_gamma.get("alpha_vantage_max_requests", 8))
+            ),
+            alpha_vantage_fetch_spot_quote=_env_bool(
+                "OPTIONS_GAMMA_ALPHA_FETCH_SPOT",
+                bool(options_gamma.get("alpha_vantage_fetch_spot_quote", True)),
+            ),
             expirations_to_include=int(options_gamma.get("expirations_to_include", 3)),
             max_days_to_expiry=int(options_gamma.get("max_days_to_expiry", 30)),
             min_volume_threshold=int(options_gamma.get("min_volume_threshold", 100)),

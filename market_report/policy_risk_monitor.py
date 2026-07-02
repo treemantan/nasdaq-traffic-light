@@ -211,6 +211,8 @@ def build_policy_risk_monitor(news_monitor: NewsMonitor | None, now: datetime | 
     factors = tuple(sorted(factors, key=lambda item: item.score, reverse=True))
     top_scores = [factor.score for factor in factors[:3]]
     overall = _clamp(round(max(top_scores) * 0.6 + (sum(top_scores) / len(top_scores)) * 0.4), 0, 100)
+    if news_monitor.warnings and overall > 85:
+        overall = 85
     top_labels = "、".join(factor.label for factor in factors[:3])
     label = _overall_label(overall)
     summary = (
@@ -233,14 +235,15 @@ def _score_factor(definition: _FactorDefinition, events: tuple[NewsEvent, ...]) 
     if not matched:
         return None
 
-    raw_score = 0
+    event_scores = []
     risk_up = 0
     risk_down = 0
     high_confidence = 0
+    primary_sources = 0
     tickers: set[str] = set(definition.mapped_tickers)
     for event in matched:
         score = _event_score(event)
-        raw_score += score
+        event_scores.append(score)
         direction = _event_direction(event)
         if direction == "risk_up":
             risk_up += 1
@@ -248,9 +251,10 @@ def _score_factor(definition: _FactorDefinition, events: tuple[NewsEvent, ...]) 
             risk_down += 1
         if _is_high_confidence(event):
             high_confidence += 1
+        if _is_primary_source(event):
+            primary_sources += 1
         tickers.update(ticker.upper() for ticker in event.tickers)
 
-    score = _clamp(raw_score + min(len(tickers), 8) * 2, 0, 100)
     if risk_up and risk_down:
         direction = "mixed"
     elif risk_up:
@@ -260,6 +264,7 @@ def _score_factor(definition: _FactorDefinition, events: tuple[NewsEvent, ...]) 
     else:
         direction = "neutral"
     confidence = "high" if high_confidence and len(matched) >= 2 else "medium" if high_confidence or len(matched) >= 2 else "low"
+    score = _factor_score(event_scores, matched, tickers, confidence, primary_sources)
     summary = _factor_summary(definition.label, score, direction, len(matched))
     evidence = tuple(_to_evidence(event) for event in matched[:4])
     return PolicyRiskFactor(
@@ -304,6 +309,25 @@ def _event_score(event: NewsEvent) -> int:
     if _is_primary_source(event):
         base += 4
     return base
+
+
+def _factor_score(
+    event_scores: list[int],
+    matched: list[NewsEvent],
+    tickers: set[str],
+    confidence: str,
+    primary_sources: int,
+) -> int:
+    ordered = sorted(event_scores, reverse=True)
+    top_event = ordered[0]
+    additional_events = min(round(sum(ordered[1:]) * 0.35), 26)
+    evidence_breadth = min(len(matched), 6) * 3
+    ticker_breadth = min(len(tickers), 8)
+    raw_score = top_event + additional_events + evidence_breadth + ticker_breadth
+    cap = {"low": 55, "medium": 78, "high": 88}.get(confidence, 78)
+    if confidence == "high" and primary_sources >= 2 and len(matched) >= 3:
+        cap = 94
+    return _clamp(raw_score, 0, cap)
 
 
 def _event_direction(event: NewsEvent) -> str:

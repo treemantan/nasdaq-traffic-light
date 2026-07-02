@@ -101,6 +101,8 @@ beta = ρ × (资产波动率 / 因子波动率)
 
 Options Gamma / Dealer Hedging 模块使用免费期权链里的 open interest、成交量、bid/ask/last 和 Black-Scholes gamma 近似，估计“OI 隐含 gamma 暴露”和可能的 dealer hedging 压力。它默认覆盖 `SPY`、`QQQ`、ETF 观察池和实际持仓；英国 UCITS ETF 通常没有可用期权链，会显示为数据不足而不是强行估算。
 
+默认数据源顺序为 `Alpha Vantage -> Yahoo/yfinance`。如果配置了 `ALPHA_VANTAGE_API_KEY`，模块会优先使用 Alpha Vantage `HISTORICAL_OPTIONS` 获取期权链、OI、成交量、bid/ask/last 和 IV；如果 Alpha Vantage 超额、缺失或返回空合约，则自动回退到 Yahoo/yfinance。为控制免费额度，默认每次运行最多使用 8 次 Alpha Vantage 请求，更适合覆盖 `SPY`、`QQQ` 与组合里权重较高的少数美股个股。
+
 该模块只能作为启发式监控：成交靠近 ask 会被视为可能的买方发起，靠近 bid 会被视为可能的卖方发起；大额 OTM call/put 买入更偏负 gamma、可能放大方向波动；高 OI 行权价附近且缺少方向性流量时，更偏 pinning/磁吸观察。报告不会声称直接知道 dealer book。
 
 ## 关于 MAD

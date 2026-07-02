@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import time
 import urllib.parse
 import urllib.request
@@ -17,6 +18,10 @@ class OptionsGammaConfig:
     enabled: bool = True
     benchmark_tickers: tuple[str, ...] = ("SPY", "QQQ")
     extra_tickers: tuple[str, ...] = ()
+    data_source_priority: tuple[str, ...] = ("alpha_vantage", "yahoo")
+    alpha_vantage_api_key_env: str = "ALPHA_VANTAGE_API_KEY"
+    alpha_vantage_max_requests: int = 8
+    alpha_vantage_fetch_spot_quote: bool = True
     expirations_to_include: int = 3
     max_days_to_expiry: int = 30
     min_volume_threshold: int = 100
@@ -80,7 +85,7 @@ def build_options_gamma_monitor(
         return OptionsGammaMonitor(generated_at=generated_at, summary="Options gamma 模块未启用。")
 
     universe = _resolve_gamma_universe(config, etf_monitor)
-    fetch = fetcher or fetch_yahoo_option_chain
+    fetch = fetcher or _DefaultOptionChainFetcher(config).fetch
     assessments: list[OptionGammaAssessment] = []
     warnings: list[str] = []
 
@@ -119,6 +124,53 @@ def build_options_gamma_monitor(
         "本模块基于 OI、成交量位置与近月 gamma 估算，不代表真实 dealer book。"
     )
     return OptionsGammaMonitor(generated_at=generated_at, summary=summary, assessments=assessments, warnings=warnings)
+
+
+class _DefaultOptionChainFetcher:
+    def __init__(self, config: OptionsGammaConfig):
+        self.alpha_requests = 0
+        self.alpha_budget = max(0, int(config.alpha_vantage_max_requests))
+
+    def fetch(self, symbol: str, config: OptionsGammaConfig) -> tuple[float | None, list[OptionContract], list[str]]:
+        warnings: list[str] = []
+        errors: list[str] = []
+        sources = tuple(str(source).strip().lower() for source in config.data_source_priority if str(source).strip())
+
+        for source in sources:
+            if source in {"alpha", "alpha_vantage", "alphavantage"}:
+                if self.alpha_requests >= self.alpha_budget:
+                    warnings.append("Alpha Vantage request budget exhausted for this run; using fallback source.")
+                    continue
+                if not _alpha_vantage_api_key(config):
+                    warnings.append("Alpha Vantage API key is not configured; using fallback source.")
+                    continue
+                self.alpha_requests += 1
+                try:
+                    spot, contracts, source_warnings = fetch_alpha_vantage_option_chain(symbol, config)
+                    if not contracts:
+                        warnings.extend(source_warnings)
+                        warnings.append("Alpha Vantage returned no usable option contracts; trying fallback source.")
+                        continue
+                    return spot, contracts, warnings + source_warnings
+                except Exception as exc:
+                    warnings.append(f"Alpha Vantage option-chain fetch failed: {exc}")
+                    errors.append(str(exc))
+                    continue
+
+            if source in {"yahoo", "yfinance"}:
+                try:
+                    spot, contracts, source_warnings = fetch_yahoo_option_chain(symbol, config)
+                    return spot, contracts, warnings + source_warnings
+                except Exception as exc:
+                    warnings.append(f"Yahoo option-chain fetch failed: {exc}")
+                    errors.append(str(exc))
+                    continue
+
+            warnings.append(f"Unknown options gamma data source '{source}' skipped.")
+
+        if errors:
+            raise RuntimeError("; ".join(errors))
+        raise RuntimeError("No usable options gamma data source is configured.")
 
 
 def assess_gamma_for_contracts(
@@ -216,6 +268,70 @@ def classify_trade_location(last_price: float | None, bid: float | None, ask: fl
     return "mid"
 
 
+def fetch_alpha_vantage_option_chain(
+    symbol: str,
+    config: OptionsGammaConfig,
+) -> tuple[float | None, list[OptionContract], list[str]]:
+    api_key = _alpha_vantage_api_key(config)
+    if not api_key:
+        raise RuntimeError(f"{config.alpha_vantage_api_key_env} is not configured")
+
+    query = urllib.parse.urlencode(
+        {
+            "function": "HISTORICAL_OPTIONS",
+            "symbol": symbol,
+            "apikey": api_key,
+        }
+    )
+    payload = _read_json(f"https://www.alphavantage.co/query?{query}")
+    _raise_alpha_vantage_error(payload)
+
+    rows = payload.get("data") or payload.get("options") or []
+    if isinstance(rows, dict):
+        rows = list(rows.values())
+    if not isinstance(rows, list):
+        rows = []
+
+    spot = _alpha_spot_from_rows(rows)
+    if spot is None and config.alpha_vantage_fetch_spot_quote:
+        spot = fetch_alpha_vantage_spot_quote(symbol, config)
+
+    contracts = [
+        contract
+        for row in rows
+        if isinstance(row, dict)
+        for contract in [_contract_from_alpha_vantage(symbol, row)]
+        if contract is not None
+    ]
+    contracts = _limit_contract_expirations(contracts, config)
+    warnings = ["Alpha Vantage HISTORICAL_OPTIONS used; option OI/volume can be delayed."]
+    if not contracts:
+        warnings.append("Alpha Vantage returned no usable option contracts.")
+    return spot, contracts, warnings
+
+
+def fetch_alpha_vantage_spot_quote(symbol: str, config: OptionsGammaConfig) -> float | None:
+    api_key = _alpha_vantage_api_key(config)
+    if not api_key:
+        return None
+    query = urllib.parse.urlencode(
+        {
+            "function": "GLOBAL_QUOTE",
+            "symbol": symbol,
+            "apikey": api_key,
+        }
+    )
+    payload = _read_json(f"https://www.alphavantage.co/query?{query}")
+    _raise_alpha_vantage_error(payload)
+    quote = payload.get("Global Quote") or payload.get("globalQuote") or {}
+    return _to_float(
+        quote.get("05. price")
+        or quote.get("price")
+        or quote.get("regularMarketPrice")
+        or quote.get("previousClose")
+    )
+
+
 def fetch_yahoo_option_chain(symbol: str, config: OptionsGammaConfig) -> tuple[float | None, list[OptionContract], list[str]]:
     encoded = urllib.parse.quote(symbol, safe="")
     base_url = f"https://query2.finance.yahoo.com/v7/finance/options/{encoded}"
@@ -274,14 +390,14 @@ def _contract_from_yahoo(symbol: str, option_type: str, expiry: date, raw: dict[
     return OptionContract(
         ticker=symbol,
         option_type=option_type,
-        strike=float(raw.get("strike") or 0),
+        strike=_to_float(raw.get("strike")) or 0.0,
         expiry=expiry,
-        open_interest=int(raw.get("openInterest") or 0),
-        volume=int(raw.get("volume") or 0),
+        open_interest=_to_int(raw.get("openInterest")) or 0,
+        volume=_to_int(raw.get("volume")) or 0,
         bid=_to_float(raw.get("bid")),
         ask=_to_float(raw.get("ask")),
         last_price=_to_float(raw.get("lastPrice")),
-        implied_volatility=_to_float(raw.get("impliedVolatility")),
+        implied_volatility=_normalize_iv(raw.get("impliedVolatility")),
         contract_symbol=str(raw.get("contractSymbol") or ""),
     )
 
@@ -310,6 +426,157 @@ def _first_result(payload: dict[str, Any]) -> dict[str, Any]:
     if not result:
         raise ValueError("Yahoo optionChain result is empty")
     return result[0]
+
+
+def _alpha_vantage_api_key(config: OptionsGammaConfig) -> str | None:
+    preferred = str(config.alpha_vantage_api_key_env or "ALPHA_VANTAGE_API_KEY").strip()
+    candidates = [preferred, "ALPHA_VANTAGE_API_KEY", "ALPHAVANTAGE_API_KEY"]
+    for name in dict.fromkeys(candidates):
+        value = os.environ.get(name)
+        if value:
+            return value.strip()
+    return None
+
+
+def _raise_alpha_vantage_error(payload: dict[str, Any]) -> None:
+    for key in ("Error Message", "Note", "Information"):
+        message = payload.get(key)
+        if message:
+            raise RuntimeError(str(message))
+
+
+def _alpha_spot_from_rows(rows: list[Any]) -> float | None:
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        value = _first_present(
+            row,
+            (
+                "underlying_price",
+                "underlyingPrice",
+                "underlying",
+                "spot",
+                "spotPrice",
+                "last_underlying_price",
+            ),
+        )
+        parsed = _to_float(value)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _contract_from_alpha_vantage(symbol: str, raw: dict[str, Any]) -> OptionContract | None:
+    contract_symbol = str(_first_present(raw, ("contractID", "contractSymbol", "optionSymbol", "symbol")) or "")
+    option_type = _normalize_option_type(
+        _first_present(raw, ("type", "option_type", "optionType", "put_call", "putCall", "side"))
+    ) or _infer_option_type_from_symbol(contract_symbol)
+    expiry = _parse_date(
+        _first_present(raw, ("expiration", "expiry", "expirationDate", "expiration_date", "maturity"))
+    )
+    strike = _to_float(_first_present(raw, ("strike", "strikePrice", "strike_price")))
+
+    if option_type is None or expiry is None or strike is None:
+        return None
+
+    return OptionContract(
+        ticker=symbol,
+        option_type=option_type,
+        strike=strike,
+        expiry=expiry,
+        open_interest=_to_int(_first_present(raw, ("open_interest", "openInterest", "open interest"))) or 0,
+        volume=_to_int(_first_present(raw, ("volume", "vol"))) or 0,
+        bid=_to_float(_first_present(raw, ("bid", "bidPrice"))),
+        ask=_to_float(_first_present(raw, ("ask", "askPrice"))),
+        last_price=_to_float(_first_present(raw, ("last", "lastPrice", "last_price", "mark", "mid"))),
+        implied_volatility=_normalize_iv(
+            _first_present(raw, ("implied_volatility", "impliedVolatility", "iv", "IV"))
+        ),
+        contract_symbol=contract_symbol,
+    )
+
+
+def _limit_contract_expirations(contracts: list[OptionContract], config: OptionsGammaConfig) -> list[OptionContract]:
+    if not contracts:
+        return []
+    today = datetime.now(timezone.utc).date()
+    cutoff = today + timedelta(days=max(0, int(config.max_days_to_expiry)))
+    future = [contract for contract in contracts if contract.expiry >= today]
+    within_window = [contract for contract in future if contract.expiry <= cutoff]
+    scoped = within_window or future or contracts
+    expiries = sorted({contract.expiry for contract in scoped})[: max(1, int(config.expirations_to_include))]
+    expiry_set = set(expiries)
+    return [contract for contract in scoped if contract.expiry in expiry_set]
+
+
+def _first_present(raw: dict[str, Any], names: tuple[str, ...]) -> object:
+    lower_lookup = {str(key).lower(): value for key, value in raw.items()}
+    for name in names:
+        if name in raw and raw[name] not in (None, ""):
+            return raw[name]
+        value = lower_lookup.get(name.lower())
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def _parse_date(value: object) -> date | None:
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value
+    if isinstance(value, datetime):
+        return value.date()
+    if value in (None, ""):
+        return None
+    text = str(value).strip()
+    for fmt in ("%Y-%m-%d", "%Y%m%d", "%m/%d/%Y", "%d %b %Y"):
+        try:
+            return datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).date()
+    except ValueError:
+        return None
+
+
+def _normalize_option_type(value: object) -> str | None:
+    text = str(value or "").strip().lower()
+    if text in {"c", "call", "calls"}:
+        return "call"
+    if text in {"p", "put", "puts"}:
+        return "put"
+    return None
+
+
+def _infer_option_type_from_symbol(contract_symbol: str) -> str | None:
+    text = contract_symbol.upper()
+    if len(text) >= 9:
+        tail = text[-9:]
+        if tail[0] == "C":
+            return "call"
+        if tail[0] == "P":
+            return "put"
+    if "CALL" in text:
+        return "call"
+    if "PUT" in text:
+        return "put"
+    return None
+
+
+def _to_int(value: object) -> int | None:
+    parsed = _to_float(value)
+    if parsed is None:
+        return None
+    return int(round(parsed))
+
+
+def _normalize_iv(value: object) -> float | None:
+    parsed = _to_float(value)
+    if parsed is None:
+        return None
+    if parsed > 3:
+        return parsed / 100
+    return parsed
 
 
 def _max_oi_strike(contracts: list[OptionContract], option_type: str) -> float | None:
@@ -430,7 +697,17 @@ def _to_float(value: object) -> float | None:
     try:
         if value in (None, ""):
             return None
-        parsed = float(value)
+        if isinstance(value, str):
+            text = value.strip()
+            if not text or text.upper() in {"N/A", "NA", "NONE", "NULL", "-"}:
+                return None
+            percent = text.endswith("%")
+            text = text[:-1].strip() if percent else text
+            parsed = float(text.replace(",", ""))
+            if percent:
+                parsed = parsed / 100
+        else:
+            parsed = float(value)
         if math.isnan(parsed) or math.isinf(parsed):
             return None
         return parsed

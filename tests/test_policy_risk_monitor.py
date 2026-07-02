@@ -102,6 +102,32 @@ class PolicyRiskMonitorTests(unittest.TestCase):
         self.assertTrue(any(factor.direction == "mixed" for factor in result.factors))
         self.assertGreaterEqual(result.overall_score, 40)
 
+    def test_broad_aggregated_news_does_not_saturate_policy_score(self) -> None:
+        monitor = NewsMonitor(
+            fetched_at="2026-06-27T12:00:00+01:00",
+            status="部分来源不可用",
+            summary="test",
+            events=tuple(
+                _event(
+                    f"Market report flags tariff uncertainty and semiconductor export controls {index}",
+                    themes=("trade", "semiconductor"),
+                    tickers=("NVDA", "AVGO", "AMD"),
+                    impact="medium",
+                    confidence="medium",
+                    source_type="新闻聚合",
+                )
+                for index in range(6)
+            ),
+            warnings=("GDELT新闻聚合暂不可用：RuntimeError",),
+        )
+
+        result = build_policy_risk_monitor(monitor)
+
+        self.assertLess(result.overall_score, 90)
+        self.assertTrue(all(factor.score < 100 for factor in result.factors))
+        tariff_factor = next(factor for factor in result.factors if factor.key == "tariff_trade")
+        self.assertLessEqual(tariff_factor.score, 78)
+
     def test_empty_news_monitor_degrades_gracefully(self) -> None:
         monitor = NewsMonitor(
             fetched_at="2026-06-27T12:00:00+01:00",

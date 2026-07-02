@@ -105,6 +105,43 @@ class OptionAlertTests(unittest.TestCase):
         self.assertEqual(alerts[0].severity, "red")
         self.assertIn("mark", alerts[0].summary)
 
+    def test_occ_contract_code_is_rendered_as_readable_option_label(self) -> None:
+        previous = {
+            "contracts": {
+                "DRAM|2026-07-31|P|50": {
+                    "iv": None,
+                    "mark": 1.19,
+                    "market_value_gbp": -89.0,
+                    "observed_at": "2026-06-20T10:00:00+01:00",
+                }
+            },
+            "sent_alerts": {},
+        }
+
+        alerts, _ = build_option_risk_alerts(
+            [
+                _leg(
+                    symbol="DRAM 260731P00050000",
+                    underlying="DRAM",
+                    expiry="2026-07-31",
+                    right="P",
+                    strike=50.0,
+                    signed_contracts=-1,
+                    mark_price=1.72,
+                    market_value_gbp=-128.68,
+                    implied_volatility=None,
+                    market_data_source="IBKR open position",
+                )
+            ],
+            previous,
+            now=datetime.fromisoformat("2026-06-20T14:00:00+01:00"),
+        )
+
+        self.assertEqual(len(alerts), 1)
+        self.assertIn("DRAM 2026-07-31 50 Put", alerts[0].details[0])
+        self.assertIn("原始代码：DRAM 260731P00050000", alerts[0].details[0])
+        self.assertIn("short 1 张", alerts[0].details[1])
+
     def test_cooldown_suppresses_repeated_alert(self) -> None:
         previous = {
             "contracts": {
