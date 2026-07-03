@@ -114,6 +114,17 @@ def test_breakout_uses_resistance_zone_below_current_close() -> None:
     assert status == "突破候选"
 
 
+def test_swing_scorecard_uses_multi_timeframe_momentum_and_benchmark() -> None:
+    values = [100 + index * 0.4 for index in range(220)]
+    assessment = assess_swing(_history("MSFT", closes=values), origin="holding", benchmark_return_20d=1.0)
+    assert assessment.scorecard is not None
+    assert assessment.scorecard.trend_score == 5
+    assert assessment.scorecard.momentum_score == 5
+    assert assessment.scorecard.total_score >= 16
+    assert assessment.scorecard.above_ema5 is True
+    assert "高动量" in assessment.scorecard.interpretation
+
+
 def test_breakdown_uses_support_zone_above_current_close() -> None:
     support = SwingZone(
         kind="support",

@@ -17,12 +17,17 @@ class PriceBar:
 
 @dataclass(frozen=True)
 class IndicatorSnapshot:
-    ema21: float | None
-    sma50: float | None
-    sma200: float | None
-    atr14: float | None
-    rsi14: float | None
-    average_volume_20: float | None
+    ema5: float | None = None
+    ema10: float | None = None
+    ema21: float | None = None
+    sma50: float | None = None
+    sma200: float | None = None
+    atr14: float | None = None
+    rsi14: float | None = None
+    macd_histogram: float | None = None
+    return_20d: float | None = None
+    return_60d: float | None = None
+    average_volume_20: float | None = None
 
 
 def sma(values: Sequence[float], window: int) -> float | None:
@@ -31,14 +36,47 @@ def sma(values: Sequence[float], window: int) -> float | None:
     return sum(values[-window:]) / window
 
 
-def ema(values: Sequence[float], window: int) -> float | None:
+def ema_series(values: Sequence[float], window: int) -> tuple[float, ...]:
     if not values or window <= 0:
-        return None
+        return ()
     alpha = 2 / (window + 1)
     result = float(values[0])
+    series = [result]
     for value in values[1:]:
         result = alpha * float(value) + (1 - alpha) * result
-    return result
+        series.append(result)
+    return tuple(series)
+
+
+def ema(values: Sequence[float], window: int) -> float | None:
+    series = ema_series(values, window)
+    return series[-1] if series else None
+
+
+def macd_histogram(
+    values: Sequence[float],
+    fast: int = 12,
+    slow: int = 26,
+    signal: int = 9,
+) -> float | None:
+    if min(fast, slow, signal) <= 0 or len(values) < slow + signal:
+        return None
+    fast_series = ema_series(values, fast)
+    slow_series = ema_series(values, slow)
+    macd_line = tuple(fast_value - slow_value for fast_value, slow_value in zip(fast_series, slow_series))
+    signal_series = ema_series(macd_line, signal)
+    if not signal_series:
+        return None
+    return macd_line[-1] - signal_series[-1]
+
+
+def period_return(values: Sequence[float], window: int) -> float | None:
+    if window <= 0 or len(values) <= window:
+        return None
+    base = values[-window - 1]
+    if base == 0:
+        return None
+    return (values[-1] / base - 1) * 100
 
 
 def rsi(values: Sequence[float], window: int = 14) -> float | None:
@@ -97,10 +135,15 @@ def average_volume(bars: Iterable[PriceBar], window: int = 20) -> float | None:
 def indicator_snapshot(bars: Sequence[PriceBar]) -> IndicatorSnapshot:
     closes = [bar.close for bar in bars]
     return IndicatorSnapshot(
+        ema5=ema(closes, 5),
+        ema10=ema(closes, 10),
         ema21=ema(closes, 21),
         sma50=sma(closes, 50),
         sma200=sma(closes, 200),
         atr14=atr(bars, 14),
         rsi14=rsi(closes, 14),
+        macd_histogram=macd_histogram(closes),
+        return_20d=period_return(closes, 20),
+        return_60d=period_return(closes, 60),
         average_volume_20=average_volume(bars, 20),
     )

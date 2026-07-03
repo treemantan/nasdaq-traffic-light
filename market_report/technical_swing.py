@@ -44,6 +44,24 @@ class SwingZone:
 
 
 @dataclass(frozen=True)
+class TechnicalScorecard:
+    above_ema5: bool | None
+    above_ema10: bool | None
+    above_ema21: bool | None
+    above_sma50: bool | None
+    above_sma200: bool | None
+    trend_score: int
+    momentum_score: int
+    breakout_score: int
+    total_score: int
+    benchmark_return_20d: float | None = None
+    relative_strength_20d: float | None = None
+    regime: str = "中性混合 / Neutral"
+    interpretation: str = "数据不足"
+    components: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class SwingAssessment:
     symbol: str
     origin: str
@@ -68,6 +86,7 @@ class SwingAssessment:
     average_cost_gbp: float | None = None
     unrealized_pnl_gbp: float | None = None
     unrealized_pnl_pct: float | None = None
+    scorecard: TechnicalScorecard | None = None
     warnings: tuple[str, ...] = ()
 
 
@@ -223,12 +242,142 @@ def classify_volume(ratio: float | None) -> str:
     return "异常放量"
 
 
+def _above(price: float, level: float | None) -> bool | None:
+    if level is None:
+        return None
+    return price > level
+
+
+def _score_true(values: Iterable[bool | None]) -> int:
+    return sum(1 for value in values if value is True)
+
+
+def _scorecard_regime(price: float, indicators: IndicatorSnapshot, asset_class: str) -> str:
+    if asset_class == "cash_like":
+        return "现金/短债：趋势评分不适用"
+    ema21, sma50, sma200 = indicators.ema21, indicators.sma50, indicators.sma200
+    if ema21 is None or sma50 is None or sma200 is None:
+        return "数据不足"
+    if price > ema21 > sma50 > sma200:
+        return "强势多头 / Strong Bull"
+    if price < ema21 and sma50 > sma200:
+        return "多头回调 / Bull Pullback"
+    if price > ema21 and ema21 < sma50:
+        return "趋势修复 / Repairing"
+    if price > ema21 and sma50 < sma200:
+        return "空头反弹 / Bear Rally"
+    if price < ema21 < sma50 < sma200:
+        return "空头结构 / Bear"
+    return "中性混合 / Neutral"
+
+
+def _scorecard_interpretation(total_score: int) -> str:
+    if total_score <= 5:
+        return "弱势/暂不宜追"
+    if total_score <= 9:
+        return "反弹观察"
+    if total_score <= 12:
+        return "趋势修复"
+    if total_score <= 15:
+        return "强突破"
+    return "高动量，注意过热"
+
+
+def _calculate_scorecard(
+    bars: Sequence[PriceBar],
+    indicators: IndicatorSnapshot,
+    *,
+    benchmark_return_20d: float | None,
+    asset_class: str,
+) -> TechnicalScorecard:
+    price = bars[-1].close
+    above_ema5 = _above(price, indicators.ema5)
+    above_ema10 = _above(price, indicators.ema10)
+    above_ema21 = _above(price, indicators.ema21)
+    above_sma50 = _above(price, indicators.sma50)
+    above_sma200 = _above(price, indicators.sma200)
+    trend_score = _score_true((above_ema5, above_ema10, above_ema21, above_sma50, above_sma200))
+
+    relative_strength_20d = (
+        indicators.return_20d - benchmark_return_20d
+        if indicators.return_20d is not None and benchmark_return_20d is not None
+        else None
+    )
+    momentum_score = _score_true(
+        (
+            indicators.rsi14 is not None and indicators.rsi14 > 50,
+            indicators.macd_histogram is not None and indicators.macd_histogram > 0,
+            indicators.return_20d is not None and indicators.return_20d > 0,
+            indicators.return_60d is not None and indicators.return_60d > 0,
+            relative_strength_20d is not None and relative_strength_20d > 0,
+        )
+    )
+
+    previous_indicators = indicator_snapshot(bars[:-1]) if len(bars) >= 2 else IndicatorSnapshot()
+    previous_close = bars[-2].close if len(bars) >= 2 else None
+    crossed_ema21 = (
+        previous_close is not None
+        and previous_indicators.ema21 is not None
+        and indicators.ema21 is not None
+        and previous_close <= previous_indicators.ema21
+        and price > indicators.ema21
+    )
+    stayed_above_ema21 = (
+        previous_close is not None
+        and previous_indicators.ema21 is not None
+        and indicators.ema21 is not None
+        and previous_close > previous_indicators.ema21
+        and price > indicators.ema21
+    )
+    above_ema21_buffer = indicators.ema21 is not None and price >= indicators.ema21 * 1.01
+    volume_above_avg = (
+        bars[-1].volume is not None
+        and indicators.average_volume_20 is not None
+        and bars[-1].volume > indicators.average_volume_20
+    )
+    close_above_10d_high = len(bars) > 10 and price > max(bar.high for bar in bars[-11:-1])
+    breakout_score = _score_true(
+        (crossed_ema21, stayed_above_ema21, above_ema21_buffer, volume_above_avg, close_above_10d_high)
+    )
+
+    raw_score = trend_score + momentum_score + breakout_score
+    total_score = max(0, min(20, int(round(raw_score / 15 * 20))))
+    relative_text = (
+        f"20D相对基准 {relative_strength_20d:+.2f}%"
+        if relative_strength_20d is not None
+        else "20D相对基准 N/A"
+    )
+    components = (
+        f"均线位置 {trend_score}/5",
+        f"动量确认 {momentum_score}/5",
+        f"突破确认 {breakout_score}/5",
+        relative_text,
+    )
+    return TechnicalScorecard(
+        above_ema5=above_ema5,
+        above_ema10=above_ema10,
+        above_ema21=above_ema21,
+        above_sma50=above_sma50,
+        above_sma200=above_sma200,
+        trend_score=trend_score,
+        momentum_score=momentum_score,
+        breakout_score=breakout_score,
+        total_score=total_score,
+        benchmark_return_20d=benchmark_return_20d,
+        relative_strength_20d=relative_strength_20d,
+        regime=_scorecard_regime(price, indicators, asset_class),
+        interpretation=_scorecard_interpretation(total_score),
+        components=components,
+    )
+
+
 def assess_swing(
     history: PriceHistory,
     *,
     origin: str,
     position: PortfolioPosition | None = None,
     asset_class: str = "equity",
+    benchmark_return_20d: float | None = None,
 ) -> SwingAssessment:
     requested = history.identity.requested_symbol.upper()
     resolved = history.identity.resolved_symbol.upper()
@@ -238,6 +387,12 @@ def assess_swing(
     bars = history.bars
     indicators = indicator_snapshot(bars)
     price = bars[-1].close
+    scorecard = _calculate_scorecard(
+        bars,
+        indicators,
+        benchmark_return_20d=benchmark_return_20d,
+        asset_class=asset_class,
+    )
     previous = bars[-2].close if len(bars) >= 2 else None
     change_pct = ((price / previous) - 1) * 100 if previous else None
     volume_ratio = (
@@ -310,6 +465,7 @@ def assess_swing(
         average_cost_gbp=position.average_cost_gbp if position else None,
         unrealized_pnl_gbp=position.unrealized_pnl_gbp if position else None,
         unrealized_pnl_pct=position.unrealized_pnl_pct if position else None,
+        scorecard=scorecard,
         warnings=tuple(warnings),
     )
 
@@ -325,6 +481,7 @@ def build_technical_swing_report(
     universe = resolve_swing_universe(positions, watchlist, temporary_tickers)
     fetch = fetcher or (lambda symbol: fetch_price_history(symbol, period="2y", interval="1d"))
     classes = {key.upper(): value for key, value in (asset_classes or {}).items()}
+    benchmark_return_20d = _fetch_benchmark_return(fetch)
     assessments: list[SwingAssessment] = []
     warnings: list[str] = []
     for item in universe:
@@ -335,6 +492,7 @@ def build_technical_swing_report(
                 origin=item.origin,
                 position=item.position,
                 asset_class=asset_class,
+                benchmark_return_20d=benchmark_return_20d,
             )
             assessments.append(assessment)
             warnings.extend(assessment.warnings)
@@ -351,6 +509,13 @@ def build_technical_swing_report(
     return report
 
 
+def _fetch_benchmark_return(fetch: Callable[[str], PriceHistory]) -> float | None:
+    try:
+        return indicator_snapshot(fetch("QQQ").bars).return_20d
+    except Exception:
+        return None
+
+
 def save_technical_state(report: TechnicalSwingReport, path: Path = TECHNICAL_STATE_PATH) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     public_state = {
@@ -363,6 +528,7 @@ def save_technical_state(report: TechnicalSwingReport, path: Path = TECHNICAL_ST
                 "supports": [asdict(zone) for zone in item.supports],
                 "resistances": [asdict(zone) for zone in item.resistances],
                 "data_timestamp": item.data_timestamp,
+                "scorecard": asdict(item.scorecard) if item.scorecard else None,
             }
             for item in report.assessments
         ],
@@ -392,11 +558,16 @@ def technical_swing_from_payload(raw: dict) -> TechnicalSwingReport:
                 current_price=_optional_float(item.get("current_price")),
                 change_pct=_optional_float(item.get("change_pct")),
                 indicators=IndicatorSnapshot(
+                    ema5=_optional_float(indicators_raw.get("ema5")),
+                    ema10=_optional_float(indicators_raw.get("ema10")),
                     ema21=_optional_float(indicators_raw.get("ema21")),
                     sma50=_optional_float(indicators_raw.get("sma50")),
                     sma200=_optional_float(indicators_raw.get("sma200")),
                     atr14=_optional_float(indicators_raw.get("atr14")),
                     rsi14=_optional_float(indicators_raw.get("rsi14")),
+                    macd_histogram=_optional_float(indicators_raw.get("macd_histogram")),
+                    return_20d=_optional_float(indicators_raw.get("return_20d")),
+                    return_60d=_optional_float(indicators_raw.get("return_60d")),
                     average_volume_20=_optional_float(indicators_raw.get("average_volume_20")),
                 ),
                 trend=str(item.get("trend") or "数据不足"),
@@ -416,6 +587,7 @@ def technical_swing_from_payload(raw: dict) -> TechnicalSwingReport:
                 average_cost_gbp=_optional_float(item.get("average_cost_gbp")),
                 unrealized_pnl_gbp=_optional_float(item.get("unrealized_pnl_gbp")),
                 unrealized_pnl_pct=_optional_float(item.get("unrealized_pnl_pct")),
+                scorecard=_scorecard_from_payload(item.get("scorecard")),
                 warnings=tuple(str(value) for value in (item.get("warnings") or [])),
             )
         )
@@ -527,13 +699,28 @@ def _standalone_card(item: SwingAssessment) -> str:
         if item.unrealized_pnl_pct is not None
         else ""
     )
+    scorecard = (
+        f"{item.scorecard.total_score}/20 · {escape(item.scorecard.interpretation)}"
+        if item.scorecard
+        else "N/A"
+    )
+    scorecard_breakdown = (
+        " · ".join(item.scorecard.components)
+        if item.scorecard and item.scorecard.components
+        else "N/A"
+    )
     return f"""<article style="background:#111827;border:1px solid #334155;padding:14px;">
       <h3 style="margin:0 0 8px;color:#f8fafc;">{escape(item.symbol)} · {escape(item.technical_status)}</h3>
       <div>当前价格：{price} {escape(item.identity.currency)}</div>
       {pnl}
       <div>趋势：{escape(item.trend)}</div>
-      <div>EMA21 / SMA50 / SMA200：{_fmt_optional(item.indicators.ema21)} / {_fmt_optional(item.indicators.sma50)} / {_fmt_optional(item.indicators.sma200)}</div>
-      <div>ATR14 / RSI14：{_fmt_optional(item.indicators.atr14)} / {_fmt_optional(item.indicators.rsi14)}</div>
+      <div>技术评分：{scorecard}</div>
+      <div>评分拆解：{escape(scorecard_breakdown)}</div>
+      <div>EMA5 / EMA10 / EMA21：{_fmt_optional(item.indicators.ema5)} / {_fmt_optional(item.indicators.ema10)} / {_fmt_optional(item.indicators.ema21)}</div>
+      <div>SMA50 / SMA200：{_fmt_optional(item.indicators.sma50)} / {_fmt_optional(item.indicators.sma200)}</div>
+      <div>MACD Hist / RSI14：{_fmt_optional(item.indicators.macd_histogram)} / {_fmt_optional(item.indicators.rsi14)}</div>
+      <div>20D / 60D：{_fmt_optional(item.indicators.return_20d)}% / {_fmt_optional(item.indicators.return_60d)}%</div>
+      <div>ATR14：{_fmt_optional(item.indicators.atr14)}</div>
       <div>量能：{escape(item.volume_label)}；{escape(item.volume_confirmation)}</div>
       <div>最近支撑：{support_text}</div>
       <div>最近阻力：{resistance_text}</div>
@@ -566,6 +753,52 @@ def _optional_float(value: object) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _optional_bool(value: object) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return None
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "1", "yes"}:
+            return True
+        if lowered in {"false", "0", "no"}:
+            return False
+    return None
+
+
+def _optional_int(value: object) -> int:
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0
+
+
+def _scorecard_from_payload(raw: object) -> TechnicalScorecard | None:
+    if not isinstance(raw, dict):
+        return None
+    return TechnicalScorecard(
+        above_ema5=_optional_bool(raw.get("above_ema5")),
+        above_ema10=_optional_bool(raw.get("above_ema10")),
+        above_ema21=_optional_bool(raw.get("above_ema21")),
+        above_sma50=_optional_bool(raw.get("above_sma50")),
+        above_sma200=_optional_bool(raw.get("above_sma200")),
+        trend_score=_optional_int(raw.get("trend_score")),
+        momentum_score=_optional_int(raw.get("momentum_score")),
+        breakout_score=_optional_int(raw.get("breakout_score")),
+        total_score=_optional_int(raw.get("total_score")),
+        benchmark_return_20d=_optional_float(raw.get("benchmark_return_20d")),
+        relative_strength_20d=_optional_float(raw.get("relative_strength_20d")),
+        regime=str(raw.get("regime") or "中性混合 / Neutral"),
+        interpretation=str(raw.get("interpretation") or "数据不足"),
+        components=tuple(
+            str(component)
+            for component in (raw.get("components") or ())
+            if str(component).strip()
+        ),
+    )
 
 
 def _fmt_optional(value: float | None) -> str:

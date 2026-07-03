@@ -15,7 +15,7 @@ from .policy_risk_monitor import PolicyRiskFactor, PolicyRiskMonitor
 from .portfolio_events import PortfolioEventMonitor
 from .scoring import IronCondorAssessment, ScoreDriver, ScoredMetric, ScoredReport
 from .shock_backtest import MarketShockBacktest, MarketShockSample
-from .technical_swing import SwingAssessment, SwingZone, TechnicalSwingReport
+from .technical_swing import SwingAssessment, SwingZone, TechnicalScorecard, TechnicalSwingReport
 from .time_utils import format_timestamp
 
 
@@ -567,6 +567,7 @@ def _render_swing_card(item: SwingAssessment) -> str:
     resistance = _nearest_swing_zone(item.resistances, item.current_price)
     zone_details = _render_swing_zone_details("支撑", support, item.current_price)
     zone_details += _render_swing_zone_details("阻力", resistance, item.current_price)
+    scorecard_details = _render_swing_scorecard(item.scorecard)
     holding = ""
     if item.origin == "holding":
         holding = (
@@ -586,8 +587,12 @@ def _render_swing_card(item: SwingAssessment) -> str:
       <div class="swing-values">
         <div class="swing-value"><span>价格 / 日变动</span><strong>{_fmt_plain(item.current_price)} / {_fmt_pct(item.change_pct)}</strong></div>
         <div class="swing-value"><span>趋势结构</span><strong>{escape(item.trend)}</strong></div>
-        <div class="swing-value"><span>EMA21 / SMA50 / SMA200</span><strong>{_fmt_plain(indicators.ema21)} / {_fmt_plain(indicators.sma50)} / {_fmt_plain(indicators.sma200)}</strong></div>
-        <div class="swing-value"><span>ATR14 / RSI14</span><strong>{_fmt_plain(indicators.atr14)} / {_fmt_plain(indicators.rsi14)}</strong></div>
+        <div class="swing-value"><span>技术评分</span><strong>{_fmt_scorecard(item.scorecard)}</strong></div>
+        <div class="swing-value"><span>EMA5 / EMA10 / EMA21</span><strong>{_fmt_plain(indicators.ema5)} / {_fmt_plain(indicators.ema10)} / {_fmt_plain(indicators.ema21)}</strong></div>
+        <div class="swing-value"><span>SMA50 / SMA200</span><strong>{_fmt_plain(indicators.sma50)} / {_fmt_plain(indicators.sma200)}</strong></div>
+        <div class="swing-value"><span>MACD Hist / RSI14</span><strong>{_fmt_plain(indicators.macd_histogram)} / {_fmt_plain(indicators.rsi14)}</strong></div>
+        <div class="swing-value"><span>20D / 60D</span><strong>{_fmt_pct(indicators.return_20d)} / {_fmt_pct(indicators.return_60d)}</strong></div>
+        <div class="swing-value"><span>ATR14</span><strong>{_fmt_plain(indicators.atr14)}</strong></div>
         <div class="swing-value"><span>量能</span><strong>{escape(item.volume_label)} · {_fmt_plain(item.volume_ratio)}x</strong></div>
         <div class="swing-value"><span>最近支撑</span><strong>{_fmt_swing_zone(support)}</strong></div>
         <div class="swing-value"><span>最近阻力</span><strong>{_fmt_swing_zone(resistance)}</strong></div>
@@ -595,6 +600,7 @@ def _render_swing_card(item: SwingAssessment) -> str:
         {holding}
       </div>
       {zone_details}
+      {scorecard_details}
       <div class="swing-note">{escape(item.volume_confirmation)}。{escape(item.note)}</div>
       <div class="swing-note">来源：{escape(item.data_source)} · 数据时间：{escape(item.data_timestamp)} · 状态：{escape(item.data_quality)}{warning}</div>
     </article>"""
@@ -610,6 +616,46 @@ def _fmt_swing_zone(zone: SwingZone | None) -> str:
     if zone is None:
         return "N/A"
     return f"{zone.lower:.2f}-{zone.upper:.2f} · 强度 {zone.score}/100"
+
+
+def _fmt_scorecard(scorecard: TechnicalScorecard | None) -> str:
+    if scorecard is None:
+        return "N/A"
+    return f"{scorecard.total_score}/20 · {scorecard.interpretation}"
+
+
+def _scorecard_flag(value: bool | None) -> str:
+    if value is True:
+        return "站上"
+    if value is False:
+        return "跌破"
+    return "N/A"
+
+
+def _render_swing_scorecard(scorecard: TechnicalScorecard | None) -> str:
+    if scorecard is None:
+        return ""
+    components = "".join(f"<li>{escape(component)}</li>" for component in scorecard.components)
+    if not components:
+        components = "<li>评分拆解暂不可用</li>"
+    flags = (
+        f"EMA5 {_scorecard_flag(scorecard.above_ema5)} · "
+        f"EMA10 {_scorecard_flag(scorecard.above_ema10)} · "
+        f"EMA21 {_scorecard_flag(scorecard.above_ema21)} · "
+        f"SMA50 {_scorecard_flag(scorecard.above_sma50)} · "
+        f"SMA200 {_scorecard_flag(scorecard.above_sma200)}"
+    )
+    return f"""<details class="swing-zone-details">
+        <summary>多周期技术评分拆解</summary>
+        <ul>
+          <li>总分：{scorecard.total_score}/20；{escape(scorecard.interpretation)}</li>
+          <li>结构：{escape(scorecard.regime)}</li>
+          <li>{escape(flags)}</li>
+          <li>趋势/动量/突破：{scorecard.trend_score}/5 · {scorecard.momentum_score}/5 · {scorecard.breakout_score}/5</li>
+          <li>20D相对基准：{_fmt_pct(scorecard.relative_strength_20d)}</li>
+          {components}
+        </ul>
+      </details>"""
 
 
 def _render_swing_zone_details(label: str, zone: SwingZone | None, current_price: float | None) -> str:
