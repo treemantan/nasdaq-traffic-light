@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
+
 from market_report import render
+from market_report.etf_monitor import PortfolioPosition
 
 
 def test_bull_put_spread_boundary_uses_fee_adjusted_credit() -> None:
@@ -138,6 +141,51 @@ def test_option_strategy_row_displays_mtm_and_mtm_pnl_in_gbp() -> None:
     assert "-£63.75" in html
     assert "MTM未实现" in html
     assert "+£26.25" in html
+
+
+def test_option_panel_sums_open_strategy_net_premium_after_long_leg_cost() -> None:
+    legs = [
+        {
+            "underlying": "NFLX",
+            "expiry": "2026-07-24",
+            "right": "P",
+            "strike": 70.0,
+            "signed_contracts": -1.0,
+            "currency": "USD",
+            "net_cash_after_fee_native": 149.35,
+            "net_cash_after_fee_gbp": 110.00,
+        },
+        {
+            "underlying": "NFLX",
+            "expiry": "2026-07-24",
+            "right": "P",
+            "strike": 60.0,
+            "signed_contracts": 1.0,
+            "currency": "USD",
+            "net_cash_after_fee_native": -25.65,
+            "net_cash_after_fee_gbp": -20.00,
+        },
+    ]
+    positions = [
+        PortfolioPosition(
+            symbol="NFLX",
+            weight_pct=0,
+            quantity=None,
+            average_cost_gbp=None,
+            current_price_gbp=None,
+            market_value_gbp=None,
+            unrealized_pnl_gbp=None,
+            unrealized_pnl_pct=None,
+            day_change_pct=None,
+            monitor_status="outside-monitor-pool",
+            option_legs_json=json.dumps(legs),
+        )
+    ]
+
+    html = render._render_option_risk_panel(positions)
+
+    assert "未清算期权净收权利金" in html
+    assert "+£90.00" in html
 
 
 def test_option_leg_row_displays_mark_and_signed_mtm() -> None:

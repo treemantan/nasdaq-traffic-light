@@ -1153,8 +1153,10 @@ def _render_option_risk_panel(positions: list[PortfolioPosition]) -> str:
         else '<tr><td colspan="10">暂无期权腿明细。</td></tr>'
     )
     lifecycle_status = _render_option_lifecycle_status(lifecycle_events)
+    open_premium_summary = _render_open_option_premium_summary(legs)
     return f"""<div class="portfolio-notes">
       {lifecycle_status}
+      {open_premium_summary}
       <strong>IBKR期权风险（成本与结构识别）</strong>
       <div class="small-note">期权已从普通股票/ETF持仓中剥离。当前使用IBKR statement成交现金流识别成本、方向、到期与行权价；如Flex/OpenPosition提供mark或market value，则显示当前MTM。delta、gamma、theta、vega和POP仍需要IBKR期权行情或模型输入，未取得时不做伪精确估算。</div>
       <div class="portfolio-table-scroll">
@@ -1173,6 +1175,21 @@ def _render_option_risk_panel(positions: list[PortfolioPosition]) -> str:
         </div>
       </details>
     </div>"""
+
+
+def _render_open_option_premium_summary(legs: list[dict[str, object]]) -> str:
+    if not legs:
+        return ""
+    net_premium_gbp = sum(_option_cash_after_fee_gbp(leg) for leg in legs)
+    return (
+        '<div class="portfolio-exposure-grid" style="margin-top:8px;">'
+        '<div class="portfolio-exposure">'
+        '<span class="muted">未清算期权净收权利金</span>'
+        f'<strong class="{_pnl_class(net_premium_gbp)}">{escape(_fmt_signed_gbp(net_premium_gbp))}</strong>'
+        '<span class="portfolio-scope">按当前 open option legs 的扣费后净现金流汇总；'
+        'spread 已扣除 long legs 成本。不等同于已实现收益，若到期归零且未被执行/指派才可全部保留。</span>'
+        '</div></div>'
+    )
 
 
 def _portfolio_option_legs(positions: list[PortfolioPosition]) -> list[dict[str, object]]:
