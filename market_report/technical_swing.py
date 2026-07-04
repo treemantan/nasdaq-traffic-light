@@ -441,6 +441,8 @@ def assess_swing(
     note = _risk_note(asset_class, trend, status, nearest_support, nearest_resistance)
     if requested != resolved:
         status = "ticker身份待核验"
+    visible_supports = _zones_for_report(supports, price, support=True)
+    visible_resistances = _zones_for_report(resistances, price, support=False)
     return SwingAssessment(
         symbol=requested,
         origin=origin,
@@ -450,8 +452,8 @@ def assess_swing(
         indicators=indicators,
         trend=trend,
         technical_status=status,
-        supports=tuple(zone for zone in supports if zone.upper <= price * 1.03)[:3],
-        resistances=tuple(zone for zone in resistances if zone.lower >= price * 0.97)[:3],
+        supports=visible_supports,
+        resistances=visible_resistances,
         invalidation_level=invalidation,
         volume_ratio=volume_ratio,
         volume_label=volume_label,
@@ -914,6 +916,26 @@ def _nearest_zone(zones: Sequence[SwingZone], price: float, *, below: bool) -> S
     if not candidates:
         return None
     return min(candidates, key=lambda zone: abs(((zone.lower + zone.upper) / 2) - price))
+
+
+def _zones_for_report(zones: Sequence[SwingZone], price: float, *, support: bool, limit: int = 3) -> tuple[SwingZone, ...]:
+    if not zones:
+        return ()
+    nearest = _nearest_zone(zones, price, below=support)
+    if support:
+        filtered = [zone for zone in zones if zone.upper <= price * 1.03]
+    else:
+        filtered = [zone for zone in zones if zone.lower >= price * 0.97]
+
+    selected: list[SwingZone] = []
+    if nearest is not None and nearest in filtered:
+        selected.append(nearest)
+    for zone in filtered:
+        if zone not in selected:
+            selected.append(zone)
+        if len(selected) >= limit:
+            break
+    return tuple(selected[:limit])
 
 
 def _classify_status(
