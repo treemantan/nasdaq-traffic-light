@@ -16,6 +16,21 @@ class PriceBar:
 
 
 @dataclass(frozen=True)
+class MacdSnapshot:
+    fast: int
+    slow: int
+    signal: int
+    macd_line: float
+    signal_line: float
+    histogram: float
+    previous_histogram: float | None
+    histogram_trend: str
+    histogram_streak: int
+    cross: str
+    position: str
+
+
+@dataclass(frozen=True)
 class IndicatorSnapshot:
     ema5: float | None = None
     ema10: float | None = None
@@ -25,6 +40,7 @@ class IndicatorSnapshot:
     atr14: float | None = None
     rsi14: float | None = None
     macd_histogram: float | None = None
+    macd: MacdSnapshot | None = None
     return_20d: float | None = None
     return_60d: float | None = None
     average_volume_20: float | None = None
@@ -68,6 +84,77 @@ def macd_histogram(
     if not signal_series:
         return None
     return macd_line[-1] - signal_series[-1]
+
+
+def macd_snapshot(
+    values: Sequence[float],
+    fast: int = 10,
+    slow: int = 23,
+    signal: int = 8,
+) -> MacdSnapshot | None:
+    if min(fast, slow, signal) <= 0 or len(values) < slow + signal:
+        return None
+    fast_series = ema_series(values, fast)
+    slow_series = ema_series(values, slow)
+    macd_line = tuple(fast_value - slow_value for fast_value, slow_value in zip(fast_series, slow_series))
+    signal_series = ema_series(macd_line, signal)
+    if len(signal_series) < 2 or len(macd_line) < 2:
+        return None
+    histogram_series = tuple(line - signal for line, signal in zip(macd_line, signal_series))
+    histogram = histogram_series[-1]
+    previous_histogram = histogram_series[-2] if len(histogram_series) >= 2 else None
+    previous_line = macd_line[-2]
+    previous_signal = signal_series[-2]
+    current_line = macd_line[-1]
+    current_signal = signal_series[-1]
+    if previous_line <= previous_signal and current_line > current_signal:
+        cross = "bullish"
+    elif previous_line >= previous_signal and current_line < current_signal:
+        cross = "bearish"
+    else:
+        cross = "none"
+    if current_line > current_signal:
+        position = "above_signal"
+    elif current_line < current_signal:
+        position = "below_signal"
+    else:
+        position = "on_signal"
+    trend = _histogram_trend(histogram, previous_histogram)
+    return MacdSnapshot(
+        fast=fast,
+        slow=slow,
+        signal=signal,
+        macd_line=current_line,
+        signal_line=current_signal,
+        histogram=histogram,
+        previous_histogram=previous_histogram,
+        histogram_trend=trend,
+        histogram_streak=_histogram_streak(histogram_series, trend),
+        cross=cross,
+        position=position,
+    )
+
+
+def _histogram_trend(current: float, previous: float | None) -> str:
+    if previous is None:
+        return "unknown"
+    delta = current - previous
+    if abs(delta) < 1e-9:
+        return "flat"
+    if current >= 0:
+        return "expanding" if delta > 0 else "contracting"
+    return "expanding" if delta < 0 else "contracting"
+
+
+def _histogram_streak(values: Sequence[float], trend: str) -> int:
+    if trend not in {"expanding", "contracting", "flat"} or len(values) < 2:
+        return 0
+    streak = 0
+    for current, previous in zip(reversed(values[1:]), reversed(values[:-1])):
+        if _histogram_trend(current, previous) != trend:
+            break
+        streak += 1
+    return streak
 
 
 def period_return(values: Sequence[float], window: int) -> float | None:
@@ -143,6 +230,7 @@ def indicator_snapshot(bars: Sequence[PriceBar]) -> IndicatorSnapshot:
         atr14=atr(bars, 14),
         rsi14=rsi(closes, 14),
         macd_histogram=macd_histogram(closes),
+        macd=macd_snapshot(closes),
         return_20d=period_return(closes, 20),
         return_60d=period_return(closes, 60),
         average_volume_20=average_volume(bars, 20),

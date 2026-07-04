@@ -11,7 +11,7 @@ from typing import Callable, Iterable, Sequence
 
 from .etf_monitor import PortfolioPosition
 from .price_history import InstrumentIdentity, PriceHistory, fetch_price_history
-from .technical_indicators import IndicatorSnapshot, PriceBar, indicator_snapshot
+from .technical_indicators import IndicatorSnapshot, MacdSnapshot, PriceBar, indicator_snapshot
 
 
 TECHNICAL_STATE_PATH = Path("output") / "cache" / "technical_swing_state.json"
@@ -566,6 +566,7 @@ def technical_swing_from_payload(raw: dict) -> TechnicalSwingReport:
                     atr14=_optional_float(indicators_raw.get("atr14")),
                     rsi14=_optional_float(indicators_raw.get("rsi14")),
                     macd_histogram=_optional_float(indicators_raw.get("macd_histogram")),
+                    macd=_macd_from_payload(indicators_raw.get("macd")),
                     return_20d=_optional_float(indicators_raw.get("return_20d")),
                     return_60d=_optional_float(indicators_raw.get("return_60d")),
                     average_volume_20=_optional_float(indicators_raw.get("average_volume_20")),
@@ -750,7 +751,8 @@ def _standalone_raw_data(item: SwingAssessment) -> str:
     rows = (
         ("EMA5 / EMA10 / EMA21", f"{_fmt_optional(indicators.ema5)} / {_fmt_optional(indicators.ema10)} / {_fmt_optional(indicators.ema21)}"),
         ("SMA50 / SMA200", f"{_fmt_optional(indicators.sma50)} / {_fmt_optional(indicators.sma200)}"),
-        ("ATR14 / RSI14 / MACD Hist", f"{_fmt_optional(indicators.atr14)} / {_fmt_optional(indicators.rsi14)} / {_fmt_optional(indicators.macd_histogram)}"),
+        ("ATR14 / RSI14", f"{_fmt_optional(indicators.atr14)} / {_fmt_optional(indicators.rsi14)}"),
+        ("MACD(10,23,8)", _fmt_macd_snapshot(indicators.macd)),
         ("20D / 60D / vs QQQ 20D", f"{_fmt_optional_pct(indicators.return_20d)} / {_fmt_optional_pct(indicators.return_60d)} / {_fmt_optional_pct(relative)}"),
         ("QQQ 20D基准", _fmt_optional_pct(benchmark)),
         ("成交量比 / 20日均量", f"{_fmt_optional(item.volume_ratio)}x / {_fmt_volume(indicators.average_volume_20)}"),
@@ -771,6 +773,27 @@ def _optional_float(value: object) -> float | None:
         return None
     try:
         return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _macd_from_payload(raw: object) -> MacdSnapshot | None:
+    if not isinstance(raw, dict):
+        return None
+    try:
+        return MacdSnapshot(
+            fast=int(raw.get("fast") or 10),
+            slow=int(raw.get("slow") or 23),
+            signal=int(raw.get("signal") or 8),
+            macd_line=float(raw.get("macd_line")),
+            signal_line=float(raw.get("signal_line")),
+            histogram=float(raw.get("histogram")),
+            previous_histogram=_optional_float(raw.get("previous_histogram")),
+            histogram_trend=str(raw.get("histogram_trend") or "unknown"),
+            histogram_streak=int(raw.get("histogram_streak") or 0),
+            cross=str(raw.get("cross") or "none"),
+            position=str(raw.get("position") or "on_signal"),
+        )
     except (TypeError, ValueError):
         return None
 
@@ -831,6 +854,14 @@ def _fmt_optional_pct(value: float | None) -> str:
 
 def _fmt_volume(value: float | None) -> str:
     return f"{value:,.0f}" if value is not None else "N/A"
+
+
+def _fmt_macd_snapshot(snapshot: MacdSnapshot | None) -> str:
+    if snapshot is None:
+        return "N/A"
+    cross = f"{snapshot.cross} cross" if snapshot.cross != "none" else snapshot.position
+    streak = f" {snapshot.histogram_streak}D" if snapshot.histogram_streak else ""
+    return f"Hist {snapshot.histogram:+.2f} {snapshot.histogram_trend}{streak} / {cross}"
 
 
 def _zone_text(zone: SwingZone | None) -> str:

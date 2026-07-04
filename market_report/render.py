@@ -15,6 +15,7 @@ from .policy_risk_monitor import PolicyRiskFactor, PolicyRiskMonitor
 from .portfolio_events import PortfolioEventMonitor
 from .scoring import IronCondorAssessment, ScoreDriver, ScoredMetric, ScoredReport
 from .shock_backtest import MarketShockBacktest, MarketShockSample
+from .technical_indicators import MacdSnapshot
 from .technical_swing import SwingAssessment, SwingZone, TechnicalScorecard, TechnicalSwingReport
 from .time_utils import format_timestamp
 
@@ -628,7 +629,8 @@ def _render_swing_raw_data(item: SwingAssessment) -> str:
     rows = (
         ("EMA5 / EMA10 / EMA21", f"{_fmt_raw_number(indicators.ema5)} / {_fmt_raw_number(indicators.ema10)} / {_fmt_raw_number(indicators.ema21)}"),
         ("SMA50 / SMA200", f"{_fmt_raw_number(indicators.sma50)} / {_fmt_raw_number(indicators.sma200)}"),
-        ("ATR14 / RSI14 / MACD Hist", f"{_fmt_raw_number(indicators.atr14)} / {_fmt_raw_number(indicators.rsi14)} / {_fmt_raw_number(indicators.macd_histogram)}"),
+        ("ATR14 / RSI14", f"{_fmt_raw_number(indicators.atr14)} / {_fmt_raw_number(indicators.rsi14)}"),
+        ("MACD(10,23,8)", _fmt_macd_snapshot(indicators.macd)),
         ("20D / 60D / vs QQQ 20D", f"{_fmt_pct(indicators.return_20d)} / {_fmt_pct(indicators.return_60d)} / {_fmt_pct(relative)}"),
         ("QQQ 20D基准", _fmt_pct(benchmark)),
         ("成交量比 / 20日均量", f"{_fmt_plain(item.volume_ratio)}x / {_fmt_volume(indicators.average_volume_20)}"),
@@ -653,6 +655,14 @@ def _fmt_raw_number(value: float | None) -> str:
     if value is None:
         return "N/A"
     return f"{value:.2f}"
+
+
+def _fmt_macd_snapshot(snapshot: MacdSnapshot | None) -> str:
+    if snapshot is None:
+        return "N/A"
+    cross = f"{snapshot.cross} cross" if snapshot.cross != "none" else snapshot.position
+    streak = f" {snapshot.histogram_streak}D" if snapshot.histogram_streak else ""
+    return f"Hist {snapshot.histogram:+.2f} {snapshot.histogram_trend}{streak} / {cross}"
 
 
 def _scorecard_flag(value: bool | None) -> str:
