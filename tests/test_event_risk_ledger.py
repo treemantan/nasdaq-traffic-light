@@ -6,7 +6,12 @@ from pathlib import Path
 from types import SimpleNamespace
 import unittest
 
-from market_report.event_risk_ledger import build_event_risk_ledger, _normalize_symbol
+from market_report.event_risk_ledger import (
+    EventRiskLedger,
+    EventRiskLedgerEntry,
+    build_event_risk_ledger,
+    _normalize_symbol,
+)
 from market_report.news_monitor import NewsEvent, NewsMonitor
 from market_report.policy_risk_monitor import build_policy_risk_monitor
 from market_report.render import _render_event_risk_ledger as render_web_event_ledger
@@ -145,6 +150,46 @@ class EventRiskLedgerTests(unittest.TestCase):
         self.assertIn("NVDA", email_html)
         self.assertIn("6.2", web_html)
         self.assertIn("6.2", email_html)
+
+    def test_event_ledger_renderers_focus_on_review_workflow_not_factor_radar_fields(self) -> None:
+        ledger = EventRiskLedger(
+            generated_at="2026-06-27T12:00:00+01:00",
+            status="ok",
+            summary="事件风险追踪识别1个事件簇。",
+            entries=(
+                EventRiskLedgerEntry(
+                    event_id="event123",
+                    label="AI与半导体政策",
+                    direction="risk_up",
+                    confidence="high",
+                    risk_score=79,
+                    affected_assets=("AI capex chain", "Semiconductors"),
+                    affected_tickers=("NVDA", "MU"),
+                    portfolio_symbols=("NVDA", "MU"),
+                    portfolio_weight_pct=17.8,
+                    evidence_count=3,
+                    latest_published_at="2026-06-27T12:00:00+01:00",
+                    market_confirmation="价格行为部分确认",
+                    validation_note="支持信号：纳指100-1.61%；冲突信号：信用利差暂未扩大。",
+                    synthesis="需要复核：该事件是否改变 AI capex 交易的估值假设。",
+                    source_urls=("https://example.com/event",),
+                    lifecycle="延续事件",
+                ),
+            ),
+        )
+
+        web_html = render_web_event_ledger(ledger)
+        email_html = render_email_event_ledger(ledger)
+
+        for html in (web_html, email_html):
+            self.assertIn("事件ID event123", html)
+            self.assertIn("组合暴露", html)
+            self.assertIn("价格行为部分确认", html)
+            self.assertIn("需要复核", html)
+            self.assertNotIn("79/100", html)
+            self.assertNotIn("置信度 high", html)
+            self.assertNotIn("相关Ticker", html)
+            self.assertNotIn("影响资产", html)
 
     def test_event_ledger_exposes_lifecycle_for_merged_event_cluster(self) -> None:
         news = _news_monitor(
