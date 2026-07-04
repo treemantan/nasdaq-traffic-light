@@ -709,6 +709,7 @@ def _standalone_card(item: SwingAssessment) -> str:
         if item.scorecard and item.scorecard.components
         else "N/A"
     )
+    raw_data = _standalone_raw_data(item)
     return f"""<article style="background:#111827;border:1px solid #334155;padding:14px;">
       <h3 style="margin:0 0 8px;color:#f8fafc;">{escape(item.symbol)} · {escape(item.technical_status)}</h3>
       <div>当前价格：{price} {escape(item.identity.currency)}</div>
@@ -716,14 +717,10 @@ def _standalone_card(item: SwingAssessment) -> str:
       <div>趋势：{escape(item.trend)}</div>
       <div>技术评分：{scorecard}</div>
       <div>评分拆解：{escape(scorecard_breakdown)}</div>
-      <div>EMA5 / EMA10 / EMA21：{_fmt_optional(item.indicators.ema5)} / {_fmt_optional(item.indicators.ema10)} / {_fmt_optional(item.indicators.ema21)}</div>
-      <div>SMA50 / SMA200：{_fmt_optional(item.indicators.sma50)} / {_fmt_optional(item.indicators.sma200)}</div>
-      <div>MACD Hist / RSI14：{_fmt_optional(item.indicators.macd_histogram)} / {_fmt_optional(item.indicators.rsi14)}</div>
-      <div>20D / 60D：{_fmt_optional(item.indicators.return_20d)}% / {_fmt_optional(item.indicators.return_60d)}%</div>
-      <div>ATR14：{_fmt_optional(item.indicators.atr14)}</div>
       <div>量能：{escape(item.volume_label)}；{escape(item.volume_confirmation)}</div>
       <div>最近支撑：{support_text}</div>
       <div>最近阻力：{resistance_text}</div>
+      {raw_data}
       {zone_details}
       <div>ATR 失效参考：{invalidation}</div>
       <p style="color:#bfdbfe;">{escape(item.note)}</p>
@@ -744,6 +741,29 @@ def _zones_from_payload(raw: object) -> tuple[SwingZone, ...]:
         for item in (raw or [])
         if isinstance(item, dict)
     )
+
+
+def _standalone_raw_data(item: SwingAssessment) -> str:
+    indicators = item.indicators
+    benchmark = item.scorecard.benchmark_return_20d if item.scorecard else None
+    relative = item.scorecard.relative_strength_20d if item.scorecard else None
+    rows = (
+        ("EMA5 / EMA10 / EMA21", f"{_fmt_optional(indicators.ema5)} / {_fmt_optional(indicators.ema10)} / {_fmt_optional(indicators.ema21)}"),
+        ("SMA50 / SMA200", f"{_fmt_optional(indicators.sma50)} / {_fmt_optional(indicators.sma200)}"),
+        ("ATR14 / RSI14 / MACD Hist", f"{_fmt_optional(indicators.atr14)} / {_fmt_optional(indicators.rsi14)} / {_fmt_optional(indicators.macd_histogram)}"),
+        ("20D / 60D / vs QQQ 20D", f"{_fmt_optional_pct(indicators.return_20d)} / {_fmt_optional_pct(indicators.return_60d)} / {_fmt_optional_pct(relative)}"),
+        ("QQQ 20D基准", _fmt_optional_pct(benchmark)),
+        ("成交量比 / 20日均量", f"{_fmt_optional(item.volume_ratio)}x / {_fmt_volume(indicators.average_volume_20)}"),
+    )
+    items = "".join(
+        "<div style='display:flex;justify-content:space-between;gap:12px;border-top:1px solid #334155;padding:5px 0;'>"
+        f"<span>{escape(label)}</span><strong>{escape(value)}</strong></div>"
+        for label, value in rows
+    )
+    return f"""<details open style="margin-top:10px;color:#d1d5db;font-size:13px;">
+        <summary style="color:#bfdbfe;cursor:pointer;">Raw Technical Data</summary>
+        {items}
+      </details>"""
 
 
 def _optional_float(value: object) -> float | None:
@@ -803,6 +823,14 @@ def _scorecard_from_payload(raw: object) -> TechnicalScorecard | None:
 
 def _fmt_optional(value: float | None) -> str:
     return f"{value:.2f}" if value is not None else "N/A"
+
+
+def _fmt_optional_pct(value: float | None) -> str:
+    return f"{value:+.2f}%" if value is not None else "N/A"
+
+
+def _fmt_volume(value: float | None) -> str:
+    return f"{value:,.0f}" if value is not None else "N/A"
 
 
 def _zone_text(zone: SwingZone | None) -> str:

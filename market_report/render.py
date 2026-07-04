@@ -568,6 +568,7 @@ def _render_swing_card(item: SwingAssessment) -> str:
     zone_details = _render_swing_zone_details("支撑", support, item.current_price)
     zone_details += _render_swing_zone_details("阻力", resistance, item.current_price)
     scorecard_details = _render_swing_scorecard(item.scorecard)
+    raw_data = _render_swing_raw_data(item)
     holding = ""
     if item.origin == "holding":
         holding = (
@@ -588,17 +589,13 @@ def _render_swing_card(item: SwingAssessment) -> str:
         <div class="swing-value"><span>价格 / 日变动</span><strong>{_fmt_plain(item.current_price)} / {_fmt_pct(item.change_pct)}</strong></div>
         <div class="swing-value"><span>趋势结构</span><strong>{escape(item.trend)}</strong></div>
         <div class="swing-value"><span>技术评分</span><strong>{_fmt_scorecard(item.scorecard)}</strong></div>
-        <div class="swing-value"><span>EMA5 / EMA10 / EMA21</span><strong>{_fmt_plain(indicators.ema5)} / {_fmt_plain(indicators.ema10)} / {_fmt_plain(indicators.ema21)}</strong></div>
-        <div class="swing-value"><span>SMA50 / SMA200</span><strong>{_fmt_plain(indicators.sma50)} / {_fmt_plain(indicators.sma200)}</strong></div>
-        <div class="swing-value"><span>MACD Hist / RSI14</span><strong>{_fmt_plain(indicators.macd_histogram)} / {_fmt_plain(indicators.rsi14)}</strong></div>
-        <div class="swing-value"><span>20D / 60D</span><strong>{_fmt_pct(indicators.return_20d)} / {_fmt_pct(indicators.return_60d)}</strong></div>
-        <div class="swing-value"><span>ATR14</span><strong>{_fmt_plain(indicators.atr14)}</strong></div>
         <div class="swing-value"><span>量能</span><strong>{escape(item.volume_label)} · {_fmt_plain(item.volume_ratio)}x</strong></div>
         <div class="swing-value"><span>最近支撑</span><strong>{_fmt_swing_zone(support)}</strong></div>
         <div class="swing-value"><span>最近阻力</span><strong>{_fmt_swing_zone(resistance)}</strong></div>
         <div class="swing-value"><span>ATR失效观察</span><strong>{_fmt_plain(item.invalidation_level)}</strong></div>
         {holding}
       </div>
+      {raw_data}
       {zone_details}
       {scorecard_details}
       <div class="swing-note">{escape(item.volume_confirmation)}。{escape(item.note)}</div>
@@ -622,6 +619,40 @@ def _fmt_scorecard(scorecard: TechnicalScorecard | None) -> str:
     if scorecard is None:
         return "N/A"
     return f"{scorecard.total_score}/20 · {scorecard.interpretation}"
+
+
+def _render_swing_raw_data(item: SwingAssessment) -> str:
+    indicators = item.indicators
+    benchmark = item.scorecard.benchmark_return_20d if item.scorecard else None
+    relative = item.scorecard.relative_strength_20d if item.scorecard else None
+    rows = (
+        ("EMA5 / EMA10 / EMA21", f"{_fmt_raw_number(indicators.ema5)} / {_fmt_raw_number(indicators.ema10)} / {_fmt_raw_number(indicators.ema21)}"),
+        ("SMA50 / SMA200", f"{_fmt_raw_number(indicators.sma50)} / {_fmt_raw_number(indicators.sma200)}"),
+        ("ATR14 / RSI14 / MACD Hist", f"{_fmt_raw_number(indicators.atr14)} / {_fmt_raw_number(indicators.rsi14)} / {_fmt_raw_number(indicators.macd_histogram)}"),
+        ("20D / 60D / vs QQQ 20D", f"{_fmt_pct(indicators.return_20d)} / {_fmt_pct(indicators.return_60d)} / {_fmt_pct(relative)}"),
+        ("QQQ 20D基准", _fmt_pct(benchmark)),
+        ("成交量比 / 20日均量", f"{_fmt_plain(item.volume_ratio)}x / {_fmt_volume(indicators.average_volume_20)}"),
+    )
+    items = "".join(
+        f'<div class="swing-value"><span>{escape(label)}</span><strong>{escape(value)}</strong></div>'
+        for label, value in rows
+    )
+    return f"""<details class="swing-zone-details" open>
+        <summary>Raw Technical Data</summary>
+        <div class="swing-values">{items}</div>
+      </details>"""
+
+
+def _fmt_volume(value: float | None) -> str:
+    if value is None:
+        return "N/A"
+    return f"{value:,.0f}"
+
+
+def _fmt_raw_number(value: float | None) -> str:
+    if value is None:
+        return "N/A"
+    return f"{value:.2f}"
 
 
 def _scorecard_flag(value: bool | None) -> str:
