@@ -314,6 +314,22 @@ class ETFProductCheckTests(unittest.TestCase):
         self.assertEqual(exposure_map["000660"].weight_pct, 4.8)
         self.assertTrue(any("HBM / 存储链" in item for item in notes))
 
+    def test_portfolio_exposure_recognizes_micron_as_storage_chain(self) -> None:
+        asset = self._asset("SMH", (ETFHolding("MU", "Micron Technology Inc", 3),))
+        positions = [
+            PortfolioPosition("SMH", 20, None, None, None, None, None, None, None, "covered"),
+            PortfolioPosition("MU", 4, None, None, None, None, None, None, None, "outside-monitor-pool"),
+        ]
+
+        exposures, notes = _portfolio_exposure_summary([asset], positions)
+        exposure_map = {item.symbol: item for item in exposures}
+
+        self.assertEqual(exposure_map["MU"].label, "Micron Technology")
+        self.assertAlmostEqual(exposure_map["MU"].weight_pct, 4.6)
+        self.assertEqual(exposure_map["MU"].direct_weight_pct, 4)
+        self.assertAlmostEqual(exposure_map["MU"].etf_weight_pct, 0.6)
+        self.assertTrue(any("Micron" in item and "HBM" in item for item in notes))
+
     def test_portfolio_mag7_summary_combines_direct_and_etf_lookthrough(self) -> None:
         asset = self._asset(
             "A.L",

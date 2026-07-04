@@ -2929,6 +2929,7 @@ def _portfolio_exposure_summary(
         "AVGO": ("Broadcom", ("AVGO", "BROADCOM")),
         "META": ("Meta Platforms", ("META", "META PLATFORMS")),
         "AMD": ("AMD", ("AMD", "ADVANCED MICRO DEVICES")),
+        "MU": ("Micron Technology", ("MU", "MICRON", "MICRON TECHNOLOGY")),
         "TSM": ("TSMC", ("TSM", "TSMC", "TAIWAN SEMICONDUCTOR")),
         "ASML": ("ASML", ("ASML",)),
         "005930": ("Samsung Electronics", ("005930", "SAMSUNG ELECTRONICS", "SAMSUNG ELEC")),
@@ -2976,7 +2977,9 @@ def _portfolio_exposure_summary(
     ai_direct = sum(item.direct_weight_pct for item in exposures)
     ai_indirect = sum(item.etf_weight_pct for item in exposures)
     semiconductor_total = sum(
-        item.weight_pct for item in exposures if item.symbol in {"NVDA", "AVGO", "AMD", "TSM", "ASML", "005930", "000660"}
+        item.weight_pct
+        for item in exposures
+        if item.symbol in {"NVDA", "AVGO", "AMD", "MU", "TSM", "ASML", "005930", "000660"}
     )
     notes = [
         f"AI核心公司可识别暴露下限 {ai_total:.1f}%：直接持仓 {ai_direct:.1f}%，ETF前十大持仓间接暴露 {ai_indirect:.1f}%。",
@@ -2988,8 +2991,8 @@ def _portfolio_exposure_summary(
             "未穿透部分可能继续包含AI相关公司。"
         )
     notes.append("组合穿透基于直接持仓与ETF前十大持仓近似计算，属于可识别下限，不等同于完整基金穿透。")
-    hbm_total = sum(item.weight_pct for item in exposures if item.symbol in {"005930", "000660"})
-    notes.append(f"Samsung Electronics 与 SK hynix 的 HBM / 存储链可识别暴露下限 {hbm_total:.1f}%。")
+    hbm_total = sum(item.weight_pct for item in exposures if item.symbol in {"MU", "005930", "000660"})
+    notes.append(f"Micron、Samsung Electronics 与 SK hynix 的 HBM / 存储链可识别暴露下限 {hbm_total:.1f}%。")
     return exposures, notes
 
 
