@@ -70,7 +70,9 @@ def main() -> int:
 
     rows = _build_portfolio_rows(positions)
     if rows and option_legs:
-        rows[0]["option_legs_json"] = json.dumps(option_legs, ensure_ascii=False, separators=(",", ":"))
+        open_option_legs = _open_option_legs(option_legs)
+        if open_option_legs:
+            rows[0]["option_legs_json"] = json.dumps(open_option_legs, ensure_ascii=False, separators=(",", ":"))
         _apply_closed_option_realized_pnl(rows, _closed_option_realized_summary(option_legs))
     if rows:
         rows[0]["option_lifecycle_json"] = json.dumps(
@@ -492,6 +494,49 @@ def _closed_option_realized_summary(option_legs: list[dict[str, Any]]) -> dict[s
             reverse=True,
         ),
     }
+
+
+def _open_option_legs(option_legs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    by_contract: dict[tuple[str, str, str, float | None], list[dict[str, Any]]] = defaultdict(list)
+    for leg in option_legs:
+        key = _option_contract_key(
+            str(leg.get("underlying") or ""),
+            str(leg.get("expiry") or ""),
+            str(leg.get("right") or ""),
+            _safe_float(leg.get("strike")),
+        )
+        if not key[0] or not key[1] or not key[2]:
+            continue
+        by_contract[key].append(leg)
+
+    open_legs: list[dict[str, Any]] = []
+    for legs in by_contract.values():
+        open_positions = [
+            leg
+            for leg in legs
+            if str(leg.get("side") or "").upper() == "POSITION"
+            or str(leg.get("source") or "").lower().startswith("ibkr open position")
+        ]
+        if any(abs(_safe_float(leg.get("signed_contracts")) or 0.0) > 1e-6 for leg in open_positions):
+            open_legs.extend(legs)
+            continue
+
+        trade_legs = [leg for leg in legs if str(leg.get("side") or "").upper() in {"BUY", "SELL"}]
+        net_contracts = sum(_safe_float(leg.get("signed_contracts")) or 0.0 for leg in trade_legs)
+        if abs(net_contracts) > 1e-6:
+            open_legs.extend(legs)
+
+    return sorted(
+        open_legs,
+        key=lambda item: (
+            str(item.get("underlying") or ""),
+            str(item.get("expiry") or ""),
+            str(item.get("right") or ""),
+            float(item.get("strike") or 0),
+            str(item.get("trade_date") or ""),
+            str(item.get("side") or ""),
+        ),
+    )
 
 
 def _apply_closed_option_realized_pnl(rows: list[dict[str, str]], summary: dict[str, Any]) -> None:

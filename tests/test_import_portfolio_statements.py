@@ -250,10 +250,12 @@ class ImportPortfolioStatementsTests(unittest.TestCase):
 
             option_legs = MODULE._extract_ibkr_option_legs([path])
             summary = MODULE._closed_option_realized_summary(option_legs)
+            open_option_legs = MODULE._open_option_legs(option_legs)
 
         self.assertAlmostEqual(summary["realized_pnl_gbp"], 60.75)
         self.assertEqual(len(summary["closed_options"]), 2)
         self.assertEqual({item["underlying"] for item in summary["closed_options"]}, {"NFLX"})
+        self.assertEqual([leg["underlying"] for leg in open_option_legs], ["DRAM"])
 
     def test_closed_option_realized_pnl_is_added_to_account_summary_fields(self) -> None:
         rows = [
