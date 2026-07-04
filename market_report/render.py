@@ -920,8 +920,6 @@ def _render_event_risk_ledger(ledger: EventRiskLedger | None) -> str:
 
 
 def _render_event_risk_entry(entry: EventRiskLedgerEntry) -> str:
-    assets = "、".join(entry.affected_assets[:5]) if entry.affected_assets else "未映射"
-    tickers = "、".join(entry.affected_tickers[:8]) if entry.affected_tickers else "未映射"
     portfolio = (
         f"{'、'.join(entry.portfolio_symbols[:8])} · 约{entry.portfolio_weight_pct:.1f}%"
         if entry.portfolio_symbols
@@ -933,12 +931,10 @@ def _render_event_risk_entry(entry: EventRiskLedgerEntry) -> str:
     )
     latest = f" · 最新证据 {escape(entry.latest_published_at)}" if entry.latest_published_at else ""
     return f"""<article class="capital-item">
-  <div class="capital-line"><strong>{escape(entry.label)}</strong><span>{entry.risk_score}/100</span></div>
-  <div class="news-meta">事件ID {escape(entry.event_id)} · {escape(entry.lifecycle)} · {escape(entry.direction)} · 置信度 {escape(entry.confidence)} · 证据 {entry.evidence_count}条{latest}</div>
+  <div class="capital-line"><strong>{escape(entry.label)}</strong><span>{escape(entry.lifecycle)}</span></div>
+  <div class="news-meta">事件ID {escape(entry.event_id)} · 证据 {entry.evidence_count}条{latest}</div>
   <p>{escape(entry.synthesis)}</p>
-  <div class="news-meta">组合映射：{escape(portfolio)}</div>
-  <div class="news-meta">影响资产：{escape(assets)}</div>
-  <div class="news-meta">相关Ticker：{escape(tickers)}</div>
+  <div class="news-meta">组合暴露：{escape(portfolio)}</div>
   <div class="news-meta">市场确认：{escape(entry.market_confirmation)} · {escape(entry.validation_note)}</div>
   <details class="news-meta"><summary>查看来源链接</summary><ul>{links or '<li>暂无可展开来源链接。</li>'}</ul></details>
 </article>"""

@@ -8,6 +8,7 @@ from market_report.technical_indicators import PriceBar
 from market_report.technical_swing import (
     SwingZone,
     _classify_status,
+    _zones_for_report,
     assess_swing,
     build_technical_swing_report,
     detect_pivots,
@@ -58,6 +59,22 @@ def test_last_two_bars_are_not_confirmed_pivots() -> None:
     pivots = detect_pivots(_history(closes=closes).bars)
     assert all(pivot.index <= len(closes) - 3 for pivot in pivots)
     assert any(pivot.kind == "support" and pivot.index == 2 for pivot in pivots)
+
+
+def test_report_zones_keep_nearest_support_even_when_deeper_support_is_stronger() -> None:
+    deep_support = SwingZone("support", 8.96, 9.46, 87, 4, ("deep",))
+    second_support = SwingZone("support", 12.0, 12.5, 82, 3, ("second",))
+    third_support = SwingZone("support", 14.0, 14.5, 78, 2, ("third",))
+    nearest_support = SwingZone("support", 16.29, 16.68, 30, 1, ("nearest",))
+
+    visible = _zones_for_report(
+        (deep_support, second_support, third_support, nearest_support),
+        16.6,
+        support=True,
+    )
+
+    assert nearest_support in visible
+    assert visible[0] == nearest_support
 
 
 def test_cash_like_asset_uses_rate_sensitive_wording() -> None:
