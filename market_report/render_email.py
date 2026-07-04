@@ -845,7 +845,8 @@ def _render_portfolio_email_card(position: PortfolioPosition) -> str:
                     <strong style="color:{pnl_color};">未实现 {escape(_fmt_signed_gbp(position.unrealized_pnl_gbp))} / {escape(_fmt_pct(position.unrealized_pnl_pct))}</strong><br>
                     <span style="color:#9ca3af;">已实现净额 {escape(_fmt_signed_gbp(position.realized_pnl_gbp))}</span><br>
                     <span style="color:#9ca3af;">股息 {escape(_fmt_signed_gbp(position.dividend_income_gbp))} · 隐含成本 {escape(_fmt_gbp(position.implied_trading_cost_gbp))} · 合计 {escape(_fmt_signed_gbp(position.total_return_gbp))}</span><br>
-                    <span style="color:#9ca3af;">卖出不亏平衡价 {escape(_fmt_breakeven(position))}</span>
+                    <span style="color:#9ca3af;">GBP不亏价 {escape(_fmt_breakeven(position))}</span><br>
+                    <span style="color:#9ca3af;">卖出自动换回GBP后的账户不亏线；随当前FX变化</span>
                   </td>
                   <td valign="top" width="33%" style="padding:7px 0 7px 8px;border-top:1px solid #263244;">
                     <span style="color:#9ca3af;">价格与风险观察</span><br>

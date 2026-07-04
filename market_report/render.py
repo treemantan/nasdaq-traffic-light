@@ -1783,7 +1783,8 @@ def _render_portfolio_row(position: PortfolioPosition) -> str:
       <td>{escape(_fmt_fx(position))}</td>
       <td class="{pnl_class}">未实现 {escape(_fmt_signed_gbp(position.unrealized_pnl_gbp))}<br>
         <span class="portfolio-scope">已实现净额 {escape(_fmt_signed_gbp(position.realized_pnl_gbp))} · 股息 {escape(_fmt_signed_gbp(position.dividend_income_gbp))} · 隐含成本 {escape(_fmt_gbp(position.implied_trading_cost_gbp))} · 合计 {escape(_fmt_signed_gbp(position.total_return_gbp))}</span><br>
-        <span class="portfolio-scope">卖出不亏平衡价 {escape(_fmt_breakeven(position))}</span></td>
+        <span class="portfolio-scope">GBP不亏价 {escape(_fmt_breakeven(position))}</span><br>
+        <span class="portfolio-scope">卖出自动换回GBP后的账户不亏线；随当前FX变化</span></td>
       <td class="{pnl_class}">{escape(_fmt_pct(position.unrealized_pnl_pct))}</td>
       <td class="{day_class}">{escape(_fmt_pct(position.day_change_pct))}</td>
       <td>{escape(_fmt_peak_watch(position))}</td>
