@@ -1,7 +1,7 @@
 from market_report.price_history import InstrumentIdentity
 from market_report.render import _fmt_swing_zone, _render_swing_card, _render_swing_zone_details
 from market_report.render_email import _fmt_swing_email_zone
-from market_report.technical_indicators import IndicatorSnapshot
+from market_report.technical_indicators import IndicatorSnapshot, MacdSnapshot
 from market_report.technical_swing import (
     SwingAssessment,
     SwingZone,
@@ -72,8 +72,10 @@ def test_full_report_swing_card_exposes_raw_technical_data_for_review() -> None:
     assert "101.25 / 100.50 / 99.75" in html
     assert "SMA50 / SMA200" in html
     assert "96.50 / 88.25" in html
-    assert "ATR14 / RSI14 / MACD Hist" in html
-    assert "3.25 / 61.40 / 1.23" in html
+    assert "ATR14 / RSI14" in html
+    assert "3.25 / 61.40" in html
+    assert "MACD(10,23,8)" in html
+    assert "Hist +1.23 expanding 3D / bullish cross" in html
     assert "20D / 60D / vs QQQ 20D" in html
     assert "+6.50% / +14.20% / +2.40%" in html
     assert "成交量比 / 20日均量" in html
@@ -86,8 +88,10 @@ def test_standalone_technical_card_exposes_raw_technical_data_for_review() -> No
     assert "Raw Technical Data" in html
     assert "EMA5 / EMA10 / EMA21" in html
     assert "101.25 / 100.50 / 99.75" in html
-    assert "ATR14 / RSI14 / MACD Hist" in html
-    assert "3.25 / 61.40 / 1.23" in html
+    assert "ATR14 / RSI14" in html
+    assert "3.25 / 61.40" in html
+    assert "MACD(10,23,8)" in html
+    assert "Hist +1.23 expanding 3D / bullish cross" in html
     assert "20D / 60D / vs QQQ 20D" in html
     assert "+6.50% / +14.20% / +2.40%" in html
     assert "成交量比 / 20日均量" in html
@@ -110,6 +114,19 @@ def _assessment() -> SwingAssessment:
             atr14=3.25,
             rsi14=61.4,
             macd_histogram=1.23,
+            macd=MacdSnapshot(
+                fast=10,
+                slow=23,
+                signal=8,
+                macd_line=2.5,
+                signal_line=1.27,
+                histogram=1.23,
+                previous_histogram=0.8,
+                histogram_trend="expanding",
+                histogram_streak=3,
+                cross="bullish",
+                position="above_signal",
+            ),
             return_20d=6.5,
             return_60d=14.2,
             average_volume_20=1_250_000,
