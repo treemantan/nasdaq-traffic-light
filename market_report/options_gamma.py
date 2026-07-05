@@ -169,7 +169,8 @@ class _DefaultOptionChainFetcher:
             warnings.append(f"Unknown options gamma data source '{source}' skipped.")
 
         if errors:
-            raise RuntimeError("; ".join(errors))
+            details = warnings + [f"Final source errors: {'; '.join(errors)}"]
+            raise RuntimeError("; ".join(details))
         raise RuntimeError("No usable options gamma data source is configured.")
 
 

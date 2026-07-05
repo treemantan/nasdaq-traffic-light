@@ -441,7 +441,7 @@ def _render_options_gamma_unavailable(
         covered_symbols.add(symbol)
         if symbol.upper().endswith(".L"):
             uk_symbols.append(symbol)
-        elif "401" in warning_text or "Unauthorized" in warning_text:
+        elif ("401" in warning_text or "Unauthorized" in warning_text) and "Alpha Vantage" not in warning_text:
             unauthorized_symbols.append(symbol)
         else:
             reason = warning_text or item.notable_flow or "期权链数据不足"
