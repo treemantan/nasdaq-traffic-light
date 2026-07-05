@@ -290,6 +290,62 @@ class OptionsGammaTests(unittest.TestCase):
         self.assertTrue(any("no usable option contracts" in warning for warning in monitor.assessments[0].warnings))
         self.assertTrue(any("Yahoo fallback" in warning for warning in monitor.assessments[0].warnings))
 
+    def test_failed_fallback_preserves_alpha_vantage_skip_reason(self) -> None:
+        etf_monitor = SimpleNamespace(assets=[], portfolio_positions=[])
+
+        with patch.dict(os.environ, {"ALPHA_VANTAGE_API_KEY": "", "ALPHAVANTAGE_API_KEY": ""}, clear=False), patch(
+            "market_report.options_gamma.fetch_yahoo_option_chain",
+            side_effect=RuntimeError("HTTP Error 401: Unauthorized"),
+        ):
+            monitor = build_options_gamma_monitor(
+                OptionsGammaConfig(
+                    enabled=True,
+                    benchmark_tickers=("QQQ",),
+                    data_source_priority=("alpha_vantage", "yahoo"),
+                ),
+                etf_monitor,
+            )
+
+        warning_text = " ".join(monitor.assessments[0].warnings)
+        self.assertIn("Alpha Vantage API key is not configured", warning_text)
+        self.assertIn("Yahoo option-chain fetch failed: HTTP Error 401: Unauthorized", warning_text)
+
+    def test_render_separates_mixed_alpha_and_yahoo_failures_from_pure_yahoo_401(self) -> None:
+        monitor = OptionsGammaMonitor(
+            generated_at="2026-07-05T12:00:00+01:00",
+            summary="Gamma monitor test",
+            assessments=[
+                OptionGammaAssessment(
+                    symbol="QQQ",
+                    origin="benchmark",
+                    spot_price=None,
+                    nearest_expiry="N/A",
+                    regime_label="insufficient",
+                    data_status="insufficient",
+                    call_wall=None,
+                    put_wall=None,
+                    near_spot_oi_strike=None,
+                    largest_gamma_strike=None,
+                    pin_strike=None,
+                    gross_call_gamma=0.0,
+                    gross_put_gamma=0.0,
+                    notable_flow="Options gamma data unavailable for this ticker today.",
+                    interpretation="Insufficient option-chain data for dealer hedging estimate.",
+                    warnings=[
+                        "Alpha Vantage API key is not configured; using fallback source.",
+                        "Yahoo option-chain fetch failed: HTTP Error 401: Unauthorized",
+                    ],
+                )
+            ],
+            warnings=[],
+        )
+
+        html = _render_options_gamma(monitor)
+
+        self.assertIn("其他数据不足", html)
+        self.assertIn("Alpha Vantage API key is not configured", html)
+        self.assertNotIn("Yahoo 免费期权链接口返回 401", html)
+
 
 if __name__ == "__main__":
     unittest.main()
