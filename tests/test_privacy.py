@@ -27,6 +27,27 @@ class ReportPrivacyTests(unittest.TestCase):
         self.assertEqual(sanitized["technical_swing"]["warnings"], [])
         self.assertNotIn("SECRET", str(sanitized))
 
+    def test_without_portfolio_removes_holding_options_sentiment_contexts(self) -> None:
+        payload = {
+            "options_sentiment": {
+                "summary": "one public and one private context",
+                "contexts": [
+                    {"symbol": "SECRET", "origin": "holding", "bias": "Put-side premium"},
+                    {"symbol": "SPY", "origin": "benchmark", "bias": "Neutral premium"},
+                ],
+                "warnings": ["SECRET warning"],
+            }
+        }
+
+        sanitized = without_portfolio(payload)
+
+        self.assertEqual(
+            sanitized["options_sentiment"]["contexts"],
+            [{"symbol": "SPY", "origin": "benchmark", "bias": "Neutral premium"}],
+        )
+        self.assertEqual(sanitized["options_sentiment"]["warnings"], [])
+        self.assertNotIn("SECRET", str(sanitized))
+
     def test_without_portfolio_keeps_etf_summary_as_text(self) -> None:
         payload = {
             "etf_monitor": {

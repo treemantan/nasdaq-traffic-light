@@ -38,6 +38,16 @@ class OptionsGammaConfig:
 
 
 @dataclass(frozen=True)
+class OptionsSentimentConfig:
+    enabled: bool
+    benchmark_tickers: list[str]
+    tickers: list[str]
+    alpha_vantage_api_key_env: str
+    include_holdings: bool
+    max_tickers: int
+
+
+@dataclass(frozen=True)
 class AppConfig:
     report_title: str
     report_timezone: str
@@ -45,6 +55,7 @@ class AppConfig:
     weights: dict[str, float]
     swing_watchlist: list[str]
     options_gamma: OptionsGammaConfig
+    options_sentiment: OptionsSentimentConfig
     email: EmailConfig
 
 
@@ -61,6 +72,7 @@ def load_config(path: str) -> AppConfig:
     report = raw.get("report", {})
     email = raw.get("email", {})
     options_gamma = raw.get("options_gamma", {})
+    options_sentiment = raw.get("options_sentiment", {})
     weights = _normalize_weights(raw.get("weights", {}))
     swing_watchlist = _env_list("SWING_WATCHLIST") or _as_list(raw.get("swing_watchlist", []))
     gamma_tickers = _env_list("OPTIONS_GAMMA_TICKERS") or _as_list(options_gamma.get("tickers", []))
@@ -68,7 +80,11 @@ def load_config(path: str) -> AppConfig:
         options_gamma.get("benchmark_tickers", ["SPY", "QQQ"])
     )
     gamma_sources = _env_list("OPTIONS_GAMMA_DATA_SOURCES") or _as_list(
-        options_gamma.get("data_source_priority", ["alpha_vantage", "yahoo"])
+        options_gamma.get("data_source_priority", ["yahoo", "alpha_vantage"])
+    )
+    sentiment_tickers = _env_list("OPTIONS_SENTIMENT_TICKERS") or _as_list(options_sentiment.get("tickers", []))
+    sentiment_benchmarks = _env_list("OPTIONS_SENTIMENT_BENCHMARKS") or _as_list(
+        options_sentiment.get("benchmark_tickers", ["SPY", "QQQ"])
     )
 
     recipients = _env_list("REPORT_RECIPIENTS") or _as_list(email.get("to", []))
@@ -104,6 +120,22 @@ def load_config(path: str) -> AppConfig:
             min_volume_threshold=int(options_gamma.get("min_volume_threshold", 100)),
             min_open_interest_threshold=int(options_gamma.get("min_open_interest_threshold", 100)),
             include_single_names=bool(options_gamma.get("include_single_names", True)),
+        ),
+        options_sentiment=OptionsSentimentConfig(
+            enabled=_env_bool("OPTIONS_SENTIMENT_ENABLED", bool(options_sentiment.get("enabled", True))),
+            benchmark_tickers=sentiment_benchmarks,
+            tickers=sentiment_tickers,
+            alpha_vantage_api_key_env=str(
+                os.environ.get(
+                    "OPTIONS_SENTIMENT_ALPHA_KEY_ENV",
+                    options_sentiment.get("alpha_vantage_api_key_env", "ALPHA_VANTAGE_API_KEY"),
+                )
+            ),
+            include_holdings=_env_bool(
+                "OPTIONS_SENTIMENT_INCLUDE_HOLDINGS",
+                bool(options_sentiment.get("include_holdings", True)),
+            ),
+            max_tickers=int(os.environ.get("OPTIONS_SENTIMENT_MAX_TICKERS", options_sentiment.get("max_tickers", 12))),
         ),
         email=EmailConfig(
             enabled=_env_bool("EMAIL_ENABLED", bool(email.get("enabled", False))),

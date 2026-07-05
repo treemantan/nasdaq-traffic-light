@@ -11,6 +11,7 @@ from .etf_monitor import ETFAssetMonitor, ETFMonitor, PortfolioPosition
 from .mag7_capital_network import AggregateCapitalDisclosure, CapitalRelation, Mag7CapitalNetwork
 from .news_monitor import NewsEvent, NewsMonitor
 from .options_gamma import OptionGammaAssessment, OptionsGammaMonitor
+from .options_sentiment import OptionsSentimentMonitor, TickerShortPremiumContext
 from .policy_risk_monitor import PolicyRiskFactor, PolicyRiskMonitor
 from .portfolio_events import PortfolioEventMonitor
 from .scoring import IronCondorAssessment, ScoreDriver, ScoredMetric, ScoredReport
@@ -46,6 +47,7 @@ def render_html_report(report: ScoredReport, title: str) -> str:
     mag7_capital_network = _render_mag7_capital_network(report.mag7_capital_network)
     etf_monitor = _render_etf_monitor(report.etf_monitor, report.news_monitor, report.portfolio_event_monitor)
     technical_swing = _render_technical_swing(report.technical_swing)
+    options_sentiment = _render_options_sentiment(report.options_sentiment)
     options_gamma = _render_options_gamma(report.options_gamma)
 
     return f"""<!doctype html>
@@ -322,6 +324,7 @@ def render_html_report(report: ScoredReport, title: str) -> str:
     {news_monitor}
     {mag7_capital_network}
     {technical_swing}
+    {options_sentiment}
     {options_gamma}
     {etf_monitor}
 
@@ -766,10 +769,10 @@ def _render_iron_condor(assessment: IronCondorAssessment) -> str:
     warnings = _render_assessment_list(assessment.warnings)
     blockers = _render_assessment_list(assessment.blockers)
     return f"""<section class="panel strategy-filter">
-      <h2>Iron Condor环境过滤器</h2>
+      <h2>Short Premium Environment Filter</h2>
       <div class="strategy-head">
         <div>
-          <div class="kicker">区间型卖波动环境</div>
+          <div class="kicker">Cash-secured puts / spreads / condors</div>
           <div class="strategy-score">{assessment.score}<span>/100</span></div>
         </div>
         <div>
@@ -782,8 +785,94 @@ def _render_iron_condor(assessment: IronCondorAssessment) -> str:
         <div class="strategy-list"><h2>风险提示</h2><ul>{warnings}</ul></div>
         <div class="strategy-list"><h2>阻断项</h2><ul>{blockers}</ul></div>
       </div>
-      <div class="disclaimer">本模块仅评估市场环境是否适合区间型卖波动策略，不构成期权交易建议。</div>
+      <div class="disclaimer">This module evaluates the broad short-premium environment. Ticker-level put-call context appears below; nothing here is options trading advice.</div>
 </section>"""
+
+
+def _render_options_sentiment(monitor: OptionsSentimentMonitor | dict | None) -> str:
+    monitor = _coerce_options_sentiment_monitor(monitor)
+    if monitor is None:
+        return ""
+    rows = "".join(_render_options_sentiment_card(item) for item in monitor.contexts)
+    warning_html = "".join(f"<li>{escape(item)}</li>" for item in monitor.warnings)
+    warnings = (
+        f'<details class="swing-note"><summary>数据质量与降级说明</summary><ul>{warning_html}</ul></details>'
+        if warning_html
+        else ""
+    )
+    if not rows:
+        return f"""<section class="panel gamma-panel">
+      <h2>Options Sentiment / Short Premium Context</h2>
+      <div class="summary">{escape(monitor.summary)}</div>
+      {warnings}
+      <div class="disclaimer">Put-call ratio is ticker-level context for premium-selling structures; it is not a trade instruction.</div>
+</section>"""
+    return f"""<section class="panel gamma-panel">
+      <h2>Options Sentiment / Short Premium Context</h2>
+      <div class="summary">{escape(monitor.summary)}</div>
+      <div class="gamma-grid">{rows}</div>
+      {warnings}
+      <div class="disclaimer">This panel supports cash-secured puts, bull put spreads, bear call spreads, and iron condors by ticker. It does not replace strike selection, earnings/event checks, or risk limits.</div>
+</section>"""
+
+
+def _coerce_options_sentiment_monitor(monitor: OptionsSentimentMonitor | dict | None) -> OptionsSentimentMonitor | None:
+    if monitor is None or isinstance(monitor, OptionsSentimentMonitor):
+        return monitor
+    if not isinstance(monitor, dict):
+        return None
+    contexts = []
+    for raw in monitor.get("contexts") or []:
+        if not isinstance(raw, dict):
+            continue
+        contexts.append(
+            TickerShortPremiumContext(
+                symbol=str(raw.get("symbol", "")),
+                origin=str(raw.get("origin", "")),
+                put_call_ratio=_coerce_float(raw.get("put_call_ratio")),
+                nearest_expiry=str(raw.get("nearest_expiry", "N/A")),
+                nearest_expiry_put_call_ratio=_coerce_float(raw.get("nearest_expiry_put_call_ratio")),
+                bias=str(raw.get("bias", "")),
+                interpretation=str(raw.get("interpretation", "")),
+                expiration_ratios=[],
+                warnings=[str(item) for item in (raw.get("warnings") or [])],
+            )
+        )
+    return OptionsSentimentMonitor(
+        generated_at=str(monitor.get("generated_at", "")),
+        summary=str(monitor.get("summary", "")),
+        contexts=contexts,
+        warnings=[str(item) for item in (monitor.get("warnings") or [])],
+    )
+
+
+def _coerce_float(value: object) -> float | None:
+    try:
+        if value in (None, ""):
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _render_options_sentiment_card(item: TickerShortPremiumContext) -> str:
+    warnings = "".join(f'<div class="gamma-warning">{escape(warning)}</div>' for warning in item.warnings)
+    return f"""<article class="gamma-card">
+      <div class="gamma-card-head">
+        <div>
+          <div class="gamma-title">{escape(item.symbol)}</div>
+          <div class="symbol">{escape(item.origin)}</div>
+        </div>
+        <div class="gamma-regime">{escape(item.bias)}</div>
+      </div>
+      <div class="gamma-values">
+        <div class="gamma-value"><span>Full-chain PCR</span><strong>{escape(_fmt_plain(item.put_call_ratio))}</strong></div>
+        <div class="gamma-value"><span>Nearest expiry</span><strong>{escape(item.nearest_expiry)}</strong></div>
+        <div class="gamma-value"><span>Nearest PCR</span><strong>{escape(_fmt_plain(item.nearest_expiry_put_call_ratio))}</strong></div>
+      </div>
+      <div class="gamma-note">{escape(item.interpretation)}</div>
+      {warnings}
+    </article>"""
 
 
 def _render_market_shock_backtest(backtest: MarketShockBacktest | None) -> str:
@@ -2596,3 +2685,4 @@ def _fmt(value: float | None, unit: str = "") -> str:
     if abs(value) >= 10:
         return f"{value:.2f}"
     return f"{value:.4f}".rstrip("0").rstrip(".")
+

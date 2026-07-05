@@ -9,6 +9,7 @@ def without_portfolio(payload: dict) -> dict:
     sanitized["portfolio_event_monitor"] = None
     _remove_private_technical_swing(sanitized)
     _remove_private_options_gamma(sanitized)
+    _remove_private_options_sentiment(sanitized)
 
     monitor = sanitized.get("etf_monitor")
     if not isinstance(monitor, dict):
@@ -87,6 +88,22 @@ def _remove_private_options_gamma(payload: dict) -> None:
     monitor["warnings"] = []
     monitor["summary"] = (
         f"公开版本保留 {len(public_assessments)} 个 benchmark 或 covered ETF gamma 观察；持仓来源结果已移除。"
+    )
+
+
+def _remove_private_options_sentiment(payload: dict) -> None:
+    monitor = payload.get("options_sentiment")
+    if not isinstance(monitor, dict):
+        return
+    public_contexts = [
+        item
+        for item in (monitor.get("contexts") or [])
+        if isinstance(item, dict) and str(item.get("origin") or "").lower() != "holding"
+    ]
+    monitor["contexts"] = public_contexts
+    monitor["warnings"] = []
+    monitor["summary"] = (
+        f"Public report keeps {len(public_contexts)} benchmark/watchlist short-premium contexts; holding-derived contexts were removed."
     )
 
 

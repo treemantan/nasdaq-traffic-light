@@ -17,6 +17,8 @@ from .memory import load_previous_regime, save_current_regime
 from .news_monitor import fetch_news_monitor
 from .options_gamma import OptionsGammaConfig as GammaRuntimeConfig
 from .options_gamma import build_options_gamma_monitor
+from .options_sentiment import OptionsSentimentConfig as SentimentRuntimeConfig
+from .options_sentiment import build_options_sentiment_monitor
 from .policy_risk_monitor import build_policy_risk_monitor
 from .portfolio_events import build_portfolio_event_monitor
 from .render import render_html_report
@@ -78,6 +80,17 @@ def main() -> int:
         ),
         etf_monitor,
     )
+    options_sentiment = build_options_sentiment_monitor(
+        SentimentRuntimeConfig(
+            enabled=config.options_sentiment.enabled,
+            benchmark_tickers=tuple(config.options_sentiment.benchmark_tickers),
+            tickers=tuple(config.options_sentiment.tickers),
+            alpha_vantage_api_key_env=config.options_sentiment.alpha_vantage_api_key_env,
+            include_holdings=config.options_sentiment.include_holdings,
+            max_tickers=config.options_sentiment.max_tickers,
+        ),
+        etf_monitor,
+    )
     previous_regime = load_previous_regime(config.output_dir)
     scored = score_snapshot(
         snapshot,
@@ -90,6 +103,7 @@ def main() -> int:
         portfolio_event_monitor=portfolio_event_monitor,
         technical_swing=technical_swing,
         options_gamma=options_gamma,
+        options_sentiment=options_sentiment,
         policy_risk_monitor=policy_risk_monitor,
         event_risk_ledger=event_risk_ledger,
     )
