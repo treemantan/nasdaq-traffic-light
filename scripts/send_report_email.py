@@ -543,6 +543,7 @@ def _report_from_payload(payload: dict):
             "market_shock_backtest": _market_shock_backtest_from_payload,
             "technical_swing": _technical_swing_from_payload,
             "options_gamma": _options_gamma_from_payload,
+            "options_sentiment": _options_sentiment_from_payload,
         },
     )
 
@@ -572,6 +573,37 @@ def _options_gamma_from_payload(raw: object):
                     OptionGammaAssessment,
                     item,
                     converters={"warnings": lambda warnings: list(warnings or [])},
+                )
+                for item in (items or [])
+                if isinstance(item, dict)
+            ],
+            "warnings": lambda warnings: list(warnings or []),
+        },
+    )
+
+
+def _options_sentiment_from_payload(raw: object):
+    from market_report.options_sentiment import OptionsSentimentMonitor, TickerShortPremiumContext
+
+    if not isinstance(raw, dict):
+        return None
+    normalized = dict(raw)
+    normalized.setdefault("generated_at", "")
+    normalized.setdefault("summary", "")
+    normalized.setdefault("contexts", [])
+    normalized.setdefault("warnings", [])
+    return _dataclass_from_dict(
+        OptionsSentimentMonitor,
+        normalized,
+        converters={
+            "contexts": lambda items: [
+                _dataclass_from_dict(
+                    TickerShortPremiumContext,
+                    item,
+                    converters={
+                        "expiration_ratios": lambda ratios: list(ratios or []),
+                        "warnings": lambda warnings: list(warnings or []),
+                    },
                 )
                 for item in (items or [])
                 if isinstance(item, dict)

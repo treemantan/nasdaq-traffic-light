@@ -7,6 +7,7 @@ from .etf_monitor import ETFAssetMonitor, ETFMonitor, PortfolioPosition
 from .event_risk_ledger import EventRiskLedger, EventRiskLedgerEntry
 from .mag7_capital_network import Mag7CapitalNetwork
 from .news_monitor import NewsMonitor
+from .options_sentiment import OptionsSentimentMonitor, TickerShortPremiumContext
 from .policy_risk_monitor import PolicyRiskFactor, PolicyRiskMonitor
 from .portfolio_events import PortfolioEventMonitor
 from .scoring import IronCondorAssessment, ScoreDriver, ScoredMetric, ScoredReport
@@ -30,6 +31,7 @@ def render_email_report(report: ScoredReport) -> str:
     data_rows = "".join(_render_data_row(item.metric) for item in report.metrics.values())
     score_drivers = _render_score_drivers(report.score_drivers)
     iron_condor = _render_iron_condor(report.iron_condor)
+    options_sentiment = _render_options_sentiment(report.options_sentiment)
     market_shock_backtest = _render_market_shock_backtest(report.market_shock_backtest)
     policy_risk_monitor = _render_policy_risk_monitor(report.policy_risk_monitor)
     event_risk_ledger = _render_event_risk_ledger(report.event_risk_ledger)
@@ -93,6 +95,7 @@ def render_email_report(report: ScoredReport) -> str:
           </tr>
           {score_drivers}
           {iron_condor}
+          {options_sentiment}
           {market_shock_backtest}
           {policy_risk_monitor}
           {event_risk_ledger}
@@ -304,8 +307,46 @@ def _render_iron_condor(assessment: IronCondorAssessment) -> str:
               <div style="font-size:12px;color:#9ca3af;margin-top:10px;">本模块仅评估市场环境是否适合区间型卖波动策略，不构成期权交易建议。</div>
             </td>
           </tr>
+    </table>
+  </td>
+</tr>"""
+
+
+def _render_options_sentiment(monitor: OptionsSentimentMonitor | None) -> str:
+    if monitor is None:
+        return ""
+    rows = "".join(_render_options_sentiment_row(item) for item in monitor.contexts[:8])
+    if not rows:
+        rows = '<tr><td colspan="4" style="padding:8px;color:#d1d5db;">No ticker-level options sentiment available.</td></tr>'
+    return f"""<tr>
+      <td style="padding:0 24px 18px;">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#151f2d;border:1px solid #263244;border-radius:8px;">
+          <tr><td style="padding:14px;">
+            <div style="font-size:19px;font-weight:700;color:#f3f4f6;">Options Sentiment / Short Premium Context</div>
+            <div style="font-size:13px;color:#d1d5db;margin-top:6px;">{escape(monitor.summary)}</div>
+            <table width="100%" cellspacing="0" cellpadding="0" style="margin-top:10px;font-size:12px;color:#d1d5db;">
+              <tr>
+                <th align="left" style="padding:6px;border-bottom:1px solid #263244;color:#9ca3af;">Ticker</th>
+                <th align="left" style="padding:6px;border-bottom:1px solid #263244;color:#9ca3af;">Put-call</th>
+                <th align="left" style="padding:6px;border-bottom:1px solid #263244;color:#9ca3af;">Nearest</th>
+                <th align="left" style="padding:6px;border-bottom:1px solid #263244;color:#9ca3af;">Bias</th>
+              </tr>
+              {rows}
+            </table>
+            <div style="font-size:12px;color:#9ca3af;margin-top:8px;">Ticker-level context only; not options trading advice.</div>
+          </td></tr>
         </table>
       </td>
+    </tr>"""
+
+
+def _render_options_sentiment_row(item: TickerShortPremiumContext) -> str:
+    nearest = f"{item.nearest_expiry} / {_fmt_plain(item.nearest_expiry_put_call_ratio)}"
+    return f"""<tr>
+      <td style="padding:7px;border-bottom:1px solid #263244;"><strong>{escape(item.symbol)}</strong><br><span style="color:#9ca3af;">{escape(item.origin)}</span></td>
+      <td style="padding:7px;border-bottom:1px solid #263244;">{escape(_fmt_plain(item.put_call_ratio))}</td>
+      <td style="padding:7px;border-bottom:1px solid #263244;">{escape(nearest)}</td>
+      <td style="padding:7px;border-bottom:1px solid #263244;color:#bfdbfe;">{escape(item.bias)}</td>
     </tr>"""
 
 

@@ -16,6 +16,7 @@ from market_report.options_gamma import (
     build_options_gamma_monitor,
     classify_trade_location,
     fetch_alpha_vantage_option_chain,
+    fetch_yahoo_option_chain,
     gamma_exposure,
 )
 from market_report.privacy import without_portfolio
@@ -238,6 +239,71 @@ class OptionsGammaTests(unittest.TestCase):
         self.assertEqual(contracts[0].open_interest, 1200)
         self.assertAlmostEqual(contracts[1].implied_volatility or 0, 0.31)
         self.assertTrue(any("Alpha Vantage" in warning for warning in warnings))
+
+    def test_default_options_gamma_config_uses_yahoo_before_premium_alpha_chain(self) -> None:
+        self.assertEqual(OptionsGammaConfig().data_source_priority, ("yahoo", "alpha_vantage"))
+
+    def test_yahoo_option_chain_falls_back_to_yfinance_after_http_failure(self) -> None:
+        expiry = date.today() + timedelta(days=14)
+
+        class FakeFrame:
+            def __init__(self, rows):
+                self._rows = rows
+
+            def to_dict(self, orient):
+                assert orient == "records"
+                return self._rows
+
+        class FakeChain:
+            calls = FakeFrame(
+                [
+                    {
+                        "contractSymbol": "RKLB260710C00100000",
+                        "strike": 100,
+                        "openInterest": 18,
+                        "volume": 1,
+                        "bid": 34.55,
+                        "ask": 46.90,
+                        "lastPrice": 29.07,
+                        "impliedVolatility": 3.5508,
+                    }
+                ]
+            )
+            puts = FakeFrame([])
+
+        class FakeTicker:
+            options = (expiry.isoformat(),)
+            fast_info = {"last_price": 100.46}
+
+            def __init__(self, symbol):
+                self.symbol = symbol
+
+            def option_chain(self, expiration):
+                assert expiration == expiry.isoformat()
+                return FakeChain()
+
+        cache_locations: list[str] = []
+        fake_yfinance = SimpleNamespace(
+            Ticker=FakeTicker,
+            cache=SimpleNamespace(set_cache_location=lambda path: cache_locations.append(path)),
+        )
+
+        with patch("market_report.options_gamma._read_json", side_effect=RuntimeError("HTTP Error 401: Unauthorized")), patch.dict(
+            "sys.modules", {"yfinance": fake_yfinance}
+        ):
+            spot, contracts, warnings = fetch_yahoo_option_chain(
+                "RKLB",
+                OptionsGammaConfig(data_source_priority=("yahoo",), expirations_to_include=1),
+            )
+
+        self.assertEqual(spot, 100.46)
+        self.assertEqual(len(contracts), 1)
+        self.assertEqual(contracts[0].contract_symbol, "RKLB260710C00100000")
+        self.assertEqual(contracts[0].open_interest, 18)
+        self.assertAlmostEqual(contracts[0].implied_volatility or 0, 3.5508)
+        self.assertTrue(cache_locations)
+        self.assertTrue(cache_locations[0].endswith("output/cache/yfinance") or cache_locations[0].endswith("output\\cache\\yfinance"))
+        self.assertTrue(any("yfinance fallback" in warning for warning in warnings))
 
     def test_default_fetcher_falls_back_to_yahoo_after_alpha_failure(self) -> None:
         expiry = date.today() + timedelta(days=14)

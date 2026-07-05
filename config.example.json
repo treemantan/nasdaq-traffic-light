@@ -15,7 +15,7 @@
     "enabled": true,
     "benchmark_tickers": ["SPY", "QQQ"],
     "tickers": [],
-    "data_source_priority": ["alpha_vantage", "yahoo"],
+    "data_source_priority": ["yahoo", "alpha_vantage"],
     "alpha_vantage_api_key_env": "ALPHA_VANTAGE_API_KEY",
     "alpha_vantage_max_requests": 8,
     "alpha_vantage_fetch_spot_quote": true,
@@ -24,6 +24,14 @@
     "min_volume_threshold": 100,
     "min_open_interest_threshold": 100,
     "include_single_names": true
+  },
+  "options_sentiment": {
+    "enabled": true,
+    "benchmark_tickers": ["SPY", "QQQ"],
+    "tickers": [],
+    "alpha_vantage_api_key_env": "ALPHA_VANTAGE_API_KEY",
+    "include_holdings": true,
+    "max_tickers": 12
   },
   "email": {
     "enabled": false,

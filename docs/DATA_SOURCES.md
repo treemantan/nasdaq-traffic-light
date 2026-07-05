@@ -8,12 +8,18 @@
 
 ## Options Gamma / Dealer Hedging 数据源
 
-- 首选 Alpha Vantage `HISTORICAL_OPTIONS`，需要 `ALPHA_VANTAGE_API_KEY`，读取 option chain、open interest、volume、bid/ask/last 和 implied volatility。
-- 如果期权链里缺少 spot，且 `alpha_vantage_fetch_spot_quote=true`，会用 Alpha Vantage `GLOBAL_QUOTE` 补充标的价格。
-- Alpha Vantage 免费额度有限；默认 `alpha_vantage_max_requests=8`，主要用于 `SPY`、`QQQ` 和组合里权重较高的少数美股个股。
-- Alpha Vantage 不可用、超额、返回错误或没有可用合约时，自动 fallback 到 Yahoo/yfinance option chain。
+- 默认首选 Yahoo/yfinance option chain。模块先尝试 Yahoo JSON endpoint；如果遇到 401/session/cookie 限制，则回退到 `yfinance`。
+- Alpha Vantage `HISTORICAL_OPTIONS` 和 `REALTIME_OPTIONS` 是 premium option-chain endpoint，因此不作为免费默认源；只有显式配置且 key 有 premium 权限时才应启用。
+- Alpha Vantage 免费 ratio endpoint（`REALTIME_PUT_CALL_RATIO`、`HISTORICAL_PUT_CALL_RATIO`、`REALTIME_VOLUME_OPEN_INTEREST_RATIO`、`HISTORICAL_VOLUME_OPEN_INTEREST_RATIO`）可用于情绪监控，但不提供计算 dealer gamma 所需的 strike-level chain 字段。
+- 如果显式启用 Alpha Vantage option chain 且期权链里缺少 spot，`alpha_vantage_fetch_spot_quote=true` 会用 Alpha Vantage `GLOBAL_QUOTE` 补充标的价格。
 - UK/LSE UCITS ETF 通常没有可用期权链；系统保留覆盖说明，但不生成大量 N/A 卡片。
 - Dealer gamma 只是基于 OI、成交量、成交位置和 Black-Scholes gamma 的启发式估计，不是直接观察 dealer books。
+
+## Options Sentiment / Short Premium Context 数据源
+
+- 默认使用 Alpha Vantage 免费 `REALTIME_PUT_CALL_RATIO`，按 `SPY`、`QQQ`、当前持仓和配置的关注 ticker 生成 ticker-level short premium context。
+- Put-call ratio 用于辅助判断 put-side premium、call-side pressure 或 two-sided neutral premium；它不替代期权链、IV rank、earnings/event check、delta/POP 或保证金约束。
+- 没有 `ALPHA_VANTAGE_API_KEY` 时该面板会降级为单条数据不足说明，不影响 Gamma/yfinance option chain。
 
 ## 韧性策略
 

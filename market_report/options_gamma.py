@@ -18,7 +18,7 @@ class OptionsGammaConfig:
     enabled: bool = True
     benchmark_tickers: tuple[str, ...] = ("SPY", "QQQ")
     extra_tickers: tuple[str, ...] = ()
-    data_source_priority: tuple[str, ...] = ("alpha_vantage", "yahoo")
+    data_source_priority: tuple[str, ...] = ("yahoo", "alpha_vantage")
     alpha_vantage_api_key_env: str = "ALPHA_VANTAGE_API_KEY"
     alpha_vantage_max_requests: int = 8
     alpha_vantage_fetch_spot_quote: bool = True
@@ -311,6 +311,96 @@ def fetch_alpha_vantage_option_chain(
     return spot, contracts, warnings
 
 
+def _fetch_yfinance_option_chain(
+    symbol: str,
+    config: OptionsGammaConfig,
+    reason: str,
+) -> tuple[float | None, list[OptionContract], list[str]]:
+    try:
+        import yfinance as yf
+    except ImportError as exc:
+        raise RuntimeError(f"{reason}; yfinance fallback is not installed.") from exc
+
+    _configure_yfinance_cache(yf)
+    ticker = yf.Ticker(symbol)
+    expirations = _select_yfinance_expirations(getattr(ticker, "options", ()) or (), config)
+    spot = _spot_from_yfinance_ticker(ticker)
+    contracts: list[OptionContract] = []
+
+    if not expirations:
+        return spot, [], [reason, "Yahoo yfinance fallback returned no option expirations."]
+
+    for expiry_text in expirations:
+        time.sleep(0.05)
+        chain = ticker.option_chain(expiry_text)
+        expiry = _parse_date(expiry_text)
+        if expiry is None:
+            continue
+        for raw in _yfinance_rows(getattr(chain, "calls", None)):
+            contracts.append(_contract_from_yahoo(symbol, "call", expiry, raw))
+        for raw in _yfinance_rows(getattr(chain, "puts", None)):
+            contracts.append(_contract_from_yahoo(symbol, "put", expiry, raw))
+
+    warnings = [reason, "Yahoo yfinance fallback used for option chain."]
+    if not contracts:
+        warnings.append("Yahoo yfinance fallback returned no option contracts.")
+    return spot, contracts, warnings
+
+
+def _configure_yfinance_cache(yf: Any) -> None:
+    cache = getattr(yf, "cache", None)
+    set_cache_location = getattr(cache, "set_cache_location", None)
+    if not callable(set_cache_location):
+        return
+    cache_dir = os.path.join("output", "cache", "yfinance")
+    os.makedirs(cache_dir, exist_ok=True)
+    set_cache_location(cache_dir)
+
+
+def _select_yfinance_expirations(expirations: tuple[str, ...] | list[str], config: OptionsGammaConfig) -> list[str]:
+    parsed: list[tuple[date, str]] = []
+    today = datetime.now(timezone.utc).date()
+    cutoff = today + timedelta(days=config.max_days_to_expiry)
+    for expiry_text in expirations:
+        expiry = _parse_date(expiry_text)
+        if expiry is None:
+            continue
+        if today <= expiry <= cutoff:
+            parsed.append((expiry, str(expiry_text)))
+    parsed.sort(key=lambda item: item[0])
+    return [expiry_text for _, expiry_text in parsed[: max(1, int(config.expirations_to_include))]]
+
+
+def _spot_from_yfinance_ticker(ticker: Any) -> float | None:
+    fast_info = getattr(ticker, "fast_info", None) or {}
+    if isinstance(fast_info, dict):
+        value = fast_info.get("last_price") or fast_info.get("lastPrice") or fast_info.get("regularMarketPrice")
+    else:
+        value = (
+            getattr(fast_info, "last_price", None)
+            or getattr(fast_info, "lastPrice", None)
+            or getattr(fast_info, "regularMarketPrice", None)
+        )
+    parsed = _to_float(value)
+    if parsed is not None:
+        return parsed
+    info = getattr(ticker, "info", None) or {}
+    if isinstance(info, dict):
+        return _to_float(info.get("regularMarketPrice") or info.get("currentPrice") or info.get("previousClose"))
+    return None
+
+
+def _yfinance_rows(frame: Any) -> list[dict[str, Any]]:
+    if frame is None:
+        return []
+    if hasattr(frame, "to_dict"):
+        rows = frame.to_dict("records")
+        return [row for row in rows if isinstance(row, dict)]
+    if isinstance(frame, list):
+        return [row for row in frame if isinstance(row, dict)]
+    return []
+
+
 def fetch_alpha_vantage_spot_quote(symbol: str, config: OptionsGammaConfig) -> float | None:
     api_key = _alpha_vantage_api_key(config)
     if not api_key:
@@ -336,7 +426,10 @@ def fetch_alpha_vantage_spot_quote(symbol: str, config: OptionsGammaConfig) -> f
 def fetch_yahoo_option_chain(symbol: str, config: OptionsGammaConfig) -> tuple[float | None, list[OptionContract], list[str]]:
     encoded = urllib.parse.quote(symbol, safe="")
     base_url = f"https://query2.finance.yahoo.com/v7/finance/options/{encoded}"
-    payload = _read_json(base_url)
+    try:
+        payload = _read_json(base_url)
+    except Exception as exc:
+        return _fetch_yfinance_option_chain(symbol, config, f"Yahoo JSON option-chain fetch failed: {exc}")
     result = _first_result(payload)
     quote = result.get("quote") or {}
     spot = _to_float(quote.get("regularMarketPrice") or quote.get("postMarketPrice") or quote.get("preMarketPrice"))
@@ -398,7 +491,7 @@ def _contract_from_yahoo(symbol: str, option_type: str, expiry: date, raw: dict[
         bid=_to_float(raw.get("bid")),
         ask=_to_float(raw.get("ask")),
         last_price=_to_float(raw.get("lastPrice")),
-        implied_volatility=_normalize_iv(raw.get("impliedVolatility")),
+        implied_volatility=_to_float(raw.get("impliedVolatility")),
         contract_symbol=str(raw.get("contractSymbol") or ""),
     )
 
