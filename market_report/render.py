@@ -9,6 +9,7 @@ from .data_sources import MarketMetric
 from .event_risk_ledger import EventRiskLedger, EventRiskLedgerEntry
 from .etf_monitor import ETFAssetMonitor, ETFMonitor, PortfolioPosition
 from .mag7_capital_network import AggregateCapitalDisclosure, CapitalRelation, Mag7CapitalNetwork
+from .macro_brief import MacroDailyBrief, build_macro_daily_brief
 from .news_monitor import NewsEvent, NewsMonitor
 from .options_gamma import OptionGammaAssessment, OptionsGammaMonitor
 from .options_sentiment import OptionsSentimentMonitor, TickerShortPremiumContext
@@ -23,7 +24,7 @@ from .time_utils import format_timestamp
 
 DISPLAY_GROUPS = [
     ("权益风险偏好", ["nasdaq", "sp500", "russell2000"]),
-    ("情绪、波动与压力", ["cnn_fear_greed", "naaim_exposure", "vix", "vvix", "move", "credit_spread_hy"]),
+    ("情绪、波动与压力", ["cnn_fear_greed", "naaim_exposure", "vix9d", "vix", "vix3m", "vix_future_1", "vix_future_2", "vix_future_3", "vvix", "vixeq", "cor1m", "move", "credit_spread_hy"]),
     ("利率与实际利率", ["treasury_2y", "treasury_10y", "curve_2s10s", "real_yield_10y", "inflation_expectation_10y"]),
     ("美元与商品", ["dxy", "gbpusd", "usdjpy", "gold", "oil"]),
     ("美元流动性", ["fed_balance_sheet", "rrp", "tga", "bank_reserves"]),
@@ -49,6 +50,7 @@ def render_html_report(report: ScoredReport, title: str) -> str:
     technical_swing = _render_technical_swing(report.technical_swing)
     options_sentiment = _render_options_sentiment(report.options_sentiment)
     options_gamma = _render_options_gamma(report.options_gamma)
+    macro_brief = _render_macro_daily_brief(build_macro_daily_brief(report))
 
     return f"""<!doctype html>
 <html lang="zh-CN">
@@ -113,6 +115,25 @@ def render_html_report(report: ScoredReport, title: str) -> str:
     .health-item {{ border: 1px solid var(--line); border-radius: 6px; padding: 8px; background: rgba(255,255,255,.025); }}
     .health-item strong {{ display: block; font-size: 18px; }}
     .health-notes {{ margin-top: 10px; color: var(--subtle); font-size: 13px; }}
+    .decision-brief {{ margin: 4px 0 18px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }}
+    .decision-brief-head {{ display: flex; justify-content: space-between; gap: 16px; padding: 14px 2px 10px; align-items: end; }}
+    .decision-brief-title {{ font-size: 20px; font-weight: 760; }}
+    .decision-posture {{ color: var(--accent); font-size: 18px; font-weight: 760; }}
+    .decision-grid {{ display: grid; grid-template-columns: 1.05fr 1.2fr 1.35fr 1.2fr; border-top: 1px solid var(--line); }}
+    .decision-cell {{ padding: 13px 14px 14px 0; min-width: 0; }}
+    .decision-cell + .decision-cell {{ border-left: 1px solid var(--line); padding-left: 14px; }}
+    .decision-cell h2 {{ font-size: 13px; color: var(--muted); margin-bottom: 7px; }}
+    .decision-cell ul {{ padding-left: 17px; color: var(--subtle); }}
+    .decision-cell li {{ margin: 5px 0; }}
+    .decision-signal {{ margin: 6px 0; }}
+    .decision-signal strong {{ display: block; }}
+    .decision-signal span {{ color: var(--muted); font-size: 12px; }}
+    .report-layer {{ margin: 16px 0; }}
+    .report-layer > summary {{ cursor: pointer; list-style: none; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); padding: 13px 2px; }}
+    .report-layer > summary::-webkit-details-marker {{ display: none; }}
+    .layer-title {{ font-size: 18px; font-weight: 760; }}
+    .layer-note {{ color: var(--muted); font-size: 13px; margin-top: 3px; }}
+    .layer-body {{ padding-top: 14px; }}
     .strategy-filter {{ margin-bottom: 14px; border-color: {report.iron_condor.color}; }}
     .strategy-head {{ display: grid; grid-template-columns: 170px 1fr; gap: 16px; align-items: start; }}
     .strategy-score {{ font-size: 46px; line-height: 1; font-weight: 760; color: {report.iron_condor.color}; }}
@@ -256,7 +277,7 @@ def render_html_report(report: ScoredReport, title: str) -> str:
     .driver-meta {{ grid-column: 1 / -1; color: var(--muted); font-size: 12px; }}
     .footer {{ margin-top: 16px; color: var(--muted); font-size: 12px; display: flex; justify-content: space-between; gap: 12px; border-top: 1px solid var(--line); padding-top: 12px; }}
     @media (max-width: 980px) {{
-      .hero, .grid, .columns, .strategy-head, .strategy-lists, .swing-grid, .gamma-grid {{ grid-template-columns: 1fr; }}
+      .hero, .grid, .columns, .strategy-head, .strategy-lists, .swing-grid, .gamma-grid, .decision-grid {{ grid-template-columns: 1fr; }}
       .datebox {{ text-align: left; }}
       .etf-group-head {{ display: block; }}
       .etf-group-stats {{ text-align: left; margin-top: 7px; }}
@@ -264,6 +285,7 @@ def render_html_report(report: ScoredReport, title: str) -> str:
       .portfolio-total {{ text-align: left; }}
       .portfolio-exposure-grid {{ grid-template-columns: 1fr; }}
       .capital-grid {{ grid-template-columns: 1fr; }}
+      .decision-cell + .decision-cell {{ border-left: 0; border-top: 1px solid var(--line); padding-left: 0; }}
       .table-scroll {{ display: none; }}
       .etf-cards {{ display: block; }}
     }}
@@ -288,6 +310,8 @@ def render_html_report(report: ScoredReport, title: str) -> str:
         <span>抓取时间（{escape(report.fetched_timezone)}）：{escape(report.fetched_at)}</span>
       </div>
     </section>
+
+    {macro_brief}
 
     <section class="hero">
       <div class="panel">
@@ -317,51 +341,41 @@ def render_html_report(report: ScoredReport, title: str) -> str:
       </div>
     </section>
 
-    {iron_condor}
-    {market_shock_backtest}
-    {policy_risk_monitor}
-    {event_risk_ledger}
-    {news_monitor}
-    {mag7_capital_network}
-    {technical_swing}
-    {options_sentiment}
-    {options_gamma}
-    {etf_monitor}
+    <details class="report-layer" open>
+      <summary><div class="layer-title">Layer 2 · Macro Workbench</div><div class="layer-note">Cross-asset confirmation, policy risk, volatility context, and unresolved macro variables.</div></summary>
+      <div class="layer-body">
+        {iron_condor}
+        {market_shock_backtest}
+        {policy_risk_monitor}
+        {event_risk_ledger}
+        {options_sentiment}
+        <section class="grid">{groups}</section>
+        <section class="columns">
+          <div class="panel"><h2>市场已知信息</h2><ul>{knowns}</ul></div>
+          <div class="panel"><h2>未决宏观变量</h2><ul>{unknowns}</ul></div>
+          <div class="panel"><h2>风险与策略含义</h2><ul>{risks}</ul><p>{escape(report.action)}</p></div>
+        </section>
+      </div>
+    </details>
 
-    <section class="grid">{groups}</section>
-
-    <section class="columns">
-      <div class="panel">
-        <h2>市场已知信息</h2>
-        <ul>{knowns}</ul>
+    <details class="report-layer">
+      <summary><div class="layer-title">Layer 3 · Evidence & Deep Dive</div><div class="layer-note">Open when a signal needs verification: news, holdings, technicals, options detail, ETF research, weights, and source audit.</div></summary>
+      <div class="layer-body">
+        {news_monitor}
+        {mag7_capital_network}
+        {technical_swing}
+        {options_gamma}
+        {etf_monitor}
+        <section class="columns">
+          <div class="panel"><h2>自适应权重</h2>{weights}</div>
+          {score_drivers}
+          <div class="panel wide">
+            <h2>数据源、最近有效值与新鲜度</h2>
+            <table><thead><tr><th>指标</th><th>Ticker</th><th>来源</th><th>最近有效值</th><th>抓取时间（{escape(report.fetched_timezone)}）</th><th>状态</th></tr></thead><tbody>{data_rows}</tbody></table>
+          </div>
+        </section>
       </div>
-      <div class="panel">
-        <h2>未决宏观变量</h2>
-        <ul>{unknowns}</ul>
-      </div>
-      <div class="panel">
-        <h2>风险与策略含义</h2>
-        <ul>{risks}</ul>
-        <p>{escape(report.action)}</p>
-      </div>
-    </section>
-
-    <section class="columns">
-      <div class="panel">
-        <h2>自适应权重</h2>
-        {weights}
-      </div>
-      {score_drivers}
-      <div class="panel wide">
-        <h2>数据源、最近有效值与新鲜度</h2>
-        <table>
-          <thead>
-            <tr><th>指标</th><th>Ticker</th><th>来源</th><th>最近有效值</th><th>抓取时间（{escape(report.fetched_timezone)}）</th><th>状态</th></tr>
-          </thead>
-          <tbody>{data_rows}</tbody>
-        </table>
-      </div>
-    </section>
+    </details>
 
     <div class="footer">
       <span>免责声明：本报告仅用于宏观市场监控与研究参考，不构成投资建议。</span>
@@ -370,6 +384,28 @@ def render_html_report(report: ScoredReport, title: str) -> str:
   </main>
 </body>
 </html>"""
+
+
+def _render_macro_daily_brief(brief: MacroDailyBrief) -> str:
+    signals = "".join(
+        f'<div class="decision-signal"><strong>{escape(item.label)} · {escape(item.value)}</strong>'
+        f'<span>{escape(item.interpretation)}</span></div>'
+        for item in brief.signals
+    ) or '<div class="muted">No material daily move available.</div>'
+    actions = "".join(f"<li>{escape(item)}</li>" for item in brief.actions)
+    invalidations = "".join(f"<li>{escape(item)}</li>" for item in brief.invalidations)
+    return f"""<section class="decision-brief">
+      <div class="decision-brief-head">
+        <div><div class="kicker">Layer 1 · Daily Decision Brief</div><div class="decision-brief-title">Close-to-next-session macro posture</div></div>
+        <div class="decision-posture">{escape(brief.posture)}</div>
+      </div>
+      <div class="decision-grid">
+        <div class="decision-cell"><h2>STATE CHANGE</h2><div>{escape(brief.posture_note)}</div><div class="muted" style="margin-top:7px;">{escape(brief.score_change)}</div><div class="muted" style="margin-top:5px;">{escape(brief.transition)}</div><div style="margin-top:9px;">{escape(brief.liquidity_summary)}</div><div style="margin-top:9px;">{escape(brief.volatility_summary)}</div></div>
+        <div class="decision-cell"><h2>ANOMALY MOVES</h2>{signals}<div class="muted" style="margin-top:7px;">{escape(brief.anomaly_method)}</div></div>
+        <div class="decision-cell"><h2>PORTFOLIO & ACTION EVENT</h2><div>{escape(brief.exposure_change)}</div><div style="margin-top:9px;"><strong>{escape(brief.action_event)}</strong></div></div>
+        <div class="decision-cell"><h2>PLAYBOOK & INVALIDATION</h2><ul>{actions}</ul><div class="muted" style="margin-top:8px;">结论失效条件</div><ul>{invalidations}</ul></div>
+      </div>
+    </section>"""
 
 
 def _render_options_gamma(monitor: OptionsGammaMonitor | dict | None) -> str:

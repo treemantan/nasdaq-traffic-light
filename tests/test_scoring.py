@@ -165,6 +165,20 @@ class ScoringTests(unittest.TestCase):
         self.assertIn("回落", scored.note)
         self.assertNotIn("MOVE上行", scored.note)
 
+    def test_rrp_near_zero_does_not_treat_low_base_percentage_drop_as_new_stress(self):
+        snapshot = MarketSnapshot(
+            as_of=date(2026, 7, 10),
+            fetched_at=datetime(2026, 7, 10, tzinfo=timezone.utc),
+            metrics={"rrp": metric("rrp", "RRP", 1.0, 6.0, "USD bn")},
+            warnings=(),
+        )
+
+        scored = score_snapshot(snapshot).metrics["rrp"]
+
+        self.assertEqual(scored.score, 48)
+        self.assertIn("接近耗尽", scored.signal)
+        self.assertIn("百分比变化会失真", scored.note)
+
     def test_iron_condor_filter_is_suitable_when_volatility_and_index_moves_are_contained(self):
         snapshot = MarketSnapshot(
             as_of=date(2026, 5, 14),

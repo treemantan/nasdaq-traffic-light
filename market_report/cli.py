@@ -13,7 +13,7 @@ from .event_risk_ledger import build_event_risk_ledger
 from .emailer import send_report_email
 from .etf_monitor import fetch_etf_monitor
 from .mag7_capital_network import build_mag7_capital_network
-from .memory import load_previous_regime, save_current_regime
+from .memory import load_metric_history, load_previous_state, save_current_state
 from .news_monitor import fetch_news_monitor
 from .options_gamma import OptionsGammaConfig as GammaRuntimeConfig
 from .options_gamma import build_options_gamma_monitor
@@ -91,7 +91,9 @@ def main() -> int:
         ),
         etf_monitor,
     )
-    previous_regime = load_previous_regime(config.output_dir)
+    previous_state = load_previous_state(config.output_dir, before_date=snapshot.as_of.isoformat())
+    metric_history = load_metric_history(config.output_dir, before_date=snapshot.as_of.isoformat())
+    previous_regime = previous_state.get("regime") if isinstance(previous_state.get("regime"), str) else None
     scored = score_snapshot(
         snapshot,
         config.weights,
@@ -106,6 +108,8 @@ def main() -> int:
         options_sentiment=options_sentiment,
         policy_risk_monitor=policy_risk_monitor,
         event_risk_ledger=event_risk_ledger,
+        previous_state=previous_state,
+        metric_history=metric_history,
     )
     scored = replace(scored, market_shock_backtest=analyze_market_shock_history(snapshot.metrics))
 
@@ -114,7 +118,7 @@ def main() -> int:
     html = render_html_report(scored, config.report_title)
     output_path.write_text(html, encoding="utf-8")
     _write_report_payload(output_path.with_suffix(".json"), scored)
-    save_current_regime(config.output_dir, scored.report_date, scored.regime.name, scored.summary)
+    save_current_state(config.output_dir, scored)
 
     print(f"Report written to {output_path.resolve()}")
     terminal_light = {"绿灯": "green", "黄灯": "yellow", "红灯": "red"}.get(scored.light_label, scored.light_label)

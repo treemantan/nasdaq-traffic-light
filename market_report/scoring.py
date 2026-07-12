@@ -94,6 +94,10 @@ class ScoredReport:
     score_drivers: list[ScoreDriver] = field(default_factory=list)
     previous_regime: str | None = None
     regime_transition: str = "暂无可比历史叙事。"
+    previous_score: int | None = None
+    score_delta: int | None = None
+    previous_state: dict = field(default_factory=dict)
+    metric_history: list[dict] = field(default_factory=list)
 
 
 def score_snapshot(
@@ -110,6 +114,8 @@ def score_snapshot(
     options_sentiment: OptionsSentimentMonitor | None = None,
     policy_risk_monitor: PolicyRiskMonitor | None = None,
     event_risk_ledger: EventRiskLedger | None = None,
+    previous_state: dict | None = None,
+    metric_history: list[dict] | None = None,
 ) -> ScoredReport:
     scored_metrics = {key: _score_metric(key, metric, snapshot.metrics) for key, metric in snapshot.metrics.items()}
     adaptive_weights = _adaptive_weights(snapshot.metrics)
@@ -126,6 +132,7 @@ def score_snapshot(
     data_warnings = list(snapshot.warnings)
     data_quality = _data_quality(health)
     transition = _regime_transition(previous_regime, regime.name)
+    previous_score = _safe_previous_score(previous_state)
 
     return ScoredReport(
         report_date=snapshot.as_of.isoformat(),
@@ -160,7 +167,20 @@ def score_snapshot(
         data_health=health,
         previous_regime=previous_regime,
         regime_transition=transition,
+        previous_score=previous_score,
+        score_delta=(overall - previous_score) if previous_score is not None else None,
+        previous_state=previous_state or {},
+        metric_history=metric_history or [],
     )
+
+
+def _safe_previous_score(previous_state: dict | None) -> int | None:
+    if not previous_state:
+        return None
+    value = previous_state.get("overall_score")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return int(value)
 
 
 def _format_timestamp(timestamp: datetime, timezone_name: str) -> str:
@@ -347,8 +367,25 @@ def _score_stress(metric: MarketMetric) -> ScoredMetric:
 
 
 def _score_liquidity_metric(metric: MarketMetric) -> ScoredMetric:
+    if metric.key == "rrp":
+        value = metric.value or 0
+        change = metric.change or 0
+        if value < 25:
+            return ScoredMetric(
+                metric,
+                48,
+                "RRP缓冲接近耗尽",
+                "RRP已接近零下限，百分比变化会失真；当前仅将其视为流动性缓冲基本耗尽，不把小额下降判定为新的大规模抽离。",
+            )
+        tightening = change <= -25
+        return ScoredMetric(
+            metric,
+            68 if tightening else 45,
+            "流动性抽离" if tightening else "RRP缓冲变化温和",
+            "RRP仍有一定余额时使用绝对金额变化判断流动性释放，避免百分比在低基数下放大。",
+        )
     pct = metric.change_pct or 0
-    tightening = pct < -0.5 if metric.key in {"fed_balance_sheet", "bank_reserves", "rrp"} else pct > 0.5
+    tightening = pct < -0.5 if metric.key in {"fed_balance_sheet", "bank_reserves"} else pct > 0.5
     return ScoredMetric(metric, 68 if tightening else 45, "流动性抽离" if tightening else "流动性中性", "该指标用于判断美元流动性是否对风险资产形成支撑或约束。")
 
 
