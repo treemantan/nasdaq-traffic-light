@@ -17,4 +17,5 @@ trading-account-statement_*.csv
 
 .env
 .venv/
+.venv-*/
 venv/
