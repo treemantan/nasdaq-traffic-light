@@ -447,7 +447,11 @@ class RevolutImportTests(unittest.TestCase):
         self.assertIn("最近除息日 2026-06-18", fields["distribution_cycle_note"])
 
     def test_erns_distribution_override_includes_pay_date(self) -> None:
-        fields = MODULE._cash_like_distribution_fields("ERNS.L", {})
+        fields = MODULE._cash_like_distribution_fields(
+            "ERNS.L",
+            {},
+            as_of=date(2026, 6, 19),
+        )
 
         self.assertEqual(fields["distribution_ex_date"], "2026-06-18")
         self.assertEqual(fields["distribution_amount_native"], 1.0211)

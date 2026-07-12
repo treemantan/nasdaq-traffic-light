@@ -433,6 +433,24 @@ class ImportPortfolioStatementsTests(unittest.TestCase):
         self.assertAlmostEqual(option_legs[0]["market_value_native"], -120.0)
         self.assertAlmostEqual(option_legs[0]["market_value_gbp"], -90.0)
 
+    def test_open_position_quantity_does_not_multiply_repeated_executions(self) -> None:
+        legs = [
+            {
+                "underlying": "DRAM", "expiry": "2026-08-07", "right": "P", "strike": 40.0,
+                "side": "BUY", "contracts": 1.0, "signed_contracts": 1.0,
+                "open_position_signed_contracts": 3.0, "net_cash_after_fee_native": -100.0,
+                "market_value_native": 300.0,
+            }
+            for _ in range(3)
+        ]
+
+        open_legs = MODULE._open_option_legs(legs)
+
+        self.assertEqual(len(open_legs), 1)
+        self.assertEqual(open_legs[0]["signed_contracts"], 3.0)
+        self.assertEqual(open_legs[0]["net_cash_after_fee_native"], -300.0)
+        self.assertEqual(open_legs[0]["market_value_native"], 300.0)
+
     def test_ibkr_option_open_position_csv_with_spaced_headers_updates_mtm(self) -> None:
         content = "\n".join(
             [

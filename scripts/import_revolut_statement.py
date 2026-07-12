@@ -682,8 +682,9 @@ def _quote_in_gbp(
 def _cash_like_distribution_fields(
     symbol: str,
     meta: dict[str, object],
+    as_of: date | None = None,
 ) -> dict[str, object]:
-    return distribution_fields(symbol, meta)
+    return distribution_fields(symbol, meta, as_of=as_of)
 
 
 def _price_matches_cost_basis(price_gbp: float | None, average_cost_gbp: float) -> bool:
