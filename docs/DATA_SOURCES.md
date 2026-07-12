@@ -15,6 +15,16 @@
 - UK/LSE UCITS ETF 通常没有可用期权链；系统保留覆盖说明，但不生成大量 N/A 卡片。
 - Dealer gamma 只是基于 OI、成交量、成交位置和 Black-Scholes gamma 的启发式估计，不是直接观察 dealer books。
 
+## 期权历史快照与回测
+
+- `scripts/snapshot_option_chain.py` 将 Yahoo/yfinance 当前期权链按日期写入 `output/option_history/<TICKER>/`，同时保存 CSV 和来源/告警元数据 JSON。
+- Yahoo/yfinance 只提供当前可交易期权链；缓存或当天快照不能重建过去的 Bid/Ask、IV 或 Greeks。回测只能使用实际逐日积累的快照，不能使用当前链回填历史。
+- Alpha Vantage `HISTORICAL_OPTIONS` 需要 premium 权限。配置免费 key 不代表该端点可用。
+- Cboe 免费 Historical Options Data Download 是成交量汇总，不是逐合约历史 NBBO 数据。专业 EOD 回测应使用 Cboe DataShop `Option EOD Summary`（含 15:45 NBBO，可选 IV/Greeks）或等价的授权数据集。
+- 快照命令示例：`python scripts/snapshot_option_chain.py QQQ --max-days 120 --expirations 18`。
+- `scripts/download_thetadata_option_eod.py` 可选地通过 ThetaData Python client 下载授权范围内的逐合约 EOD 数据。API key 仅从 `THETADATA_API_KEY` 环境变量读取，默认输出写入已被 Git 忽略的 `output/thetadata/`。
+- ThetaData 命令示例：`python scripts/download_thetadata_option_eod.py SPY 2026-09-18 2026-07-01 2026-07-31 --right put`。该脚本是通用下载器，不保证特定订阅层级的数据覆盖范围。
+
 ## Options Sentiment / Short Premium Context 数据源
 
 - 默认使用 Alpha Vantage 免费 `REALTIME_PUT_CALL_RATIO`，按 `SPY`、`QQQ`、当前持仓和配置的关注 ticker 生成 ticker-level short premium context。
