@@ -48,6 +48,7 @@ NAAIM_HTTP_HEADERS = {
     "Accept": "text/html,*/*",
     "Connection": "close",
 }
+VIX_TERM_STRUCTURE_URL = "https://www.cboe.com/tradable-products/vix/term-structure"
 
 
 @dataclass(frozen=True)
@@ -132,7 +133,11 @@ YAHOO_SPECS = [
     MetricSpec("sp500", "标普500", "美股大盘风险资产定价锚", "^GSPC", "Yahoo", "权益", required=True),
     MetricSpec("russell2000", "罗素2000", "美国内需与中小盘风险偏好的代理变量", "^RUT", "Yahoo", "权益"),
     MetricSpec("vix", "VIX波动率", "权益风险溢价与避险需求的高频温度计", "^VIX", "Yahoo", "波动率", min_value=8, max_value=90, required=True),
+    MetricSpec("vix9d", "VIX9D短期波动率", "SPX期权隐含的9日预期波动，用于识别近期事件风险是否前置", "^VIX9D", "Yahoo", "波动率", min_value=5, max_value=150),
+    MetricSpec("vix3m", "VIX3M三个月波动率", "SPX期权隐含的三个月预期波动，用于判断波动期限结构", "^VIX3M", "Yahoo", "波动率", min_value=5, max_value=120),
     MetricSpec("vvix", "VVIX波动率", "VIX自身波动率，反映尾部风险定价", "^VVIX", "Yahoo", "波动率", min_value=50, max_value=220),
+    MetricSpec("vixeq", "VIXEQ成分股隐含波动", "S&P 500成分股期权的市值加权30日隐含波动，用于观察指数表面之下的个股风险", "^VIXEQ", "Yahoo", "波动率", min_value=5, max_value=150),
+    MetricSpec("cor1m", "COR1M一个月隐含相关性", "S&P 500成分股一个月隐含相关性，用于区分系统性共振与个股离散", "^COR1M", "Yahoo", "波动率", min_value=0, max_value=100),
     MetricSpec("dxy", "美元指数DXY", "美元流动性与全球金融条件的重要代理变量", "DX-Y.NYB", "Yahoo", "外汇", min_value=80, max_value=130, required=True),
     MetricSpec("gbpusd", "英镑兑美元", "非美货币风险偏好与美元强弱的交叉验证", "GBPUSD=X", "Yahoo", "外汇", min_value=0.8, max_value=1.6),
     MetricSpec("usdjpy", "美元兑日元", "利差、套息与美元流动性的综合代理变量", "JPY=X", "Yahoo", "外汇", min_value=90, max_value=180),
@@ -197,6 +202,11 @@ def fetch_market_snapshot() -> MarketSnapshot:
         metrics[spec.key] = metric
         warnings.extend(metric.warnings)
 
+    futures_metrics = _fetch_vix_futures_curve(fetched_at, cache)
+    metrics.update(futures_metrics)
+    for metric in futures_metrics.values():
+        warnings.extend(metric.warnings)
+
     for spec in CNN_SPECS:
         metric = _fetch_with_cache(spec, fetched_at, cache, _fetch_cnn_fear_greed_live)
         metrics[spec.key] = metric
@@ -234,6 +244,57 @@ def fetch_market_snapshot() -> MarketSnapshot:
     as_of = max(latest_dates) if latest_dates else _safe_today()
     warnings.extend(_snapshot_warnings(metrics))
     return MarketSnapshot(as_of=as_of, fetched_at=fetched_at, metrics=metrics, warnings=tuple(dict.fromkeys(warnings)))
+
+
+def _fetch_vix_futures_curve(fetched_at: datetime, cache: dict[str, Any]) -> dict[str, MarketMetric]:
+    specs = [
+        MetricSpec(f"vix_future_{month}", f"VIX期货M{month}", "Cboe VIX期货期限结构", f"VIX{month}", "Cboe", "波动率", min_value=5, max_value=150, cache_days=7)
+        for month in range(1, 4)
+    ]
+    try:
+        request = urllib.request.Request(VIX_TERM_STRUCTURE_URL, headers=DEFAULT_HTTP_HEADERS)
+        with urllib.request.urlopen(request, timeout=20) as response:
+            html = response.read().decode("utf-8", errors="replace").replace('\\"', '"')
+        expirations = {
+            symbol: expiry
+            for symbol, expiry in re.findall(r'"symbol":"(VIX[1-3])","month":\d+,"expirationDate":"([^"]+)"', html)
+        }
+        prices = {
+            symbol: (float(price), price_time)
+            for symbol, price, price_time in re.findall(
+                r'"index_symbol":"(VIX[1-3])"[^}]*?"price":([0-9.]+),"price_time":"([^"]+)"', html
+            )
+        }
+        result: dict[str, MarketMetric] = {}
+        for month, spec in enumerate(specs, start=1):
+            symbol = f"VIX{month}"
+            if symbol not in prices:
+                raise ValueError(f"Cboe payload missing {symbol}")
+            price, price_time = prices[symbol]
+            as_of = datetime.strptime(price_time.split()[0], "%m/%d/%Y").date()
+            metric = MarketMetric(
+                key=spec.key,
+                label=spec.label,
+                description=f"{spec.description}；到期 {expirations.get(symbol, 'N/A')}",
+                symbol=symbol,
+                source="Cboe term structure",
+                value=price,
+                previous_value=None,
+                as_of=as_of,
+                fetched_at=fetched_at,
+                category=spec.category,
+                delayed=True,
+                importance=spec.importance,
+            )
+            metric = _validate_metric(metric, spec)
+            _write_cache_entry(cache, metric)
+            result[spec.key] = metric
+        return result
+    except Exception as exc:
+        return {
+            spec.key: _cache_or_failed(spec, fetched_at, cache, f"Cboe VIX期限结构获取失败：{type(exc).__name__}")
+            for spec in specs
+        }
 
 
 def _fetch_with_cache(spec: MetricSpec, fetched_at: datetime, cache: dict[str, Any], fetcher) -> MarketMetric:

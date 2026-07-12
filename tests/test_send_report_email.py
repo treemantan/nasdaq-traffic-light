@@ -137,6 +137,7 @@ class SendReportEmailTests(unittest.TestCase):
         self.assertIn("Macro Regime Radar：宏观状态雷达", html)
         self.assertIn("background:#0b1017", html)
         self.assertNotIn("<style>", html)
+        self.assertIn("LAYER 1 · DAILY DECISION BRIEF", html)
         self.assertIn("Trump tells crowd to buy a Dell computer", html)
         self.assertIn("DELL", html)
         self.assertIn("市场冲击历史类比", html)

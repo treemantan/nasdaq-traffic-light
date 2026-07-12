@@ -6,6 +6,7 @@ from .data_sources import MarketMetric
 from .etf_monitor import ETFAssetMonitor, ETFMonitor, PortfolioPosition
 from .event_risk_ledger import EventRiskLedger, EventRiskLedgerEntry
 from .mag7_capital_network import Mag7CapitalNetwork
+from .macro_brief import MacroDailyBrief, build_macro_daily_brief
 from .news_monitor import NewsMonitor
 from .options_sentiment import OptionsSentimentMonitor, TickerShortPremiumContext
 from .policy_risk_monitor import PolicyRiskFactor, PolicyRiskMonitor
@@ -39,6 +40,7 @@ def render_email_report(report: ScoredReport) -> str:
     mag7_capital_network = _render_mag7_capital_network(report.mag7_capital_network)
     etf_monitor = _render_etf_monitor(report.etf_monitor, report.news_monitor, report.portfolio_event_monitor)
     technical_swing = _render_technical_swing_email(report.technical_swing)
+    macro_brief = _render_macro_daily_brief_email(build_macro_daily_brief(report))
     accent = report.light_color
 
     return f"""<!doctype html>
@@ -93,6 +95,7 @@ def render_email_report(report: ScoredReport) -> str:
               </table>
             </td>
           </tr>
+          {macro_brief}
           {score_drivers}
           {iron_condor}
           {options_sentiment}
@@ -150,6 +153,28 @@ def render_email_report(report: ScoredReport) -> str:
   </table>
 </body>
 </html>"""
+
+
+def _render_macro_daily_brief_email(brief: MacroDailyBrief) -> str:
+    signals = "".join(
+        f'<div style="margin:5px 0;"><strong style="color:#f3f4f6;">{escape(item.label)} · {escape(item.value)}</strong>'
+        f'<br><span style="color:#9ca3af;font-size:12px;">{escape(item.interpretation)}</span></div>'
+        for item in brief.signals
+    ) or '<span style="color:#9ca3af;">No material daily move available.</span>'
+    actions = "".join(f"<li style=\"margin:4px 0;\">{escape(item)}</li>" for item in brief.actions)
+    invalidations = "".join(f"<li style=\"margin:4px 0;\">{escape(item)}</li>" for item in brief.invalidations)
+    return f"""<tr>
+      <td style="padding:0 24px 18px;">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-top:1px solid #263244;border-bottom:1px solid #263244;">
+          <tr><td colspan="3" style="padding:12px 0 8px;"><span style="font-size:12px;color:#9ca3af;">LAYER 1 · DAILY DECISION BRIEF</span><br><strong style="font-size:20px;color:#f3f4f6;">{escape(brief.posture)}</strong><br><span style="font-size:13px;color:#d1d5db;">{escape(brief.posture_note)}</span></td></tr>
+          <tr>
+            <td width="31%" valign="top" style="padding:10px 12px 12px 0;"><strong style="font-size:12px;color:#9ca3af;">STATE & ANOMALY MOVES</strong><div style="font-size:13px;color:#d1d5db;margin:6px 0;">{escape(brief.score_change)}</div><div style="font-size:12px;color:#d1d5db;margin:6px 0;">{escape(brief.liquidity_summary)}</div><div style="font-size:12px;color:#d1d5db;margin:6px 0;">{escape(brief.volatility_summary)}</div>{signals}<div style="font-size:11px;color:#9ca3af;margin-top:6px;">{escape(brief.anomaly_method)}</div></td>
+            <td width="35%" valign="top" style="padding:10px 12px;border-left:1px solid #263244;"><strong style="font-size:12px;color:#9ca3af;">PORTFOLIO & ACTION EVENT</strong><div style="font-size:13px;color:#d1d5db;margin-top:6px;">{escape(brief.exposure_change)}</div><div style="font-size:13px;color:#f3f4f6;margin-top:8px;"><strong>{escape(brief.action_event)}</strong></div></td>
+            <td width="34%" valign="top" style="padding:10px 0 12px 12px;border-left:1px solid #263244;"><strong style="font-size:12px;color:#9ca3af;">PLAYBOOK & INVALIDATION</strong><ul style="padding-left:18px;color:#d1d5db;font-size:13px;">{actions}</ul><ul style="padding-left:18px;color:#9ca3af;font-size:12px;">{invalidations}</ul></td>
+          </tr>
+        </table>
+      </td>
+    </tr>"""
 
 
 def _render_technical_swing_email(report) -> str:

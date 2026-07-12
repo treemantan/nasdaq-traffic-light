@@ -1,5 +1,7 @@
 # 方法论：评分、相似环境与 MAD 自适应校准
 
+日报的三层信息架构、稳定组件边界与实现日志见 [Macro Report Information Architecture](MACRO_REPORT_INFORMATION_ARCHITECTURE.md)。
+
 技术波段模块的 EMA/SMA、ATR、成交量、pivot 聚类、支撑阻力与失效规则单独记录于 [Technical Swing Analysis](TECHNICAL_SWING.md)，并与 Full、Serenity 报告共享同一份计算结果。
 
 ## 相似环境的目的
