@@ -1390,13 +1390,19 @@ def _render_option_strategy_row(underlying: str, expiry: str, legs: list[dict[st
 def _classify_option_strategy(legs: list[dict[str, object]]) -> str:
     puts = [leg for leg in legs if str(leg.get("right") or "").upper() == "P"]
     calls = [leg for leg in legs if str(leg.get("right") or "").upper() == "C"]
-    if len(puts) == 2:
+    if len(puts) >= 2 and not calls:
         short_puts = [leg for leg in puts if (_option_float(leg.get("signed_contracts")) or 0) < 0]
         long_puts = [leg for leg in puts if (_option_float(leg.get("signed_contracts")) or 0) > 0]
         if short_puts and long_puts:
-            short_strike = _option_float(short_puts[0].get("strike"))
-            long_strike = _option_float(long_puts[0].get("strike"))
-            if short_strike is not None and long_strike is not None and short_strike > long_strike:
+            short_quantity = sum(abs(_option_float(leg.get("signed_contracts")) or 0) for leg in short_puts)
+            long_quantity = sum(_option_float(leg.get("signed_contracts")) or 0 for leg in long_puts)
+            short_strikes = [_option_float(leg.get("strike")) for leg in short_puts]
+            long_strikes = [_option_float(leg.get("strike")) for leg in long_puts]
+            if (
+                abs(short_quantity - long_quantity) < 1e-6
+                and all(strike is not None for strike in short_strikes + long_strikes)
+                and min(short_strikes) > max(long_strikes)
+            ):
                 return "Bull put spread / 牛市看跌价差"
     if len(calls) == 1 and (_option_float(calls[0].get("signed_contracts")) or 0) > 0:
         return "Long call / 买入看涨"
@@ -1412,6 +1418,32 @@ def _option_boundary_text(
     currency = _option_currency(legs)
     multiplier = _option_float(legs[0].get("multiplier")) or 100.0
     if "Bull put spread" in strategy:
+        put_legs = [leg for leg in legs if str(leg.get("right") or "").upper() == "P"]
+        short_puts = [leg for leg in put_legs if (_option_float(leg.get("signed_contracts")) or 0) < 0]
+        long_puts = [leg for leg in put_legs if (_option_float(leg.get("signed_contracts")) or 0) > 0]
+        spread_count = sum(abs(_option_float(leg.get("signed_contracts")) or 0) for leg in short_puts)
+        if len(put_legs) > 2 and spread_count:
+            short_notional = sum(
+                (_option_float(leg.get("strike")) or 0)
+                * abs(_option_float(leg.get("signed_contracts")) or 0)
+                for leg in short_puts
+            )
+            long_notional = sum(
+                (_option_float(leg.get("strike")) or 0)
+                * (_option_float(leg.get("signed_contracts")) or 0)
+                for leg in long_puts
+            )
+            gross_width_value = max((short_notional - long_notional) * multiplier, 0)
+            max_loss = max(gross_width_value - net_cash, 0)
+            count_text = _fmt_option_number(spread_count)
+            if net_cash_gbp is not None and abs(net_cash) > 1e-9:
+                max_loss_gbp = max_loss * abs(net_cash_gbp / net_cash)
+                return (
+                    f"{count_text}组价差；"
+                    f"最大收益约 {_fmt_gbp(net_cash_gbp)}（{_fmt_option_cash_abs(net_cash, currency)}）；"
+                    f"最大亏损约 {_fmt_gbp(max_loss_gbp)}（{_fmt_option_cash_abs(max_loss, currency)}）"
+                )
+            return f"{count_text}组价差；最大收益约 {net_cash:.2f}；最大亏损约 {max_loss:.2f}（原币）"
         short_put = next((leg for leg in legs if str(leg.get("right") or "") == "P" and (_option_float(leg.get("signed_contracts")) or 0) < 0), None)
         long_put = next((leg for leg in legs if str(leg.get("right") or "") == "P" and (_option_float(leg.get("signed_contracts")) or 0) > 0), None)
         if short_put and long_put:

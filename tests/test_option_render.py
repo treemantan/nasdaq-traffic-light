@@ -42,6 +42,33 @@ def test_bull_put_spread_boundary_uses_fee_adjusted_credit() -> None:
     assert "最大亏损约 876.30" in boundary
 
 
+def test_three_bull_put_spreads_with_shared_long_strike_are_classified() -> None:
+    legs = [
+        {"right": "P", "strike": 40.0, "signed_contracts": 3.0},
+        {"right": "P", "strike": 45.0, "signed_contracts": -1.0},
+        {"right": "P", "strike": 50.0, "signed_contracts": -1.0},
+        {"right": "P", "strike": 55.0, "signed_contracts": -1.0},
+    ]
+
+    assert render._classify_option_strategy(legs).startswith("Bull put spread")
+
+
+def test_three_bull_put_spreads_sum_all_widths_for_max_loss() -> None:
+    legs = [
+        {"right": "P", "strike": 40.0, "signed_contracts": 3.0, "multiplier": 100},
+        {"right": "P", "strike": 45.0, "signed_contracts": -1.0, "multiplier": 100},
+        {"right": "P", "strike": 50.0, "signed_contracts": -1.0, "multiplier": 100},
+        {"right": "P", "strike": 55.0, "signed_contracts": -1.0, "multiplier": 100},
+    ]
+    strategy = render._classify_option_strategy(legs)
+
+    boundary = render._option_boundary_text(strategy, legs, net_cash=408.24)
+
+    assert "3组价差" in boundary
+    assert "最大收益约 408.24" in boundary
+    assert "最大亏损约 2591.76" in boundary
+
+
 def test_long_call_boundary_uses_fee_adjusted_debit() -> None:
     legs = [
         {

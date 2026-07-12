@@ -400,7 +400,15 @@ def _extract_ibkr_option_legs(paths: list[Path]) -> list[dict[str, Any]]:
                 "source": "IBKR statement",
                 "fx_rate_to_base": _safe_float(row.get("FxRateToBase")),
             }
-        leg.update(mtm_by_contract.get(key, {}))
+        position_snapshot = mtm_by_contract.get(key)
+        if position_snapshot:
+            # A position snapshot describes the whole current contract position,
+            # not the quantity of this individual execution.  Keep execution
+            # quantity/cashflow intact and carry the position quantity separately.
+            leg.update({name: position_snapshot.get(name) for name in (
+                "mark_price", "market_value_native", "market_value_gbp"
+            )})
+            leg["open_position_signed_contracts"] = position_snapshot.get("signed_contracts")
         legs.append(leg)
     for leg in legs:
         key = _option_contract_key(
@@ -409,7 +417,12 @@ def _extract_ibkr_option_legs(paths: list[Path]) -> list[dict[str, Any]]:
             str(leg.get("right") or ""),
             _safe_float(leg.get("strike")),
         )
-        leg.update(mtm_by_contract.get(key, {}))
+        position_snapshot = mtm_by_contract.get(key)
+        if position_snapshot:
+            leg.update({name: position_snapshot.get(name) for name in (
+                "mark_price", "market_value_native", "market_value_gbp"
+            )})
+            leg["open_position_signed_contracts"] = position_snapshot.get("signed_contracts")
     seen_contracts = {
         _option_contract_key(
             str(leg.get("underlying") or ""),
@@ -517,14 +530,52 @@ def _open_option_legs(option_legs: list[dict[str, Any]]) -> list[dict[str, Any]]
             if str(leg.get("side") or "").upper() == "POSITION"
             or str(leg.get("source") or "").lower().startswith("ibkr open position")
         ]
-        if any(abs(_safe_float(leg.get("signed_contracts")) or 0.0) > 1e-6 for leg in open_positions):
-            open_legs.extend(legs)
-            continue
-
         trade_legs = [leg for leg in legs if str(leg.get("side") or "").upper() in {"BUY", "SELL"}]
         net_contracts = sum(_safe_float(leg.get("signed_contracts")) or 0.0 for leg in trade_legs)
-        if abs(net_contracts) > 1e-6:
-            open_legs.extend(legs)
+        snapshot_quantity = next(
+            (
+                _safe_float(leg.get("signed_contracts"))
+                for leg in open_positions
+                if _safe_float(leg.get("signed_contracts")) is not None
+            ),
+            None,
+        )
+        if snapshot_quantity is None:
+            snapshot_quantity = next(
+                (
+                    _safe_float(leg.get("open_position_signed_contracts"))
+                    for leg in trade_legs
+                    if _safe_float(leg.get("open_position_signed_contracts")) is not None
+                ),
+                None,
+            )
+        current_contracts = snapshot_quantity if snapshot_quantity is not None else net_contracts
+        if abs(current_contracts) <= 1e-6:
+            continue
+
+        # Render and classify one current leg per contract.  Executions remain
+        # useful for cost accounting, but must never appear as duplicate current
+        # positions (for example three 1-lot buys shown as three 3-lot buys).
+        snapshot_leg = open_positions[0] if open_positions else None
+        aggregate = dict(snapshot_leg or trade_legs[-1])
+        aggregate["side"] = "POSITION"
+        aggregate["contracts"] = abs(current_contracts)
+        aggregate["signed_contracts"] = current_contracts
+        aggregate["source"] = "IBKR open position + aggregated executions" if snapshot_quantity is not None else "Aggregated IBKR executions"
+        for field in (
+            "net_cash_native", "net_cash_gbp", "commission_native", "commission_gbp",
+            "net_cash_after_fee_native", "net_cash_after_fee_gbp",
+        ):
+            values = [_safe_float(leg.get(field)) for leg in trade_legs]
+            if any(value is not None for value in values):
+                aggregate[field] = sum(value or 0.0 for value in values)
+
+        if snapshot_leg is None and snapshot_quantity is None:
+            for field in ("market_value_native", "market_value_gbp"):
+                values = [_safe_float(leg.get(field)) for leg in trade_legs]
+                if any(value is not None for value in values):
+                    aggregate[field] = sum(value or 0.0 for value in values)
+        open_legs.append(aggregate)
 
     return sorted(
         open_legs,
