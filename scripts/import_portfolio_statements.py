@@ -355,13 +355,17 @@ def _extract_ibkr_option_legs(paths: list[Path]) -> list[dict[str, Any]]:
             continue
         side = str(row.get("Buy/Sell") or "").strip().upper()
         signed_contracts = quantity if side == "BUY" else -quantity if side == "SELL" else quantity
-        net_cash_native = _safe_float(row.get("NetCash") or row.get("NetCashWithBillable"))
+        reported_net_cash_native = _safe_float(row.get("NetCash") or row.get("NetCashWithBillable"))
+        net_cash_native = _normalized_option_cash(reported_net_cash_native, side)
         net_cash_gbp = (
             _ibkr_amount_in_base_currency(row, net_cash_native, fx_rates_to_base)
             if net_cash_native is not None
             else None
         )
-        commission_native = _safe_float(row.get("Commission") or row.get("IBCommission") or row.get("TradeCommission"))
+        reported_commission_native = _safe_float(
+            row.get("Commission") or row.get("IBCommission") or row.get("TradeCommission")
+        )
+        commission_native = -abs(reported_commission_native) if reported_commission_native is not None else None
         commission_gbp = (
             _ibkr_amount_in_base_currency(row, commission_native, fx_rates_to_base)
             if commission_native is not None
@@ -390,8 +394,10 @@ def _extract_ibkr_option_legs(paths: list[Path]) -> list[dict[str, Any]]:
                 "multiplier": multiplier,
                 "trade_price": trade_price,
                 "currency": str(row.get("Currency") or "").strip().upper(),
+                "reported_net_cash_native": reported_net_cash_native,
                 "net_cash_native": net_cash_native,
                 "net_cash_gbp": net_cash_gbp,
+                "reported_commission_native": reported_commission_native,
                 "commission_native": commission_native,
                 "commission_gbp": commission_gbp,
                 "net_cash_after_fee_native": net_cash_after_fee_native,
@@ -407,7 +413,8 @@ def _extract_ibkr_option_legs(paths: list[Path]) -> list[dict[str, Any]]:
             # not the quantity of this individual execution.  Keep execution
             # quantity/cashflow intact and carry the position quantity separately.
             leg.update({name: position_snapshot.get(name) for name in (
-                "mark_price", "market_value_native", "market_value_gbp"
+                "mark_price", "market_value_native", "market_value_gbp",
+                "unrealized_pnl_native", "unrealized_pnl_gbp",
             )})
             leg["open_position_signed_contracts"] = position_snapshot.get("signed_contracts")
             leg["open_position_date"] = position_snapshot.get("trade_date")
@@ -422,7 +429,8 @@ def _extract_ibkr_option_legs(paths: list[Path]) -> list[dict[str, Any]]:
         position_snapshot = mtm_by_contract.get(key)
         if position_snapshot:
             leg.update({name: position_snapshot.get(name) for name in (
-                "mark_price", "market_value_native", "market_value_gbp"
+                "mark_price", "market_value_native", "market_value_gbp",
+                "unrealized_pnl_native", "unrealized_pnl_gbp",
             )})
             leg["open_position_signed_contracts"] = position_snapshot.get("signed_contracts")
             leg["open_position_date"] = position_snapshot.get("trade_date")
@@ -735,11 +743,34 @@ def _ibkr_option_mtm(
         if market_value_native is not None
         else None
     )
+    unrealized_pnl_native = _safe_float(
+        row.get("FifoPnlUnrealized")
+        or row.get("UnrealizedPnl")
+        or row.get("UnrealizedPnL")
+    )
+    unrealized_pnl_gbp = (
+        _ibkr_amount_in_base_currency(row, unrealized_pnl_native, fx_rates_to_base)
+        if unrealized_pnl_native is not None
+        else None
+    )
     return {
         "mark_price": mark_price,
         "market_value_native": market_value_native,
         "market_value_gbp": market_value_gbp,
+        "unrealized_pnl_native": unrealized_pnl_native,
+        "unrealized_pnl_gbp": unrealized_pnl_gbp,
     }
+
+
+def _normalized_option_cash(value: float | None, side: str) -> float | None:
+    if value is None:
+        return None
+    normalized_side = side.strip().upper()
+    if normalized_side == "SELL":
+        return abs(value)
+    if normalized_side == "BUY":
+        return -abs(value)
+    return value
 
 
 _YAHOO_OPTION_CACHE: dict[tuple[str, str], dict[str, Any] | None] = {}
@@ -1125,6 +1156,7 @@ def _normalize_ibkr_csv_row(row: dict[str, str]) -> dict[str, str]:
         "MarkPrice": pick("MarkPrice", "Mark", "MarketPrice", "ClosePrice", "LastPrice"),
         "ClosePrice": pick("ClosePrice", "LastPrice"),
         "MarketValue": pick("MarketValue", "PositionValue", "Value"),
+        "FifoPnlUnrealized": pick("FifoPnlUnrealized", "FIFO PnL Unrealized", "UnrealizedPnl", "Unrealized PnL"),
         "Position": pick("Position", "Quantity"),
     }
 
@@ -1194,6 +1226,7 @@ def _normalize_ibkr_xml_row(attrs: dict[str, str], *, row_kind: str) -> dict[str
             "MarkPrice": pick("markPrice", "mark", "marketPrice", "closePrice", "lastPrice"),
             "ClosePrice": pick("closePrice", "lastPrice"),
             "MarketValue": pick("marketValue", "positionValue", "value"),
+            "FifoPnlUnrealized": pick("fifoPnlUnrealized", "unrealizedPnl"),
             "Position": pick("position", "quantity"),
         }
     if row_kind == "OPTION_LIFECYCLE":

@@ -1395,7 +1395,13 @@ def _render_option_strategy_row(underlying: str, expiry: str, legs: list[dict[st
     net_cash_gbp = sum(_option_cash_after_fee_gbp(leg) for leg in legs)
     market_value_native = _option_group_market_value_native(legs)
     market_value_gbp = _option_group_market_value_gbp(legs)
-    mtm_pnl_gbp = net_cash_gbp + market_value_gbp if market_value_gbp is not None else None
+    ibkr_unrealized_pnl_gbp = _option_group_unrealized_pnl_gbp(legs)
+    mtm_pnl_gbp = (
+        ibkr_unrealized_pnl_gbp
+        if ibkr_unrealized_pnl_gbp is not None
+        else net_cash_gbp + market_value_gbp if market_value_gbp is not None else None
+    )
+    mtm_pnl_source = "IBKR" if ibkr_unrealized_pnl_gbp is not None else "估算"
     boundary = _option_boundary_text(strategy, legs, net_cash, net_cash_gbp)
     mtm_line = (
         f"当前MTM {escape(_fmt_signed_gbp(market_value_gbp))}"
@@ -1405,7 +1411,7 @@ def _render_option_strategy_row(underlying: str, expiry: str, legs: list[dict[st
     if market_value_native is not None:
         mtm_line += f"；原币 {escape(_fmt_option_cash(market_value_native, currency))}"
     pnl_line = (
-        f"MTM未实现 {escape(_fmt_signed_gbp(mtm_pnl_gbp))}"
+        f"MTM未实现（{mtm_pnl_source}） {escape(_fmt_signed_gbp(mtm_pnl_gbp))}"
         if mtm_pnl_gbp is not None
         else "MTM未实现待确认"
     )
@@ -1614,6 +1620,13 @@ def _option_group_market_value_gbp(legs: list[dict[str, object]]) -> float | Non
     values = [_option_float(leg.get("market_value_gbp")) for leg in legs]
     present = [value for value in values if value is not None]
     return sum(present) if present else None
+
+
+def _option_group_unrealized_pnl_gbp(legs: list[dict[str, object]]) -> float | None:
+    values = [_option_float(leg.get("unrealized_pnl_gbp")) for leg in legs]
+    if not values or any(value is None for value in values):
+        return None
+    return sum(value or 0.0 for value in values)
 
 
 def _option_float(value: object) -> float | None:
