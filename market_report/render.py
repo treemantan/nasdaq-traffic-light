@@ -1729,7 +1729,7 @@ def _render_closed_option_trade_breakdown(performance) -> str:
         f"""<tr>
           <td><strong>{escape(item.underlying)}</strong><br><span class="portfolio-scope">{escape(_closed_option_contract_label(item))}</span></td>
           <td>{escape(item.expiry or 'N/A')}</td>
-          <td>{escape(item.opened_at or 'N/A')} → {escape(item.closed_at or 'N/A')}<br><span class="portfolio-scope">{escape(str(item.legs))} 条成交腿</span></td>
+          <td>{escape(item.opened_at or 'N/A')} → {escape(item.closed_at or 'N/A')}<br><span class="portfolio-scope">{escape(str(item.legs))} 笔成交记录</span></td>
           <td>{escape(_fmt_option_cash(item.realized_pnl_native or 0.0, item.currency))}</td>
           <td class="{_pnl_class(item.realized_pnl_gbp)}">{escape(_fmt_signed_gbp(item.realized_pnl_gbp))}</td>
         </tr>"""

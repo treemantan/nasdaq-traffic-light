@@ -72,6 +72,7 @@ class PortfolioClosedOptionRenderTests(unittest.TestCase):
         html = _render_closed_option_trade_breakdown(performance)
 
         self.assertIn("已平仓期权现金流归因", html)
+        self.assertIn("笔成交记录", html)
         self.assertIn("NFLX", html)
         self.assertIn("70P", html)
         self.assertIn("+USD 100.00", html)

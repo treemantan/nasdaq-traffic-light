@@ -398,6 +398,7 @@ def _extract_ibkr_option_legs(paths: list[Path]) -> list[dict[str, Any]]:
                 "net_cash_after_fee_gbp": net_cash_after_fee_gbp,
                 "trade_date": _format_ibkr_date(str(row.get("TradeDate") or row.get("Date/Time") or "")),
                 "source": "IBKR statement",
+                "_statement_role": str(row.get("_statement_role") or ""),
                 "fx_rate_to_base": _safe_float(row.get("FxRateToBase")),
             }
         position_snapshot = mtm_by_contract.get(key)
@@ -409,6 +410,7 @@ def _extract_ibkr_option_legs(paths: list[Path]) -> list[dict[str, Any]]:
                 "mark_price", "market_value_native", "market_value_gbp"
             )})
             leg["open_position_signed_contracts"] = position_snapshot.get("signed_contracts")
+            leg["open_position_date"] = position_snapshot.get("trade_date")
         legs.append(leg)
     for leg in legs:
         key = _option_contract_key(
@@ -423,6 +425,7 @@ def _extract_ibkr_option_legs(paths: list[Path]) -> list[dict[str, Any]]:
                 "mark_price", "market_value_native", "market_value_gbp"
             )})
             leg["open_position_signed_contracts"] = position_snapshot.get("signed_contracts")
+            leg["open_position_date"] = position_snapshot.get("trade_date")
     seen_contracts = {
         _option_contract_key(
             str(leg.get("underlying") or ""),
@@ -471,13 +474,8 @@ def _closed_option_realized_summary(option_legs: list[dict[str, Any]]) -> dict[s
         ]
         if not trade_legs:
             continue
-        open_positions = [
-            leg
-            for leg in legs
-            if str(leg.get("side") or "").upper() == "POSITION"
-            or str(leg.get("source") or "").lower().startswith("ibkr open position")
-        ]
-        if any(abs(_safe_float(leg.get("signed_contracts")) or 0.0) > 1e-6 for leg in open_positions):
+        current_contracts, _snapshot_quantity = _current_option_contracts(legs)
+        if abs(current_contracts) > 1e-6:
             continue
         net_contracts = sum(_safe_float(leg.get("signed_contracts")) or 0.0 for leg in trade_legs)
         if abs(net_contracts) > 1e-6:
@@ -509,6 +507,48 @@ def _closed_option_realized_summary(option_legs: list[dict[str, Any]]) -> dict[s
     }
 
 
+def _current_option_contracts(legs: list[dict[str, Any]]) -> tuple[float, float | None]:
+    open_positions = [
+        leg
+        for leg in legs
+        if str(leg.get("side") or "").upper() == "POSITION"
+        or str(leg.get("source") or "").lower().startswith("ibkr open position")
+    ]
+    trade_legs = [leg for leg in legs if str(leg.get("side") or "").upper() in {"BUY", "SELL"}]
+    net_contracts = sum(_safe_float(leg.get("signed_contracts")) or 0.0 for leg in trade_legs)
+
+    snapshots = [
+        (
+            str(leg.get("trade_date") or ""),
+            _safe_float(leg.get("signed_contracts")),
+        )
+        for leg in open_positions
+        if _safe_float(leg.get("signed_contracts")) is not None
+    ]
+    if not snapshots:
+        snapshots = [
+            (
+                str(leg.get("open_position_date") or ""),
+                _safe_float(leg.get("open_position_signed_contracts")),
+            )
+            for leg in trade_legs
+            if _safe_float(leg.get("open_position_signed_contracts")) is not None
+        ]
+    if not snapshots:
+        return net_contracts, None
+
+    snapshot_date, snapshot_quantity = max(snapshots, key=lambda item: item[0])
+    current_contracts = snapshot_quantity or 0.0
+    if snapshot_date:
+        current_contracts += sum(
+            _safe_float(leg.get("signed_contracts")) or 0.0
+            for leg in trade_legs
+            if str(leg.get("_statement_role") or "") == "trade"
+            and str(leg.get("trade_date") or "") > snapshot_date
+        )
+    return current_contracts, snapshot_quantity
+
+
 def _open_option_legs(option_legs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     by_contract: dict[tuple[str, str, str, float | None], list[dict[str, Any]]] = defaultdict(list)
     for leg in option_legs:
@@ -531,25 +571,7 @@ def _open_option_legs(option_legs: list[dict[str, Any]]) -> list[dict[str, Any]]
             or str(leg.get("source") or "").lower().startswith("ibkr open position")
         ]
         trade_legs = [leg for leg in legs if str(leg.get("side") or "").upper() in {"BUY", "SELL"}]
-        net_contracts = sum(_safe_float(leg.get("signed_contracts")) or 0.0 for leg in trade_legs)
-        snapshot_quantity = next(
-            (
-                _safe_float(leg.get("signed_contracts"))
-                for leg in open_positions
-                if _safe_float(leg.get("signed_contracts")) is not None
-            ),
-            None,
-        )
-        if snapshot_quantity is None:
-            snapshot_quantity = next(
-                (
-                    _safe_float(leg.get("open_position_signed_contracts"))
-                    for leg in trade_legs
-                    if _safe_float(leg.get("open_position_signed_contracts")) is not None
-                ),
-                None,
-            )
-        current_contracts = snapshot_quantity if snapshot_quantity is not None else net_contracts
+        current_contracts, snapshot_quantity = _current_option_contracts(legs)
         if abs(current_contracts) <= 1e-6:
             continue
 
@@ -989,7 +1011,9 @@ def _unique_ibkr_rows(paths: list[Path]) -> tuple[list[dict[str, str]], int]:
     seen_identifiers: set[tuple[str, ...]] = set()
     duplicate_count = 0
     for path in paths:
+        statement_role = _ibkr_statement_role(path)
         for row in _iter_ibkr_rows(path):
+            row = {**row, "_statement_role": statement_role}
             level = str(row.get("LevelOfDetail") or "").upper()
             if level not in {"EXECUTION", "POSITION"}:
                 continue
