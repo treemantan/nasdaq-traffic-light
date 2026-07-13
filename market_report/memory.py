@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from .option_portfolio import option_closeout_snapshot
+
 
 STATE_FILENAME = "narrative_state.json"
 CACHE_DIRECTORY = "cache"
@@ -50,7 +52,11 @@ def load_metric_history(output_dir: Path, before_date: str | None = None) -> lis
     data = load_previous_state(output_dir)
     rows = data.get("history") or []
     return [
-        {"report_date": item.get("report_date"), "metrics": item.get("metrics") or {}}
+        {
+            "report_date": item.get("report_date"),
+            "metrics": item.get("metrics") or {},
+            "option_closeout": item.get("option_closeout") or {},
+        }
         for item in rows
         if isinstance(item, dict)
         and isinstance(item.get("report_date"), str)
@@ -96,19 +102,21 @@ def save_current_state(output_dir: Path, report: object) -> None:
         if entry.portfolio_symbols
     ]
     etf_monitor = getattr(report, "etf_monitor", None)
+    portfolio_positions = list(getattr(etf_monitor, "portfolio_positions", ()) or ())
     portfolio = [
         {"symbol": item.symbol, "weight_pct": item.weight_pct}
-        for item in (getattr(etf_monitor, "portfolio_positions", ()) or ())
+        for item in portfolio_positions
     ]
     regime = getattr(report, "regime", None)
     payload = {
-        "version": 2,
+        "version": 3,
         "report_date": getattr(report, "report_date", ""),
         "regime": getattr(regime, "name", ""),
         "summary": getattr(report, "summary", ""),
         "overall_score": getattr(report, "overall_score", None),
         "metrics": metric_values,
         "portfolio": portfolio,
+        "option_closeout": option_closeout_snapshot(portfolio_positions),
         "event_exposures": event_exposures,
     }
     existing = load_previous_state(output_dir)

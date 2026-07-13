@@ -41,7 +41,24 @@ def test_structured_state_saves_score_metrics_portfolio_and_event_exposure(tmp_p
         regime=SimpleNamespace(name="Higher for Longer"),
         metrics={"vix": SimpleNamespace(metric=metric)},
         etf_monitor=SimpleNamespace(
-            portfolio_positions=[SimpleNamespace(symbol="NVDA", weight_pct=7.5)]
+            portfolio_positions=[
+                SimpleNamespace(
+                    symbol="NVDA",
+                    weight_pct=7.5,
+                    option_legs_json=json.dumps(
+                        [
+                            {
+                                "underlying": "DRAM",
+                                "expiry": "2026-07-24",
+                                "right": "P",
+                                "strike": 60.5,
+                                "signed_contracts": -1,
+                                "unrealized_pnl_gbp": 39.28,
+                            }
+                        ]
+                    ),
+                )
+            ]
         ),
         event_risk_ledger=SimpleNamespace(
             entries=[
@@ -62,10 +79,12 @@ def test_structured_state_saves_score_metrics_portfolio_and_event_exposure(tmp_p
 
     assert (tmp_path / "cache" / "narrative_state.json").exists()
     assert not (tmp_path / "narrative_state.json").exists()
-    assert state["version"] == 2
+    assert state["version"] == 3
     assert state["overall_score"] == 58
     assert state["metrics"]["vix"]["change_pct"] == 12.5
     assert state["portfolio"] == [{"symbol": "NVDA", "weight_pct": 7.5}]
+    assert state["option_closeout"]["total_gbp"] == 39.28
+    assert state["option_closeout"]["source"] == "IBKR"
     assert state["event_exposures"][0]["risk_score"] == 72
 
 
@@ -100,5 +119,5 @@ def test_previous_state_uses_prior_day_when_same_day_runs_exist(tmp_path) -> Non
     assert previous["report_date"] == "2026-07-10"
     assert previous["overall_score"] == 55
     assert load_metric_history(tmp_path, before_date="2026-07-12") == [
-        {"report_date": "2026-07-10", "metrics": {}}
+        {"report_date": "2026-07-10", "metrics": {}, "option_closeout": {}}
     ]

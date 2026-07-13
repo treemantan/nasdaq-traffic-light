@@ -240,6 +240,72 @@ def test_option_panel_sums_open_strategy_net_premium_after_long_leg_cost() -> No
     assert "+£90.00" in html
 
 
+def test_option_closeout_summary_sums_ibkr_and_estimated_unrealized_pnl() -> None:
+    groups = {
+        ("DRAM", "2026-07-24"): [
+            {
+                "unrealized_pnl_gbp": 39.28,
+                "market_value_gbp": -257.53,
+                "net_cash_after_fee_gbp": 296.81,
+            }
+        ],
+        ("RKLB", "2026-08-14"): [
+            {
+                "market_value_gbp": -120.0,
+                "net_cash_after_fee_gbp": 100.0,
+            }
+        ],
+    }
+
+    html = render._render_open_option_closeout_summary(groups)
+
+    assert "当前全部期权平仓损益估算" in html
+    assert "+£19.28" in html
+    assert "混合" in html
+    assert "2/2" in html
+    assert "手续费、买卖价差与滑点" in html
+
+
+def test_option_closeout_summary_discloses_partial_coverage() -> None:
+    groups = {
+        ("DRAM", "2026-07-24"): [{"unrealized_pnl_gbp": 39.28}],
+        ("UNKNOWN", "2026-08-14"): [{}],
+    }
+
+    html = render._render_open_option_closeout_summary(groups)
+
+    assert "当前可估期权平仓损益" in html
+    assert "1/2" in html
+
+
+def test_option_closeout_summary_shows_one_to_three_report_day_changes() -> None:
+    groups = {
+        ("DRAM", "2026-07-24"): [
+            {
+                "right": "P",
+                "strike": 60.5,
+                "signed_contracts": -1,
+                "unrealized_pnl_gbp": 19.28,
+            }
+        ]
+    }
+    current = render.option_closeout_snapshot_from_groups(groups)
+    signature = current["position_signature"]
+    history = [
+        {"report_date": "2026-07-10", "option_closeout": {"total_gbp": 10.0, "position_signature": signature}},
+        {"report_date": "2026-07-11", "option_closeout": {"total_gbp": 15.0, "position_signature": ["old-position"]}},
+        {"report_date": "2026-07-12", "option_closeout": {"total_gbp": 20.0, "position_signature": signature}},
+    ]
+
+    html = render._render_open_option_closeout_summary(groups, history)
+
+    assert "1D -£0.72" in html
+    assert "2D +£4.28*" in html
+    assert "3D +£9.28" in html
+    assert "含仓位组成变化" in html
+    assert "D=报告日" in html
+
+
 def test_option_leg_row_displays_mark_and_signed_mtm() -> None:
     leg = {
         "symbol": "NFLX 260724P00070000",

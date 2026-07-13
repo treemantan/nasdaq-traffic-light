@@ -11,6 +11,7 @@ from .etf_monitor import ETFAssetMonitor, ETFMonitor, PortfolioPosition
 from .mag7_capital_network import AggregateCapitalDisclosure, CapitalRelation, Mag7CapitalNetwork
 from .macro_brief import MacroDailyBrief, build_macro_daily_brief
 from .news_monitor import NewsEvent, NewsMonitor
+from .option_portfolio import option_closeout_snapshot_from_groups
 from .options_gamma import OptionGammaAssessment, OptionsGammaMonitor
 from .options_sentiment import OptionsSentimentMonitor, TickerShortPremiumContext
 from .policy_risk_monitor import PolicyRiskFactor, PolicyRiskMonitor
@@ -46,7 +47,12 @@ def render_html_report(report: ScoredReport, title: str) -> str:
     event_risk_ledger = _render_event_risk_ledger(report.event_risk_ledger)
     news_monitor = _render_news_monitor(report.news_monitor)
     mag7_capital_network = _render_mag7_capital_network(report.mag7_capital_network)
-    etf_monitor = _render_etf_monitor(report.etf_monitor, report.news_monitor, report.portfolio_event_monitor)
+    etf_monitor = _render_etf_monitor(
+        report.etf_monitor,
+        report.news_monitor,
+        report.portfolio_event_monitor,
+        report.metric_history,
+    )
     technical_swing = _render_technical_swing(report.technical_swing)
     options_sentiment = _render_options_sentiment(report.options_sentiment)
     options_gamma = _render_options_gamma(report.options_gamma)
@@ -1157,6 +1163,7 @@ def _render_etf_monitor(
     monitor: ETFMonitor | None,
     news_monitor: NewsMonitor | None = None,
     portfolio_event_monitor: PortfolioEventMonitor | None = None,
+    option_history: list[dict] | None = None,
 ) -> str:
     if monitor is None:
         return ""
@@ -1165,7 +1172,7 @@ def _render_etf_monitor(
     if monitor.warnings:
         warnings = "<div class=\"small-note\">数据提示：" + escape(_summarize_etf_warnings(monitor.warnings)) + "</div>"
     changes = _render_etf_notes("今日ETF变动摘要", monitor.change_summary)
-    portfolio = _render_portfolio_panel(monitor, news_monitor, portfolio_event_monitor)
+    portfolio = _render_portfolio_panel(monitor, news_monitor, portfolio_event_monitor, option_history)
     sensitivities = _render_sensitivity_panel(monitor)
     return f"""<section class="panel">
       <h2>UK ETF估值、趋势与拥挤度监控器</h2>
@@ -1183,6 +1190,7 @@ def _render_portfolio_panel(
     monitor: ETFMonitor,
     news_monitor: NewsMonitor | None = None,
     portfolio_event_monitor: PortfolioEventMonitor | None = None,
+    option_history: list[dict] | None = None,
 ) -> str:
     if not monitor.portfolio_positions:
         return _render_etf_notes("实际组合视角", monitor.portfolio_summary + monitor.portfolio_warnings)
@@ -1219,7 +1227,7 @@ def _render_portfolio_panel(
         else ""
     )
     performance_panel = _render_portfolio_performance(monitor)
-    option_panel = _render_option_risk_panel(monitor.portfolio_positions)
+    option_panel = _render_option_risk_panel(monitor.portfolio_positions, option_history)
     event_panel = _render_portfolio_event_calendar(portfolio_event_monitor)
     event_panel += _render_portfolio_event_review(monitor.portfolio_positions, news_monitor)
     total = _fmt_gbp(monitor.portfolio_total_value_gbp)
@@ -1251,7 +1259,10 @@ def _render_portfolio_panel(
     </div>"""
 
 
-def _render_option_risk_panel(positions: list[PortfolioPosition]) -> str:
+def _render_option_risk_panel(
+    positions: list[PortfolioPosition],
+    option_history: list[dict] | None = None,
+) -> str:
     legs = _portfolio_option_legs(positions)
     lifecycle_events = _portfolio_option_lifecycle_events(positions)
     if not legs and not lifecycle_events:
@@ -1275,9 +1286,11 @@ def _render_option_risk_panel(positions: list[PortfolioPosition]) -> str:
     )
     lifecycle_status = _render_option_lifecycle_status(lifecycle_events)
     open_premium_summary = _render_open_option_premium_summary(legs)
+    closeout_summary = _render_open_option_closeout_summary(groups, option_history)
     return f"""<div class="portfolio-notes">
       {lifecycle_status}
       {open_premium_summary}
+      {closeout_summary}
       <strong>IBKR期权风险（成本与结构识别）</strong>
       <div class="small-note">期权已从普通股票/ETF持仓中剥离。当前使用IBKR statement成交现金流识别成本、方向、到期与行权价；如Flex/OpenPosition提供mark或market value，则显示当前MTM。delta、gamma、theta、vega和POP仍需要IBKR期权行情或模型输入，未取得时不做伪精确估算。</div>
       <div class="portfolio-table-scroll">
@@ -1311,6 +1324,64 @@ def _render_open_option_premium_summary(legs: list[dict[str, object]]) -> str:
         'spread 已扣除 long legs 成本。不等同于已实现收益，若到期归零且未被执行/指派才可全部保留。</span>'
         '</div></div>'
     )
+
+
+def _render_open_option_closeout_summary(
+    groups: dict[tuple[str, str], list[dict[str, object]]],
+    option_history: list[dict] | None = None,
+) -> str:
+    if not groups:
+        return ""
+    snapshot = option_closeout_snapshot_from_groups(groups)
+    total = _option_float(snapshot.get("total_gbp"))
+    if total is None:
+        return ""
+    source_label = str(snapshot.get("source") or "缺失")
+    available_groups = int(snapshot.get("available_groups") or 0)
+    total_groups = int(snapshot.get("total_groups") or 0)
+    complete = bool(snapshot.get("complete"))
+    title = "当前全部期权平仓损益估算" if complete else "当前可估期权平仓损益"
+    coverage = f"{available_groups}/{total_groups} 组策略"
+    history_html = _render_option_closeout_changes(snapshot, option_history or [])
+    return (
+        '<div class="portfolio-exposure-grid" style="margin-top:8px;">'
+        '<div class="portfolio-exposure">'
+        f'<span class="muted">{title}</span>'
+        f'<strong class="{_pnl_class(total)}">{escape(_fmt_signed_gbp(total))}</strong>'
+        f'<span class="portfolio-scope">来源：{escape(source_label)}；覆盖 {coverage}。'
+        '按当前 mark/market value 粗估，尚未扣除新产生的平仓手续费、买卖价差与滑点。</span>'
+        f'{history_html}'
+        '</div></div>'
+    )
+
+
+def _render_option_closeout_changes(current: dict[str, object], history: list[dict]) -> str:
+    current_total = _option_float(current.get("total_gbp"))
+    if current_total is None:
+        return ""
+    comparable = []
+    for item in sorted(history, key=lambda row: str(row.get("report_date") or "")):
+        snapshot = item.get("option_closeout")
+        if not isinstance(snapshot, dict):
+            continue
+        historical_total = _option_float(snapshot.get("total_gbp"))
+        if historical_total is not None:
+            comparable.append((historical_total, snapshot))
+    if not comparable:
+        return '<span class="portfolio-scope">1–3D变化：历史待积累。</span>'
+    current_signature = current.get("position_signature")
+    changes = []
+    position_changed = False
+    for days, (historical_total, snapshot) in enumerate(reversed(comparable[-3:]), start=1):
+        delta = current_total - historical_total
+        historical_signature = snapshot.get("position_signature")
+        changed = bool(current_signature and historical_signature and current_signature != historical_signature)
+        position_changed = position_changed or changed
+        marker = "*" if changed else ""
+        changes.append(f"{days}D {escape(_fmt_signed_gbp(delta))}{marker}")
+    change_text = " · ".join(changes)
+    note = "；* 含仓位组成变化" if position_changed else ""
+    return f'<span class="portfolio-scope">总MTM未实现变化：{change_text}{note}（D=报告日）。</span>'
 
 
 def _portfolio_option_legs(positions: list[PortfolioPosition]) -> list[dict[str, object]]:
@@ -1395,13 +1466,7 @@ def _render_option_strategy_row(underlying: str, expiry: str, legs: list[dict[st
     net_cash_gbp = sum(_option_cash_after_fee_gbp(leg) for leg in legs)
     market_value_native = _option_group_market_value_native(legs)
     market_value_gbp = _option_group_market_value_gbp(legs)
-    ibkr_unrealized_pnl_gbp = _option_group_unrealized_pnl_gbp(legs)
-    mtm_pnl_gbp = (
-        ibkr_unrealized_pnl_gbp
-        if ibkr_unrealized_pnl_gbp is not None
-        else net_cash_gbp + market_value_gbp if market_value_gbp is not None else None
-    )
-    mtm_pnl_source = "IBKR" if ibkr_unrealized_pnl_gbp is not None else "估算"
+    mtm_pnl_gbp, mtm_pnl_source = _option_group_unrealized_result(legs)
     boundary = _option_boundary_text(strategy, legs, net_cash, net_cash_gbp)
     mtm_line = (
         f"当前MTM {escape(_fmt_signed_gbp(market_value_gbp))}"
@@ -1627,6 +1692,17 @@ def _option_group_unrealized_pnl_gbp(legs: list[dict[str, object]]) -> float | N
     if not values or any(value is None for value in values):
         return None
     return sum(value or 0.0 for value in values)
+
+
+def _option_group_unrealized_result(legs: list[dict[str, object]]) -> tuple[float | None, str]:
+    ibkr_unrealized_pnl_gbp = _option_group_unrealized_pnl_gbp(legs)
+    if ibkr_unrealized_pnl_gbp is not None:
+        return ibkr_unrealized_pnl_gbp, "IBKR"
+    market_value_gbp = _option_group_market_value_gbp(legs)
+    if market_value_gbp is None:
+        return None, "缺失"
+    net_cash_gbp = sum(_option_cash_after_fee_gbp(leg) for leg in legs)
+    return net_cash_gbp + market_value_gbp, "估算"
 
 
 def _option_float(value: object) -> float | None:
