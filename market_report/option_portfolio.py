@@ -60,6 +60,9 @@ def _group_unrealized_result(legs: list[dict[str, Any]]) -> tuple[float | None, 
 
 
 def _cash_after_fee_gbp(leg: dict[str, Any]) -> float:
+    open_premium = _num(leg.get("open_net_premium_gbp"))
+    if open_premium is not None:
+        return open_premium
     value = _num(leg.get("net_cash_after_fee_gbp"))
     if value is not None:
         return value

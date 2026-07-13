@@ -21,6 +21,7 @@ class PortfolioClosedOptionRenderTests(unittest.TestCase):
                 "right": "P",
                 "strike": 70,
                 "legs": 2,
+                "contracts_closed": 1,
                 "opened_at": "2026-06-16",
                 "closed_at": "2026-06-22",
                 "currency": "USD",
@@ -49,6 +50,7 @@ class PortfolioClosedOptionRenderTests(unittest.TestCase):
         self.assertEqual(len(performance.closed_option_trades), 1)
         self.assertEqual(performance.closed_option_trades[0].underlying, "NFLX")
         self.assertAlmostEqual(performance.closed_option_trades[0].realized_pnl_gbp, 74.5)
+        self.assertEqual(performance.closed_option_trades[0].contracts_closed, 1)
 
     def test_closed_option_breakdown_is_rendered_separately_from_stock_fifo(self) -> None:
         performance = PortfolioPerformance(
@@ -65,6 +67,7 @@ class PortfolioClosedOptionRenderTests(unittest.TestCase):
                     currency="USD",
                     realized_pnl_native=100.0,
                     realized_pnl_gbp=74.5,
+                    contracts_closed=1,
                 ),
             ),
         )
@@ -72,7 +75,7 @@ class PortfolioClosedOptionRenderTests(unittest.TestCase):
         html = _render_closed_option_trade_breakdown(performance)
 
         self.assertIn("已平仓期权现金流归因", html)
-        self.assertIn("笔成交记录", html)
+        self.assertIn("已平仓 1 张；2 条成交（开仓+平仓）", html)
         self.assertIn("NFLX", html)
         self.assertIn("70P", html)
         self.assertIn("+USD 100.00", html)
