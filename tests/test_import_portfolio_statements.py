@@ -385,6 +385,45 @@ class ImportPortfolioStatementsTests(unittest.TestCase):
         self.assertEqual(len(open_legs), 1)
         self.assertEqual(open_legs[0]["signed_contracts"], -1.0)
 
+    def test_option_position_summary_wins_over_same_day_tax_lots(self) -> None:
+        activity = """<?xml version="1.0" encoding="UTF-8"?>
+<FlexQueryResponse>
+  <FlexStatements>
+    <FlexStatement accountId="U1" fromDate="20260710" toDate="20260710">
+      <OpenPositions>
+        <OpenPosition assetCategory="OPT" symbol="DRAM 260807P00040000"
+          underlyingSymbol="DRAM" reportDate="20260710" position="3"
+          positionValue="180" fifoPnlUnrealized="-54" currency="USD"
+          multiplier="100" levelOfDetail="SUMMARY" />
+        <OpenPosition assetCategory="OPT" symbol="DRAM 260807P00040000"
+          underlyingSymbol="DRAM" reportDate="20260710" position="1"
+          positionValue="60" fifoPnlUnrealized="-52" currency="USD"
+          multiplier="100" levelOfDetail="LOT" />
+        <OpenPosition assetCategory="OPT" symbol="DRAM 260807P00040000"
+          underlyingSymbol="DRAM" reportDate="20260710" position="1"
+          positionValue="60" fifoPnlUnrealized="-6" currency="USD"
+          multiplier="100" levelOfDetail="LOT" />
+        <OpenPosition assetCategory="OPT" symbol="DRAM 260807P00040000"
+          underlyingSymbol="DRAM" reportDate="20260710" position="1"
+          positionValue="60" fifoPnlUnrealized="4" currency="USD"
+          multiplier="100" levelOfDetail="LOT" />
+      </OpenPositions>
+    </FlexStatement>
+  </FlexStatements>
+</FlexQueryResponse>
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "ibkr-activity.xml"
+            path.write_text(activity, encoding="utf-8")
+
+            option_legs = MODULE._extract_ibkr_option_legs([path])
+            open_legs = MODULE._open_option_legs(option_legs)
+
+        self.assertEqual(len(open_legs), 1)
+        self.assertEqual(open_legs[0]["signed_contracts"], 3.0)
+        self.assertEqual(open_legs[0]["market_value_native"], 180.0)
+        self.assertEqual(open_legs[0]["unrealized_pnl_native"], -54.0)
+
     def test_trade_confirmation_can_flatten_prior_activity_snapshot(self) -> None:
         legs = [
             {
