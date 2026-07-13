@@ -282,6 +282,101 @@ class ImportPortfolioStatementsTests(unittest.TestCase):
         self.assertEqual(rows[0]["account_total_return_gbp"], "266.5000")
         self.assertIn("closed_option_trades_json", rows[0])
 
+    def test_nonzero_carried_open_position_is_not_reported_as_closed(self) -> None:
+        legs = [
+            {
+                "underlying": "DRAM", "expiry": "2026-07-24", "right": "P", "strike": 60.5,
+                "side": "SELL", "signed_contracts": -1.0,
+                "open_position_signed_contracts": -1.0, "net_cash_after_fee_gbp": 150.0,
+                "trade_date": "2026-06-22",
+            },
+            {
+                "underlying": "DRAM", "expiry": "2026-07-24", "right": "P", "strike": 60.5,
+                "side": "BUY", "signed_contracts": 1.0,
+                "open_position_signed_contracts": -1.0, "net_cash_after_fee_gbp": -100.0,
+                "trade_date": "2026-07-13",
+            },
+        ]
+
+        summary = MODULE._closed_option_realized_summary(legs)
+
+        self.assertEqual(summary["closed_options"], [])
+        self.assertEqual(summary["realized_pnl_gbp"], 0.0)
+
+    def test_trade_confirmation_after_snapshot_updates_old_open_quantity(self) -> None:
+        legs = [
+            {
+                "underlying": "DRAM", "expiry": "2026-07-31", "right": "P", "strike": 40.0,
+                "side": "POSITION", "signed_contracts": -5.0, "contracts": 5.0,
+                "trade_date": "2026-07-12", "source": "IBKR open position",
+            },
+            {
+                "underlying": "DRAM", "expiry": "2026-07-31", "right": "P", "strike": 40.0,
+                "side": "BUY", "signed_contracts": 4.0, "contracts": 4.0,
+                "trade_date": "2026-07-13", "_statement_role": "trade",
+                "net_cash_after_fee_native": -100.0,
+            },
+        ]
+
+        open_legs = MODULE._open_option_legs(legs)
+
+        self.assertEqual(len(open_legs), 1)
+        self.assertEqual(open_legs[0]["signed_contracts"], -1.0)
+
+    def test_extracted_trade_confirmation_updates_prior_activity_snapshot(self) -> None:
+        activity = """<?xml version="1.0" encoding="UTF-8"?>
+<FlexQueryResponse>
+  <FlexStatements>
+    <FlexStatement accountId="U1" fromDate="20260712" toDate="20260712">
+      <OpenPositions>
+        <OpenPosition assetCategory="OPT" symbol="DRAM 260731P00040000"
+          underlyingSymbol="DRAM" reportDate="20260712" position="-5"
+          currency="USD" multiplier="100" levelOfDetail="POSITION" />
+      </OpenPositions>
+    </FlexStatement>
+  </FlexStatements>
+</FlexQueryResponse>
+"""
+        trade_confirmation = """<?xml version="1.0" encoding="UTF-8"?>
+<FlexQueryResponse>
+  <TradeConfirms>
+    <TradeConfirm assetCategory="OPT" symbol="DRAM 260731P00040000"
+      underlyingSymbol="DRAM" tradeID="buy-four" ibExecID="exec-buy-four"
+      tradeDate="20260713" buySell="BUY" quantity="4" tradePrice="0.25"
+      currency="USD" netCash="-100" levelOfDetail="EXECUTION" />
+  </TradeConfirms>
+</FlexQueryResponse>
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            activity_path = root / "ibkr-activity.xml"
+            trade_path = root / "ibkr-trade-confirm.xml"
+            activity_path.write_text(activity, encoding="utf-8")
+            trade_path.write_text(trade_confirmation, encoding="utf-8")
+
+            option_legs = MODULE._extract_ibkr_option_legs([activity_path, trade_path])
+            open_legs = MODULE._open_option_legs(option_legs)
+
+        self.assertEqual(len(open_legs), 1)
+        self.assertEqual(open_legs[0]["signed_contracts"], -1.0)
+
+    def test_trade_confirmation_can_flatten_prior_activity_snapshot(self) -> None:
+        legs = [
+            {
+                "underlying": "DRAM", "expiry": "2026-07-31", "right": "P", "strike": 40.0,
+                "side": "POSITION", "signed_contracts": -4.0,
+                "trade_date": "2026-07-12", "source": "IBKR open position",
+            },
+            {
+                "underlying": "DRAM", "expiry": "2026-07-31", "right": "P", "strike": 40.0,
+                "side": "BUY", "signed_contracts": 4.0,
+                "trade_date": "2026-07-13", "_statement_role": "trade",
+                "net_cash_after_fee_gbp": -100.0,
+            },
+        ]
+
+        self.assertEqual(MODULE._open_option_legs(legs), [])
+
     def test_ibkr_option_trades_are_extracted_as_option_legs_not_stock_positions(self) -> None:
         content = """<?xml version="1.0" encoding="UTF-8"?>
 <FlexQueryResponse>
