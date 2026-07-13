@@ -83,11 +83,34 @@ The new `market_report/macro_brief.py` module consumes the existing `ScoredRepor
 - Added VIXEQ/VIX and COR1M joint interpretation to distinguish rising single-stock dispersion from synchronized systemic stress.
 - Kept all new volatility-structure inputs outside the headline score until source continuity and signal calibration are validated.
 
+### 2026-07-13
+
+- Added the first three standard-month VIX futures from the official Cboe term-structure payload, including cache fallback and contango/backwardation classification.
+- Started persistent cache accumulation for VIX9D, VIX3M, VIXEQ, COR1M, and the M1/M2/M3 VIX futures curve.
+
+## Deferred Options-Volatility Plan
+
+QQQ/SPY 25-delta skew and implied-versus-realized volatility remain a deliberate follow-up. They should share one normalized option-chain snapshot with the existing gamma workflow instead of issuing a second inconsistent chain request.
+
+Implementation requirements:
+
+- cache one timestamped, normalized QQQ/SPY option chain for reuse by gamma, skew, ATM IV, and volatility-risk-premium calculations;
+- select the expiration between 25 and 45 DTE that is closest to 30 calendar days;
+- reject zero-bid contracts, crossed markets, excessive bid/ask spreads, invalid IV, and contracts with inadequate volume/open interest;
+- recompute call and put delta with a documented Black-Scholes convention, including the risk-free rate, dividend yield, and exact time to expiry;
+- interpolate in delta space around the 25-delta target instead of selecting a potentially stale single strike;
+- report both `25Δ put IV - ATM IV` and `25Δ put IV - 25Δ call IV`, with the convention named in the UI;
+- calculate benchmark-specific ATM 30D IV and 20-trading-day close-to-close realized volatility for both SPY and QQQ;
+- report `ATM 30D IV - 20D realized volatility` without substituting VIX for QQQ implied volatility;
+- retain source timestamp, selected expiration, strikes, interpolation inputs, spread filters, and data-quality status for audit and backtesting;
+- return `N/A` rather than stale skew when chain quality is insufficient, and never block the main scheduled report;
+- keep these outputs auxiliary until cache history supports stability checks, false-positive review, and threshold calibration.
+
 ## Deferred Macro Enhancements
 
 These items are not implemented in the first pass and require separate source and methodology review:
 
-- VIX futures term structure, equity put skew, and implied-versus-realized volatility spread;
+- QQQ/SPY 25-delta equity put skew and implied-versus-realized volatility spread;
 - market breadth and equal-weight confirmation;
 - rates-market implied policy path;
 - macro surprise tracking;
