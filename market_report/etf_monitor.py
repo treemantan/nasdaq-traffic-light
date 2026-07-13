@@ -153,6 +153,7 @@ class PortfolioClosedOptionTrade:
     currency: str
     realized_pnl_native: float | None
     realized_pnl_gbp: float
+    contracts_closed: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -2799,6 +2800,7 @@ def _parse_closed_option_trades_from_position_row(
                 currency=str(item.get("currency") or "").upper(),
                 realized_pnl_native=_safe_float(item.get("realized_pnl_native")),
                 realized_pnl_gbp=_safe_float(item.get("realized_pnl_gbp")) or 0.0,
+                contracts_closed=_safe_float(item.get("contracts_closed")) or 0.0,
             )
         )
     return tuple(

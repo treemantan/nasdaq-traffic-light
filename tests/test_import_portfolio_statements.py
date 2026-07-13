@@ -280,6 +280,7 @@ class ImportPortfolioStatementsTests(unittest.TestCase):
         self.assertAlmostEqual(summary["realized_pnl_gbp"], 60.75)
         self.assertEqual(len(summary["closed_options"]), 2)
         self.assertEqual({item["underlying"] for item in summary["closed_options"]}, {"NFLX"})
+        self.assertEqual({item["contracts_closed"] for item in summary["closed_options"]}, {1.0})
         self.assertEqual([leg["underlying"] for leg in open_option_legs], ["DRAM"])
 
     def test_closed_option_realized_pnl_is_added_to_account_summary_fields(self) -> None:
@@ -356,7 +357,9 @@ class ImportPortfolioStatementsTests(unittest.TestCase):
       <OpenPositions>
         <OpenPosition assetCategory="OPT" symbol="DRAM 260731P00040000"
           underlyingSymbol="DRAM" reportDate="20260712" position="-5"
-          currency="USD" multiplier="100" levelOfDetail="POSITION" />
+          currency="USD" multiplier="100" markPrice="0.3683"
+          costBasisMoney="-337.885" positionValue="-184.15"
+          fifoPnlUnrealized="153.735" levelOfDetail="POSITION" />
       </OpenPositions>
     </FlexStatement>
   </FlexStatements>
@@ -384,6 +387,12 @@ class ImportPortfolioStatementsTests(unittest.TestCase):
 
         self.assertEqual(len(open_legs), 1)
         self.assertEqual(open_legs[0]["signed_contracts"], -1.0)
+        self.assertAlmostEqual(open_legs[0]["cost_basis_native"], -67.577)
+        self.assertAlmostEqual(open_legs[0]["market_value_native"], -36.83)
+        self.assertAlmostEqual(open_legs[0]["unrealized_pnl_native"], 30.747)
+        self.assertAlmostEqual(open_legs[0]["open_net_premium_native"], 67.577)
+        self.assertTrue(open_legs[0]["mtm_quantity_adjusted"])
+        self.assertEqual(open_legs[0]["mtm_snapshot_contracts"], -5.0)
 
     def test_option_position_summary_wins_over_same_day_tax_lots(self) -> None:
         activity = """<?xml version="1.0" encoding="UTF-8"?>
@@ -423,6 +432,40 @@ class ImportPortfolioStatementsTests(unittest.TestCase):
         self.assertEqual(open_legs[0]["signed_contracts"], 3.0)
         self.assertEqual(open_legs[0]["market_value_native"], 180.0)
         self.assertEqual(open_legs[0]["unrealized_pnl_native"], -54.0)
+        self.assertEqual(len(open_legs[0]["_position_lots"]), 3)
+
+    def test_partial_close_keeps_newest_option_lot_under_fifo(self) -> None:
+        lots = [
+            {
+                "signed_contracts": -1.0,
+                "cost_basis_native": -263.28,
+                "market_value_native": -402.99,
+                "unrealized_pnl_native": -139.71,
+                "_position_open_date": "20260706;143733",
+            },
+            {
+                "signed_contracts": -1.0,
+                "cost_basis_native": -262.00,
+                "market_value_native": -402.99,
+                "unrealized_pnl_native": -140.99,
+                "_position_open_date": "20260706;143734",
+            },
+            {
+                "signed_contracts": -1.0,
+                "cost_basis_native": -397.30,
+                "market_value_native": -402.99,
+                "unrealized_pnl_native": -5.69,
+                "_position_open_date": "20260710;141703",
+            },
+        ]
+
+        remaining = MODULE._remaining_fifo_option_lot_values(lots, -1.0, -3.0)
+
+        self.assertIsNotNone(remaining)
+        assert remaining is not None
+        self.assertAlmostEqual(remaining["cost_basis_native"], -397.30)
+        self.assertAlmostEqual(remaining["market_value_native"], -402.99)
+        self.assertAlmostEqual(remaining["unrealized_pnl_native"], -5.69)
 
     def test_trade_confirmation_can_flatten_prior_activity_snapshot(self) -> None:
         legs = [

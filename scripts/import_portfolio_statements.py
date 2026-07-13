@@ -325,7 +325,15 @@ def _select_ibkr_option_position_snapshot(candidates: list[dict[str, Any]]) -> d
             if str(item.get("_position_detail_level") or "").upper() == preferred_level
         ]
         if preferred:
-            return preferred[0]
+            selected = dict(preferred[0])
+            lots = [
+                item
+                for item in latest
+                if str(item.get("_position_detail_level") or "").upper() == "LOT"
+            ]
+            if lots:
+                selected["_position_lots"] = lots
+            return selected
 
     # Some Flex configurations emit only tax-lot rows. In that case each row is
     # one slice of the same contract position, so aggregate the latest lots.
@@ -334,6 +342,8 @@ def _select_ibkr_option_position_snapshot(candidates: list[dict[str, Any]]) -> d
     aggregate["signed_contracts"] = signed_contracts
     aggregate["contracts"] = abs(signed_contracts)
     for field in (
+        "cost_basis_native",
+        "cost_basis_gbp",
         "market_value_native",
         "market_value_gbp",
         "unrealized_pnl_native",
@@ -381,6 +391,7 @@ def _extract_ibkr_option_legs(paths: list[Path]) -> list[dict[str, Any]]:
                 "source": "IBKR open position",
                 "fx_rate_to_base": _safe_float(row.get("FxRateToBase")),
                 "_position_detail_level": str(row.get("PositionLevelOfDetail") or "POSITION").strip().upper(),
+                "_position_open_date": str(row.get("openDateTime") or row.get("OpenDateTime") or ""),
             })
             continue
         quantity = _ibkr_quantity(row)
@@ -457,8 +468,10 @@ def _extract_ibkr_option_legs(paths: list[Path]) -> list[dict[str, Any]]:
         position_snapshot = mtm_by_contract.get(key)
         if position_snapshot:
             leg.update({name: position_snapshot.get(name) for name in (
-                "mark_price", "market_value_native", "market_value_gbp",
+                "mark_price", "cost_basis_native", "cost_basis_gbp",
+                "market_value_native", "market_value_gbp",
                 "unrealized_pnl_native", "unrealized_pnl_gbp",
+                "_position_lots",
             )})
             leg["open_position_signed_contracts"] = position_snapshot.get("signed_contracts")
             leg["open_position_date"] = position_snapshot.get("trade_date")
@@ -518,6 +531,16 @@ def _closed_option_realized_summary(option_legs: list[dict[str, Any]]) -> dict[s
             continue
         realized_gbp = sum(_safe_float(leg.get("net_cash_after_fee_gbp")) or 0.0 for leg in trade_legs)
         realized_native = sum(_safe_float(leg.get("net_cash_after_fee_native")) or 0.0 for leg in trade_legs)
+        bought_contracts = sum(
+            _safe_float(leg.get("signed_contracts")) or 0.0
+            for leg in trade_legs
+            if str(leg.get("side") or "").upper() == "BUY"
+        )
+        sold_contracts = sum(
+            abs(_safe_float(leg.get("signed_contracts")) or 0.0)
+            for leg in trade_legs
+            if str(leg.get("side") or "").upper() == "SELL"
+        )
         realized_total_gbp += realized_gbp
         closed_options.append(
             {
@@ -526,6 +549,7 @@ def _closed_option_realized_summary(option_legs: list[dict[str, Any]]) -> dict[s
                 "right": right,
                 "strike": strike,
                 "legs": len(trade_legs),
+                "contracts_closed": min(bought_contracts, sold_contracts),
                 "opened_at": min(str(leg.get("trade_date") or "") for leg in trade_legs),
                 "closed_at": max(str(leg.get("trade_date") or "") for leg in trade_legs),
                 "realized_pnl_gbp": realized_gbp,
@@ -628,6 +652,12 @@ def _open_option_legs(option_legs: list[dict[str, Any]]) -> list[dict[str, Any]]
             if any(value is not None for value in values):
                 aggregate[field] = sum(value or 0.0 for value in values)
 
+        _adjust_option_snapshot_for_partial_close(aggregate, current_contracts, snapshot_quantity)
+        for suffix in ("native", "gbp"):
+            cost_basis = _safe_float(aggregate.get(f"cost_basis_{suffix}"))
+            if cost_basis is not None:
+                aggregate[f"open_net_premium_{suffix}"] = -cost_basis
+
         if snapshot_leg is None and snapshot_quantity is None:
             for field in ("market_value_native", "market_value_gbp"):
                 values = [_safe_float(leg.get(field)) for leg in trade_legs]
@@ -646,6 +676,92 @@ def _open_option_legs(option_legs: list[dict[str, Any]]) -> list[dict[str, Any]]
             str(item.get("side") or ""),
         ),
     )
+
+
+def _adjust_option_snapshot_for_partial_close(
+    aggregate: dict[str, Any],
+    current_contracts: float,
+    snapshot_contracts: float | None,
+) -> None:
+    if (
+        snapshot_contracts is None
+        or abs(snapshot_contracts) <= 1e-9
+        or current_contracts * snapshot_contracts <= 0
+        or abs(current_contracts) >= abs(snapshot_contracts) - 1e-9
+    ):
+        return
+
+    remaining_lot_values = _remaining_fifo_option_lot_values(
+        aggregate.get("_position_lots"),
+        current_contracts,
+        snapshot_contracts,
+    )
+    ratio = abs(current_contracts / snapshot_contracts)
+    adjusted = False
+    for field in (
+        "cost_basis_native",
+        "cost_basis_gbp",
+        "market_value_native",
+        "market_value_gbp",
+        "unrealized_pnl_native",
+        "unrealized_pnl_gbp",
+    ):
+        value = (
+            remaining_lot_values.get(field)
+            if remaining_lot_values is not None
+            else _safe_float(aggregate.get(field))
+        )
+        if value is not None:
+            aggregate[field] = value if remaining_lot_values is not None else value * ratio
+            adjusted = True
+    if adjusted:
+        aggregate["mtm_quantity_adjusted"] = True
+        aggregate["mtm_snapshot_contracts"] = snapshot_contracts
+        aggregate["mtm_quantity_ratio"] = ratio
+        aggregate["mtm_quantity_adjustment_method"] = "FIFO lots" if remaining_lot_values is not None else "proportional"
+        aggregate["source"] = f"{aggregate.get('source')}; snapshot scaled to remaining quantity"
+
+
+def _remaining_fifo_option_lot_values(
+    raw_lots: Any,
+    current_contracts: float,
+    snapshot_contracts: float,
+) -> dict[str, float | None] | None:
+    if not isinstance(raw_lots, list) or not raw_lots:
+        return None
+    lots = [item for item in raw_lots if isinstance(item, dict)]
+    if not lots:
+        return None
+    lot_quantity = sum(abs(_safe_float(item.get("signed_contracts")) or 0.0) for item in lots)
+    if abs(lot_quantity - abs(snapshot_contracts)) > 1e-6:
+        return None
+    if any((_safe_float(item.get("signed_contracts")) or 0.0) * snapshot_contracts <= 0 for item in lots):
+        return None
+
+    fields = (
+        "cost_basis_native",
+        "cost_basis_gbp",
+        "market_value_native",
+        "market_value_gbp",
+        "unrealized_pnl_native",
+        "unrealized_pnl_gbp",
+    )
+    totals: dict[str, float | None] = {field: None for field in fields}
+    remaining = abs(current_contracts)
+    # FIFO closes the oldest lots first, so reconstruct the open position from
+    # the newest lots backwards.
+    for lot in sorted(lots, key=lambda item: str(item.get("_position_open_date") or ""), reverse=True):
+        quantity = abs(_safe_float(lot.get("signed_contracts")) or 0.0)
+        if quantity <= 1e-9 or remaining <= 1e-9:
+            continue
+        retained = min(quantity, remaining)
+        fraction = retained / quantity
+        for field in fields:
+            value = _safe_float(lot.get(field))
+            if value is not None:
+                totals[field] = (totals[field] or 0.0) + value * fraction
+        remaining -= retained
+    return totals if remaining <= 1e-6 else None
 
 
 def _apply_closed_option_realized_pnl(rows: list[dict[str, str]], summary: dict[str, Any]) -> None:
@@ -781,8 +897,16 @@ def _ibkr_option_mtm(
         if unrealized_pnl_native is not None
         else None
     )
+    cost_basis_native = _safe_float(row.get("Cost") or row.get("CostBasis") or row.get("CostBasisMoney"))
+    cost_basis_gbp = (
+        _ibkr_amount_in_base_currency(row, cost_basis_native, fx_rates_to_base)
+        if cost_basis_native is not None
+        else None
+    )
     return {
         "mark_price": mark_price,
+        "cost_basis_native": cost_basis_native,
+        "cost_basis_gbp": cost_basis_gbp,
         "market_value_native": market_value_native,
         "market_value_gbp": market_value_gbp,
         "unrealized_pnl_native": unrealized_pnl_native,
@@ -1255,6 +1379,7 @@ def _normalize_ibkr_xml_row(attrs: dict[str, str], *, row_kind: str) -> dict[str
             "MarkPrice": pick("markPrice", "mark", "marketPrice", "closePrice", "lastPrice"),
             "ClosePrice": pick("closePrice", "lastPrice"),
             "MarketValue": pick("marketValue", "positionValue", "value"),
+            "Cost": pick("cost", "costBasis", "costBasisMoney"),
             "FifoPnlUnrealized": pick("fifoPnlUnrealized", "unrealizedPnl"),
             "Position": pick("position", "quantity"),
         }
@@ -1344,7 +1469,11 @@ def _ibkr_identity_keys(row: dict[str, str]) -> tuple[tuple[str, ...], ...]:
                     identifiers.append(identifier)
     if identifiers:
         return tuple(identifiers)
-    keys = ("Symbol", "TradeDate", "Date/Time", "Buy/Sell", "Quantity", "TradeQuantity", "Price", "TradePrice", "NetCash")
+    keys = (
+        "Symbol", "TradeDate", "Date/Time", "Buy/Sell", "Quantity", "TradeQuantity",
+        "Price", "TradePrice", "NetCash", "PositionLevelOfDetail", "ReportDate",
+        "Cost", "MarketValue", "FifoPnlUnrealized", "openDateTime",
+    )
     return (("economic", account, *(str(row.get(key) or "").strip() for key in keys)),)
 
 

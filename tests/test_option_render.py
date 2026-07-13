@@ -236,8 +236,34 @@ def test_option_panel_sums_open_strategy_net_premium_after_long_leg_cost() -> No
 
     html = render._render_option_risk_panel(positions)
 
-    assert "未清算期权净收权利金" in html
+    assert "未平仓期权剩余净权利金/成本" in html
     assert "+£90.00" in html
+
+
+def test_open_position_cost_basis_overrides_lifecycle_cash_after_partial_close() -> None:
+    leg = {
+        "right": "P",
+        "strike": 40.0,
+        "signed_contracts": -1.0,
+        "currency": "USD",
+        "net_cash_after_fee_native": 283.75,
+        "net_cash_after_fee_gbp": 211.51,
+        "open_net_premium_native": 67.577,
+        "open_net_premium_gbp": 50.40,
+        "market_value_native": -36.83,
+        "market_value_gbp": -27.48,
+        "unrealized_pnl_gbp": 22.92,
+        "mtm_quantity_adjusted": True,
+        "mtm_snapshot_contracts": -5.0,
+        "mtm_quantity_adjustment_method": "FIFO lots",
+    }
+
+    assert render._option_cash_after_fee_native(leg) == 67.577
+    assert render._option_cash_after_fee_gbp(leg) == 50.40
+    html = render._render_option_strategy_row("DRAM", "2026-07-31", [leg])
+    assert "5→1张" in html
+    assert "MTM/成本按剩余FIFO批次重建" in html
+    assert "+£50.40" in html
 
 
 def test_option_closeout_summary_sums_ibkr_and_estimated_unrealized_pnl() -> None:

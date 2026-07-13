@@ -1295,7 +1295,7 @@ def _render_option_risk_panel(
       <div class="small-note">期权已从普通股票/ETF持仓中剥离。当前使用IBKR statement成交现金流识别成本、方向、到期与行权价；如Flex/OpenPosition提供mark或market value，则显示当前MTM。delta、gamma、theta、vega和POP仍需要IBKR期权行情或模型输入，未取得时不做伪精确估算。</div>
       <div class="portfolio-table-scroll">
         <table class="portfolio-table">
-          <thead><tr><th>策略/标的</th><th>到期</th><th>结构</th><th>净现金流</th><th>盈亏边界</th><th>数据状态</th></tr></thead>
+          <thead><tr><th>策略/标的</th><th>到期</th><th>结构</th><th>剩余仓位成本/权利金</th><th>盈亏边界</th><th>数据状态</th></tr></thead>
           <tbody>{strategy_rows}</tbody>
         </table>
       </div>
@@ -1318,9 +1318,9 @@ def _render_open_option_premium_summary(legs: list[dict[str, object]]) -> str:
     return (
         '<div class="portfolio-exposure-grid" style="margin-top:8px;">'
         '<div class="portfolio-exposure">'
-        '<span class="muted">未清算期权净收权利金</span>'
+        '<span class="muted">未平仓期权剩余净权利金/成本</span>'
         f'<strong class="{_pnl_class(net_premium_gbp)}">{escape(_fmt_signed_gbp(net_premium_gbp))}</strong>'
-        '<span class="portfolio-scope">按当前 open option legs 的扣费后净现金流汇总；'
+        '<span class="portfolio-scope">优先按当前 OpenPosition 成本基础汇总；缺失时回退至扣费后成交现金流。'
         'spread 已扣除 long legs 成本。不等同于已实现收益，若到期归零且未被执行/指派才可全部保留。</span>'
         '</div></div>'
     )
@@ -1480,6 +1480,21 @@ def _render_option_strategy_row(underlying: str, expiry: str, legs: list[dict[st
         if mtm_pnl_gbp is not None
         else "MTM未实现待确认"
     )
+    adjustment_line = ""
+    adjusted_legs = [leg for leg in legs if leg.get("mtm_quantity_adjusted")]
+    if adjusted_legs:
+        changes = "；".join(
+            f"{_fmt_option_number(leg.get('strike'))}{str(leg.get('right') or '')} "
+            f"{_fmt_option_number(abs(_option_float(leg.get('mtm_snapshot_contracts')) or 0))}→"
+            f"{_fmt_option_number(abs(_option_float(leg.get('signed_contracts')) or 0))}张"
+            for leg in adjusted_legs
+        )
+        adjustment_method = (
+            "按剩余FIFO批次重建"
+            if all(str(leg.get("mtm_quantity_adjustment_method") or "") == "FIFO lots" for leg in adjusted_legs)
+            else "按剩余数量比例调整"
+        )
+        adjustment_line = f'<br><span class="portfolio-scope">Activity快照后部分平仓：{escape(changes)}；MTM/成本{adjustment_method}</span>'
     structure = "；".join(
         _option_leg_label(leg)
         for leg in sorted(legs, key=lambda item: (_option_float(item.get("strike")) or 0))
@@ -1488,7 +1503,7 @@ def _render_option_strategy_row(underlying: str, expiry: str, legs: list[dict[st
       <td><strong>{escape(underlying or "UNKNOWN")}</strong><br><span class="portfolio-scope">{escape(strategy)}</span></td>
       <td>{escape(expiry or "到期日待确认")}</td>
       <td>{escape(structure)}</td>
-      <td>{escape(_fmt_signed_gbp(net_cash_gbp))}<br><span class="portfolio-scope">扣费后；原币 {escape(_fmt_option_cash(net_cash, currency))}</span><br><span class="portfolio-scope">{mtm_line}</span><br><span class="portfolio-scope">{pnl_line}</span></td>
+      <td>{escape(_fmt_signed_gbp(net_cash_gbp))}<br><span class="portfolio-scope">剩余仓位；原币 {escape(_fmt_option_cash(net_cash, currency))}</span><br><span class="portfolio-scope">{mtm_line}</span><br><span class="portfolio-scope">{pnl_line}</span>{adjustment_line}</td>
       <td>{escape(boundary)}</td>
       <td>成交已识别；MTM取自Flex/OpenPosition；Greeks/POP待IBKR行情或模型估算</td>
     </tr>"""
@@ -1654,6 +1669,9 @@ def _option_currency(legs: list[dict[str, object]]) -> str:
 
 
 def _option_cash_after_fee_native(leg: dict[str, object]) -> float:
+    open_premium = _option_float(leg.get("open_net_premium_native"))
+    if open_premium is not None:
+        return open_premium
     value = _option_float(leg.get("net_cash_after_fee_native"))
     if value is not None:
         return value
@@ -1665,6 +1683,9 @@ def _option_cash_after_fee_native(leg: dict[str, object]) -> float:
 
 
 def _option_cash_after_fee_gbp(leg: dict[str, object]) -> float:
+    open_premium = _option_float(leg.get("open_net_premium_gbp"))
+    if open_premium is not None:
+        return open_premium
     value = _option_float(leg.get("net_cash_after_fee_gbp"))
     if value is not None:
         return value
@@ -1818,7 +1839,7 @@ def _render_closed_option_trade_breakdown(performance) -> str:
         f"""<tr>
           <td><strong>{escape(item.underlying)}</strong><br><span class="portfolio-scope">{escape(_closed_option_contract_label(item))}</span></td>
           <td>{escape(item.expiry or 'N/A')}</td>
-          <td>{escape(item.opened_at or 'N/A')} → {escape(item.closed_at or 'N/A')}<br><span class="portfolio-scope">{escape(str(item.legs))} 笔成交记录</span></td>
+          <td>{escape(item.opened_at or 'N/A')} → {escape(item.closed_at or 'N/A')}<br><span class="portfolio-scope">已平仓 {escape(_fmt_option_number(item.contracts_closed))} 张；{escape(str(item.legs))} 条成交（开仓+平仓）</span></td>
           <td>{escape(_fmt_option_cash(item.realized_pnl_native or 0.0, item.currency))}</td>
           <td class="{_pnl_class(item.realized_pnl_gbp)}">{escape(_fmt_signed_gbp(item.realized_pnl_gbp))}</td>
         </tr>"""
