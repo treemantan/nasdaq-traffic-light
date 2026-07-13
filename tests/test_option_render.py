@@ -170,6 +170,31 @@ def test_option_strategy_row_displays_mtm_and_mtm_pnl_in_gbp() -> None:
     assert "+£26.25" in html
 
 
+def test_option_strategy_row_prefers_ibkr_unrealized_pnl() -> None:
+    legs = [
+        {
+            "underlying": "DRAM",
+            "expiry": "2026-07-24",
+            "right": "P",
+            "strike": 60.5,
+            "signed_contracts": -1.0,
+            "currency": "USD",
+            "market_value_native": -345.48,
+            "market_value_gbp": -257.53,
+            "net_cash_after_fee_native": 398.18,
+            "net_cash_after_fee_gbp": 296.81,
+            "unrealized_pnl_native": 52.70,
+            "unrealized_pnl_gbp": 39.28,
+        }
+    ]
+
+    html = render._render_option_strategy_row("DRAM", "2026-07-24", legs)
+
+    assert "IBKR" in html
+    assert "39.28" in html
+    assert "554.34" not in html
+
+
 def test_option_panel_sums_open_strategy_net_premium_after_long_leg_cost() -> None:
     legs = [
         {

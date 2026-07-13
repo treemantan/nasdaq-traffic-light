@@ -192,6 +192,31 @@ class ImportPortfolioStatementsTests(unittest.TestCase):
         self.assertAlmostEqual(net_cash_native, 22.0)
         self.assertAlmostEqual(net_cash_gbp, 16.39)
 
+    def test_ibkr_option_cash_direction_is_normalized_from_buy_sell(self) -> None:
+        header = (
+            "ClientAccountID,AssetCategory,Symbol,UnderlyingSymbol,TradeID,ExecID,TradeDate,Buy/Sell,"
+            "Quantity,TradePrice,NetCash,Commission,CurrencyPrimary,FxRateToBase,"
+            "Multiplier,PutCall,Strike,Expiry,LevelOfDetail\n"
+        )
+        content = (
+            header
+            + "U1,OPT,DRAM 260724P00060500,DRAM,t1,exec1,20260713,SELL,"
+            "1,4.00,-400,2,USD,0.745,100,P,60.5,20260724,EXECUTION\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "ibkr-trade-confirm.csv"
+            path.write_text(content, encoding="utf-8")
+
+            option_legs = MODULE._extract_ibkr_option_legs([path])
+
+        self.assertEqual(len(option_legs), 1)
+        self.assertEqual(option_legs[0]["reported_net_cash_native"], -400.0)
+        self.assertEqual(option_legs[0]["reported_commission_native"], 2.0)
+        self.assertEqual(option_legs[0]["net_cash_native"], 400.0)
+        self.assertEqual(option_legs[0]["commission_native"], -2.0)
+        self.assertEqual(option_legs[0]["net_cash_after_fee_native"], 398.0)
+        self.assertAlmostEqual(option_legs[0]["net_cash_after_fee_gbp"], 296.51)
+
     def test_ibkr_option_cash_uses_batch_fx_fallback_across_split_trade_files(self) -> None:
         header = (
             "ClientAccountID,AssetClass,Symbol,UnderlyingSymbol,TradeID,ExecID,TradeDate,Buy/Sell,"
@@ -511,7 +536,8 @@ class ImportPortfolioStatementsTests(unittest.TestCase):
       <OpenPositions>
         <OpenPosition accountId="U1" assetCategory="OPT" symbol="NFLX 260724P00070000"
           underlyingSymbol="NFLX" reportDate="20260617" position="-1"
-          markPrice="1.20" currency="USD" multiplier="100" fxRateToBase="0.75" />
+          markPrice="1.20" fifoPnlUnrealized="30.00"
+          currency="USD" multiplier="100" fxRateToBase="0.75" />
       </OpenPositions>
     </FlexStatement>
   </FlexStatements>
@@ -549,8 +575,8 @@ class ImportPortfolioStatementsTests(unittest.TestCase):
     def test_ibkr_option_open_position_csv_with_spaced_headers_updates_mtm(self) -> None:
         content = "\n".join(
             [
-                "Asset Class,Level of Detail,Symbol,Underlying Symbol,Report Date,Quantity,Mark Price,Position Value,Currency,Multiplier,FX Rate To Base,Put/Call,Strike,Expiry",
-                "OPT,POSITION,NFLX 260724P00070000,NFLX,20260617,-1,1.20,-120.00,USD,100,0.75,P,70,20260724",
+                "Asset Class,Level of Detail,Symbol,Underlying Symbol,Report Date,Quantity,Mark Price,Position Value,FIFO PnL Unrealized,Currency,Multiplier,FX Rate To Base,Put/Call,Strike,Expiry",
+                "OPT,POSITION,NFLX 260724P00070000,NFLX,20260617,-1,1.20,-120.00,30.00,USD,100,0.75,P,70,20260724",
             ]
         )
         with tempfile.TemporaryDirectory() as directory:
@@ -564,6 +590,10 @@ class ImportPortfolioStatementsTests(unittest.TestCase):
         self.assertAlmostEqual(option_legs[0]["mark_price"], 1.20)
         self.assertAlmostEqual(option_legs[0]["market_value_native"], -120.0)
         self.assertAlmostEqual(option_legs[0]["market_value_gbp"], -90.0)
+        self.assertAlmostEqual(option_legs[0]["unrealized_pnl_native"], 30.0)
+        self.assertAlmostEqual(option_legs[0]["unrealized_pnl_gbp"], 22.5)
+        self.assertAlmostEqual(option_legs[0]["unrealized_pnl_native"], 30.0)
+        self.assertAlmostEqual(option_legs[0]["unrealized_pnl_gbp"], 22.5)
 
     def test_ibkr_option_missing_mtm_uses_yahoo_option_chain_fallback(self) -> None:
         content = """<?xml version="1.0" encoding="UTF-8"?>
