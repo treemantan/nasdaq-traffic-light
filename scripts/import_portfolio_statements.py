@@ -314,11 +314,43 @@ def _holding_days(opened_at: str, closed_at: str) -> int | None:
     return max((closed - opened).days, 0)
 
 
+def _select_ibkr_option_position_snapshot(candidates: list[dict[str, Any]]) -> dict[str, Any]:
+    latest_date = max(str(item.get("trade_date") or "") for item in candidates)
+    latest = [item for item in candidates if str(item.get("trade_date") or "") == latest_date]
+
+    for preferred_level in ("SUMMARY", "POSITION"):
+        preferred = [
+            item
+            for item in latest
+            if str(item.get("_position_detail_level") or "").upper() == preferred_level
+        ]
+        if preferred:
+            return preferred[0]
+
+    # Some Flex configurations emit only tax-lot rows. In that case each row is
+    # one slice of the same contract position, so aggregate the latest lots.
+    aggregate = dict(latest[0])
+    signed_contracts = sum(_safe_float(item.get("signed_contracts")) or 0.0 for item in latest)
+    aggregate["signed_contracts"] = signed_contracts
+    aggregate["contracts"] = abs(signed_contracts)
+    for field in (
+        "market_value_native",
+        "market_value_gbp",
+        "unrealized_pnl_native",
+        "unrealized_pnl_gbp",
+    ):
+        values = [_safe_float(item.get(field)) for item in latest]
+        if any(value is not None for value in values):
+            aggregate[field] = sum(value or 0.0 for value in values)
+    return aggregate
+
+
 def _extract_ibkr_option_legs(paths: list[Path]) -> list[dict[str, Any]]:
     rows, _duplicate_count = _unique_ibkr_rows(paths)
     fx_rates_to_base = _ibkr_fx_rates_to_base_by_date(rows)
     legs: list[dict[str, Any]] = []
     mtm_by_contract: dict[tuple[str, str, str, float | None], dict[str, Any]] = {}
+    position_snapshots: dict[tuple[str, str, str, float | None], list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
         asset_category = str(row.get("AssetCategory") or "").strip().upper()
         if asset_category != "OPT":
@@ -333,7 +365,7 @@ def _extract_ibkr_option_legs(paths: list[Path]) -> list[dict[str, Any]]:
         if _ibkr_is_position_row(row):
             signed_position = _safe_float(row.get("Position") or row.get("Quantity") or row.get("TradeQuantity"))
             mtm = _ibkr_option_mtm(row, signed_position, multiplier, fx_rates_to_base)
-            mtm_by_contract[key] = {
+            position_snapshots[key].append({
                 **mtm,
                 "symbol": raw_symbol,
                 "underlying": underlying,
@@ -348,7 +380,8 @@ def _extract_ibkr_option_legs(paths: list[Path]) -> list[dict[str, Any]]:
                 "trade_date": _format_ibkr_date(str(row.get("ReportDate") or row.get("Date/Time") or "")),
                 "source": "IBKR open position",
                 "fx_rate_to_base": _safe_float(row.get("FxRateToBase")),
-            }
+                "_position_detail_level": str(row.get("PositionLevelOfDetail") or "POSITION").strip().upper(),
+            })
             continue
         quantity = _ibkr_quantity(row)
         if quantity is None or quantity <= 0:
@@ -407,18 +440,13 @@ def _extract_ibkr_option_legs(paths: list[Path]) -> list[dict[str, Any]]:
                 "_statement_role": str(row.get("_statement_role") or ""),
                 "fx_rate_to_base": _safe_float(row.get("FxRateToBase")),
             }
-        position_snapshot = mtm_by_contract.get(key)
-        if position_snapshot:
-            # A position snapshot describes the whole current contract position,
-            # not the quantity of this individual execution.  Keep execution
-            # quantity/cashflow intact and carry the position quantity separately.
-            leg.update({name: position_snapshot.get(name) for name in (
-                "mark_price", "market_value_native", "market_value_gbp",
-                "unrealized_pnl_native", "unrealized_pnl_gbp",
-            )})
-            leg["open_position_signed_contracts"] = position_snapshot.get("signed_contracts")
-            leg["open_position_date"] = position_snapshot.get("trade_date")
         legs.append(leg)
+    mtm_by_contract = {
+        key: _select_ibkr_option_position_snapshot(candidates)
+        for key, candidates in position_snapshots.items()
+    }
+    # A snapshot is contract-level state, so attach the selected aggregate to
+    # executions without replacing their individual quantity or cash flow.
     for leg in legs:
         key = _option_contract_key(
             str(leg.get("underlying") or ""),
@@ -1210,6 +1238,7 @@ def _normalize_ibkr_xml_row(attrs: dict[str, str], *, row_kind: str) -> dict[str
             **normalized,
             "ClientAccountID": pick("accountId", "acctId", "account"),
             "LevelOfDetail": "POSITION",
+            "PositionLevelOfDetail": (pick("levelOfDetail") or "POSITION").upper(),
             "AssetCategory": pick("assetCategory"),
             "Symbol": pick("symbol", "underlyingSymbol"),
             "UnderlyingSymbol": pick("underlyingSymbol"),
