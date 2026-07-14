@@ -1774,12 +1774,15 @@ def _render_portfolio_performance(monitor: ETFMonitor) -> str:
         ("股息收入", performance.dividend_income_gbp, ""),
         ("隐含交易成本", -performance.implied_trading_cost_gbp, ""),
     )
-    rendered = "".join(
-        f'<div class="portfolio-exposure"><span class="muted">{escape(label)}</span>'
-        f'<strong class="{_pnl_class(value)}">{escape(_fmt_signed_gbp(value))}</strong>'
-        f'{f"<span class=\"portfolio-scope\">{escape(detail)}</span>" if detail else ""}</div>'
-        for label, value, detail in cards
-    )
+    rendered_cards = []
+    for label, value, detail in cards:
+        detail_html = f'<span class="portfolio-scope">{escape(detail)}</span>' if detail else ""
+        rendered_cards.append(
+            f'<div class="portfolio-exposure"><span class="muted">{escape(label)}</span>'
+            f'<strong class="{_pnl_class(value)}">{escape(_fmt_signed_gbp(value))}</strong>'
+            f'{detail_html}</div>'
+        )
+    rendered = "".join(rendered_cards)
     return (
         '<div class="portfolio-notes"><strong>收益归因（statement 导出窗口内，可识别口径）</strong></div>'
         f'<div class="portfolio-exposure-grid">{rendered}</div>'
