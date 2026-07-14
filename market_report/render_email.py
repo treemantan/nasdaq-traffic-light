@@ -659,12 +659,19 @@ def _render_portfolio_performance_email(monitor: ETFMonitor) -> str:
     performance = monitor.portfolio_performance
     if performance is None:
         return ""
+    stock_realized = sum(trade.realized_pnl_gbp for trade in performance.closed_trades)
+    option_realized = sum(trade.realized_pnl_gbp for trade in performance.closed_option_trades)
+    realized_residual = performance.realized_pnl_gbp - stock_realized - option_realized
+    realized_detail = f"股票 {_fmt_signed_gbp(stock_realized)} · 期权 {_fmt_signed_gbp(option_realized)}"
+    if abs(realized_residual) >= 0.01:
+        realized_detail += f" · 其他/未归因 {_fmt_signed_gbp(realized_residual)}"
     return (
         '<div style="font-size:12px;color:#d1d5db;margin:6px 0;">'
         '<strong>收益归因（statement 导出窗口内，可识别口径）</strong><br>'
         f'扣费后可识别总收益 {_fmt_signed_gbp(performance.total_return_gbp)} · '
         f'未实现盈亏 {_fmt_signed_gbp(performance.unrealized_pnl_gbp)} · '
-        f'已实现交易盈亏净额 {_fmt_signed_gbp(performance.realized_pnl_gbp)} · '
+        f'已实现交易盈亏净额 {_fmt_signed_gbp(performance.realized_pnl_gbp)} '
+        f'（{escape(realized_detail)}） · '
         f'股息收入 {_fmt_signed_gbp(performance.dividend_income_gbp)}<br>'
         f'<span style="color:#9ca3af;">隐含交易成本约 {_fmt_gbp(performance.implied_trading_cost_gbp)}；总收益已按实际现金流口径扣除。'
         '差额可能包含佣金、税费、FX/执行价差与四舍五入。</span>'
@@ -703,9 +710,22 @@ def _unmatched_proceeds_email(item) -> str:
 def _render_closed_trade_breakdown_email(performance) -> str:
     if not performance.closed_trades:
         return ""
-    rows = "".join(_render_closed_trade_group_email(symbol, trades) for symbol, trades in _closed_trade_groups_email(performance.closed_trades))
+    groups = _closed_trade_groups_email(performance.closed_trades)
+    rows = "".join(_render_closed_trade_group_email(symbol, trades) for symbol, trades in groups)
+    realized_pnl = sum(trade.realized_pnl_gbp for trade in performance.closed_trades)
+    average_cost_pnl = _sum_optional_email(
+        getattr(trade, "average_cost_realized_pnl_gbp", None) for trade in performance.closed_trades
+    )
+    quantity = sum(trade.quantity for trade in performance.closed_trades)
+    cost_basis = sum(trade.cost_basis_gbp for trade in performance.closed_trades)
+    net_proceeds = sum(trade.net_proceeds_gbp for trade in performance.closed_trades)
     return (
         '<div style="margin-top:6px;"><strong>已平仓交易归因（FIFO近似）</strong>'
+        f'<div style="margin-top:4px;color:{_pnl_color(realized_pnl)};"><strong>'
+        f'已平仓股票合计 {escape(_fmt_signed_gbp(realized_pnl))}</strong> · '
+        f'{len(groups)} 个标的 / {len(performance.closed_trades)} 个批次 · '
+        f'数量 {escape(_fmt_quantity(quantity))} · 净卖出 {escape(_fmt_gbp(net_proceeds))} / '
+        f'FIFO成本 {escape(_fmt_gbp(cost_basis))} / 均价口径 {escape(_fmt_signed_gbp(average_cost_pnl))}</div>'
         '<ul style="padding-left:18px;margin:4px 0;">'
         f'{rows}</ul></div>'
     )
