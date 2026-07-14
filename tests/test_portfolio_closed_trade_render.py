@@ -23,7 +23,7 @@ class PortfolioClosedTradeRenderTests(unittest.TestCase):
         html = _render_closed_trade_breakdown(performance)
 
         self.assertIn("BNP", html)
-        self.assertIn("3个买入批次", html)
+        self.assertIn("3个已平仓批次", html)
         self.assertIn("+£602.62", html)
         self.assertEqual(html.count("2025-10-28"), 2)
         self.assertIn("GBP 会计口径", html)
@@ -40,7 +40,7 @@ class PortfolioClosedTradeRenderTests(unittest.TestCase):
         html = _render_closed_trade_breakdown_email(performance)
 
         self.assertIn("BNP", html)
-        self.assertIn("3个买入批次", html)
+        self.assertIn("3个已平仓批次", html)
         self.assertIn("+£602.62", html)
 
 

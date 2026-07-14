@@ -134,6 +134,7 @@ def _empty_position() -> dict[str, Any]:
         "implied_trading_cost_gbp": 0.0,
         "transaction_costs": [],
         "lots": [],
+        "intraday_short_lots": [],
         "closed_trades": [],
     }
 
@@ -189,16 +190,29 @@ def _reconstruct_ibkr_positions(paths: list[Path]) -> dict[str, dict[str, Any]]:
             continue
         if activity == "BUY":
             cost = _ibkr_cash_amount(row, buy=True, fx_rates_to_base=fx_rates_to_base)
-            positions[symbol]["quantity"] += quantity
-            positions[symbol]["cost_gbp"] += cost
-            positions[symbol]["lots"].append(
-                {
-                    "quantity": quantity,
-                    "cost_gbp": cost,
-                    "opened_at": _format_ibkr_date(str(row.get("TradeDate") or row.get("Date/Time") or "")),
-                    "broker": "IBKR",
-                }
+            trade_date = _format_ibkr_date(str(row.get("TradeDate") or row.get("Date/Time") or ""))
+            covered_quantity, cover_cost, short_pnl, short_trades = _cover_intraday_ibkr_shorts_fifo(
+                symbol=symbol,
+                short_lots=positions[symbol].setdefault("intraday_short_lots", []),
+                quantity=quantity,
+                cover_cost_gbp=cost,
+                closed_at=trade_date,
             )
+            positions[symbol]["realized_pnl_gbp"] += short_pnl
+            positions[symbol]["closed_trades"].extend(short_trades)
+            long_quantity = max(quantity - covered_quantity, 0.0)
+            long_cost = max(cost - cover_cost, 0.0)
+            if long_quantity > 1e-10:
+                positions[symbol]["quantity"] += long_quantity
+                positions[symbol]["cost_gbp"] += long_cost
+                positions[symbol]["lots"].append(
+                    {
+                        "quantity": long_quantity,
+                        "cost_gbp": long_cost,
+                        "opened_at": trade_date,
+                        "broker": "IBKR",
+                    }
+                )
         elif activity == "SELL":
             current_quantity = positions[symbol]["quantity"]
             matched_quantity = min(quantity, max(current_quantity, 0))
@@ -222,30 +236,119 @@ def _reconstruct_ibkr_positions(paths: list[Path]) -> dict[str, dict[str, Any]]:
             positions[symbol]["realized_pnl_gbp"] += realized_pnl
             positions[symbol]["closed_trades"].extend(closed_trades)
             unmatched_proceeds = proceeds * (unmatched_quantity / quantity) if quantity else 0.0
-            if currency in {"", "GBP"}:
-                positions[symbol]["unmatched_sell_proceeds_gbp"] += unmatched_proceeds
             if unmatched_quantity > 1e-8:
-                positions[symbol]["unmatched_sells"].append(
+                positions[symbol].setdefault("intraday_short_lots", []).append(
                     {
                         "symbol": symbol,
-                        "date": str(row.get("TradeDate") or row.get("Date/Time") or ""),
+                        "date": _format_ibkr_date(str(row.get("TradeDate") or row.get("Date/Time") or "")),
                         "transaction_type": str(row.get("TransactionType") or "SELL"),
                         "sell_quantity": quantity,
                         "matched_quantity": matched_quantity,
-                        "unmatched_quantity": unmatched_quantity,
+                        "quantity": unmatched_quantity,
                         "price_native": _safe_float(row.get("Price") or row.get("TradePrice")) or 0.0,
-                        "net_proceeds_native": unmatched_proceeds,
+                        "net_proceeds_gbp": unmatched_proceeds,
                         "currency": currency,
-                        "net_proceeds_gbp": unmatched_proceeds if currency in {"", "GBP"} else None,
-                        "reason": "missing_visible_cost_basis",
                         "broker": "IBKR",
                         "account_id": str(row.get("ClientAccountID") or ""),
                     }
                 )
             positions[symbol]["quantity"] -= matched_quantity
             positions[symbol]["cost_gbp"] = max(positions[symbol]["cost_gbp"] - consumed_cost, 0.0)
+    _finalize_unmatched_ibkr_sells(positions)
     _add_ibkr_dividends(paths, positions)
     return dict(positions)
+
+
+def _cover_intraday_ibkr_shorts_fifo(
+    *,
+    symbol: str,
+    short_lots: object,
+    quantity: float,
+    cover_cost_gbp: float,
+    closed_at: str,
+) -> tuple[float, float, float, list[dict[str, Any]]]:
+    if not isinstance(short_lots, list) or quantity <= 0:
+        return 0.0, 0.0, 0.0, []
+    remaining = quantity
+    covered_quantity = 0.0
+    allocated_cover_cost = 0.0
+    realized_pnl = 0.0
+    closed_trades: list[dict[str, Any]] = []
+    while remaining > 1e-10 and short_lots:
+        lot = short_lots[0]
+        if str(lot.get("date") or "") != closed_at:
+            break
+        lot_quantity = float(lot.get("quantity") or 0.0)
+        lot_proceeds = float(lot.get("net_proceeds_gbp") or 0.0)
+        if lot_quantity <= 1e-10:
+            short_lots.pop(0)
+            continue
+        matched = min(remaining, lot_quantity)
+        lot_ratio = matched / lot_quantity
+        cover_ratio = matched / quantity
+        proceeds = lot_proceeds * lot_ratio
+        cover_cost = cover_cost_gbp * cover_ratio
+        pnl = proceeds - cover_cost
+        closed_trades.append(
+            {
+                "symbol": symbol,
+                "opened_at": str(lot.get("date") or ""),
+                "closed_at": closed_at,
+                "holding_days": _holding_days(str(lot.get("date") or ""), closed_at),
+                "quantity": round(matched, 8),
+                "cost_basis_gbp": round(cover_cost, 4),
+                "gross_proceeds_gbp": round(proceeds, 4),
+                "net_proceeds_gbp": round(proceeds, 4),
+                "implied_trading_cost_gbp": 0.0,
+                "realized_pnl_gbp": round(pnl, 4),
+                "position_side": "short",
+                "broker": "IBKR",
+            }
+        )
+        covered_quantity += matched
+        allocated_cover_cost += cover_cost
+        realized_pnl += pnl
+        remaining -= matched
+        remaining_quantity = lot_quantity - matched
+        remaining_proceeds = lot_proceeds - proceeds
+        if remaining_quantity <= 1e-10:
+            short_lots.pop(0)
+        else:
+            lot["quantity"] = remaining_quantity
+            lot["net_proceeds_gbp"] = remaining_proceeds
+    return covered_quantity, allocated_cover_cost, realized_pnl, closed_trades
+
+
+def _finalize_unmatched_ibkr_sells(positions: dict[str, dict[str, Any]]) -> None:
+    for symbol, position in positions.items():
+        short_lots = position.pop("intraday_short_lots", [])
+        if not isinstance(short_lots, list):
+            continue
+        for lot in short_lots:
+            quantity = float(lot.get("quantity") or 0.0)
+            if quantity <= 1e-8:
+                continue
+            proceeds = float(lot.get("net_proceeds_gbp") or 0.0)
+            currency = str(lot.get("currency") or "").upper()
+            if currency in {"", "GBP"}:
+                position["unmatched_sell_proceeds_gbp"] += proceeds
+            position["unmatched_sells"].append(
+                {
+                    "symbol": symbol,
+                    "date": str(lot.get("date") or ""),
+                    "transaction_type": str(lot.get("transaction_type") or "SELL"),
+                    "sell_quantity": float(lot.get("sell_quantity") or quantity),
+                    "matched_quantity": float(lot.get("matched_quantity") or 0.0),
+                    "unmatched_quantity": quantity,
+                    "price_native": float(lot.get("price_native") or 0.0),
+                    "net_proceeds_native": proceeds,
+                    "currency": currency,
+                    "net_proceeds_gbp": proceeds if currency in {"", "GBP"} else None,
+                    "reason": "missing_visible_cost_basis",
+                    "broker": "IBKR",
+                    "account_id": str(lot.get("account_id") or ""),
+                }
+            )
 
 
 def _consume_ibkr_lots_fifo(
@@ -289,6 +392,7 @@ def _consume_ibkr_lots_fifo(
                 "net_proceeds_gbp": round(allocated_net, 4),
                 "implied_trading_cost_gbp": 0.0,
                 "realized_pnl_gbp": round(pnl, 4),
+                "position_side": "long",
                 "broker": "IBKR",
             }
         )
