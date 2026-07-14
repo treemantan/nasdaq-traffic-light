@@ -136,6 +136,7 @@ class PortfolioClosedTrade:
     net_proceeds_gbp: float
     implied_trading_cost_gbp: float
     realized_pnl_gbp: float
+    position_side: str = "long"
     average_cost_basis_gbp: float | None = None
     average_cost_per_share_gbp: float | None = None
     average_cost_realized_pnl_gbp: float | None = None
@@ -2761,6 +2762,7 @@ def _parse_closed_trades_from_position_row(position: PortfolioPosition) -> tuple
                 net_proceeds_gbp=_safe_float(item.get("net_proceeds_gbp")) or 0.0,
                 implied_trading_cost_gbp=_safe_float(item.get("implied_trading_cost_gbp")) or 0.0,
                 realized_pnl_gbp=_safe_float(item.get("realized_pnl_gbp")) or 0.0,
+                position_side=str(item.get("position_side") or "long"),
                 average_cost_basis_gbp=_safe_float(item.get("average_cost_basis_gbp")),
                 average_cost_per_share_gbp=_safe_float(item.get("average_cost_per_share_gbp")),
                 average_cost_realized_pnl_gbp=_safe_float(item.get("average_cost_realized_pnl_gbp")),

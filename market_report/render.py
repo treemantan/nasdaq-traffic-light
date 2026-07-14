@@ -1898,7 +1898,7 @@ def _render_closed_trade_group(symbol: str, trades: list) -> str:
     window = f"{min(opened_dates) if opened_dates else 'N/A'} → {max(closed_dates) if closed_dates else 'N/A'}"
     details = _render_closed_trade_lot_details(trades)
     return f"""<tr>
-      <td>{escape(symbol)}<br><span class="portfolio-scope">{len(trades)}个买入批次</span></td>
+      <td>{escape(symbol)}<br><span class="portfolio-scope">{len(trades)}个已平仓批次</span></td>
       <td>{escape(window)}<br><details><summary class="portfolio-scope">查看 FIFO 批次计算明细</summary>{details}</details></td>
       <td>{escape(_fmt_quantity(quantity))}</td>
       <td>{escape(_fmt_gbp(cost_basis))}</td>
@@ -1912,6 +1912,7 @@ def _render_closed_trade_lot_details(trades: list) -> str:
         f"""<tr>
           <td>{escape(trade.opened_at or 'N/A')}</td>
           <td>{escape(trade.closed_at or 'N/A')}</td>
+          <td>{'Short' if getattr(trade, 'position_side', 'long') == 'short' else 'Long'}</td>
           <td>{escape(_fmt_holding_days(trade.holding_days))}</td>
           <td>{escape(_fmt_quantity(trade.quantity))}</td>
           <td>{escape(_fmt_gbp(trade.cost_basis_gbp))}</td>
@@ -1927,10 +1928,10 @@ def _render_closed_trade_lot_details(trades: list) -> str:
         </tr>"""
         for trade in trades
     )
-    return f"""<div class="small-note">以下 FIFO/均价/卖出金额均为 GBP 会计口径，用于和组合总收益对账；对美股等非GBP资产，这不是原生成交币种价格。</div>
+    return f"""<div class="small-note">以下 FIFO/均价/卖出金额均为 GBP 会计口径，用于和组合总收益对账；对美股等非GBP资产，这不是原生成交币种价格。Short 行的 FIFO成本表示买回成本，卖出净额表示卖空开仓收入。</div>
       <div class="portfolio-table-scroll">
         <table class="portfolio-table">
-          <thead><tr><th>买入日期</th><th>卖出日期</th><th>持有期</th><th>匹配数量</th><th>FIFO成本GBP</th><th>均价成本GBP</th><th>卖出毛额GBP</th><th>交易成本GBP</th><th>卖出净额GBP</th><th>FIFO成本/股GBP</th><th>均价成本/股GBP</th><th>净卖出/股GBP</th><th>FIFO盈亏GBP</th><th>均价盈亏GBP</th></tr></thead>
+          <thead><tr><th>开仓日期</th><th>平仓日期</th><th>方向</th><th>持有期</th><th>匹配数量</th><th>FIFO成本GBP</th><th>均价成本GBP</th><th>卖出毛额GBP</th><th>交易成本GBP</th><th>卖出净额GBP</th><th>FIFO成本/股GBP</th><th>均价成本/股GBP</th><th>净卖出/股GBP</th><th>FIFO盈亏GBP</th><th>均价盈亏GBP</th></tr></thead>
           <tbody>{rows}</tbody>
         </table>
       </div>"""

@@ -739,7 +739,7 @@ def _render_closed_trade_group_email(symbol: str, trades: list) -> str:
     window = f"{min(opened_dates) if opened_dates else 'N/A'} → {max(closed_dates) if closed_dates else 'N/A'}"
     return (
         f'<li style="margin-top:4px;color:{_pnl_color(realized_pnl)};">'
-        f'{escape(symbol)} {escape(_fmt_signed_gbp(realized_pnl))} · {len(trades)}个买入批次 · '
+        f'{escape(symbol)} {escape(_fmt_signed_gbp(realized_pnl))} · {len(trades)}个已平仓批次 · '
         f'{escape(window)} · 数量 {escape(_fmt_quantity(quantity))} · '
         f'净卖出 {escape(_fmt_gbp(net_proceeds))} / FIFO成本 {escape(_fmt_gbp(cost_basis))} / '
         f'均价口径 {escape(_fmt_signed_gbp(average_cost_pnl))}'

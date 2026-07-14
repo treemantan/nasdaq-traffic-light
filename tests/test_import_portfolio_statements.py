@@ -868,6 +868,57 @@ class ImportPortfolioStatementsTests(unittest.TestCase):
         self.assertEqual(positions["TESTX"]["unmatched_sells"][0]["currency"], "USD")
         self.assertEqual(positions["TESTX"]["unmatched_sells"][0]["net_proceeds_native"], 2325.46)
 
+    def test_ibkr_intraday_short_sale_and_buy_to_cover_clear_without_residual_position(self) -> None:
+        header = (
+            "ClientAccountID,Symbol,TradeID,ExecID,TradeDate,Buy/Sell,Quantity,Price,"
+            "NetCash,Commission,CommissionCurrency,CurrencyPrimary,LevelOfDetail\n"
+        )
+        content = (
+            header
+            + "U1,SNDK,t1,exec-1,20260713,SELL,1,100,100,0,GBP,GBP,EXECUTION\n"
+            + "U1,SNDK,t2,exec-2,20260713,BUY,1,90,-90,0,GBP,GBP,EXECUTION\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "ibkr-trade-confirm.csv"
+            path.write_text(content, encoding="utf-8")
+            positions = MODULE._reconstruct_ibkr_positions([path])
+
+        sndk = positions["SNDK"]
+        self.assertEqual(sndk["quantity"], 0)
+        self.assertEqual(sndk["cost_gbp"], 0)
+        self.assertEqual(sndk["unmatched_sells"], [])
+        self.assertAlmostEqual(sndk["realized_pnl_gbp"], 10)
+        self.assertEqual(len(sndk["closed_trades"]), 1)
+        self.assertEqual(sndk["closed_trades"][0]["position_side"], "short")
+
+    def test_ibkr_sndk_long_short_cover_and_next_day_round_trip_end_flat(self) -> None:
+        header = (
+            "ClientAccountID,Symbol,TradeID,ExecID,TradeDate,Buy/Sell,Quantity,Price,"
+            "NetCash,Commission,CommissionCurrency,CurrencyPrimary,LevelOfDetail\n"
+        )
+        content = (
+            header
+            + "U1,SNDK,t1,exec-1,20260708,BUY,1,120,-120,0,GBP,GBP,EXECUTION\n"
+            + "U1,SNDK,t2,exec-2,20260713,SELL,2,130,260,0,GBP,GBP,EXECUTION\n"
+            + "U1,SNDK,t3,exec-3,20260713,BUY,1,125,-125,0,GBP,GBP,EXECUTION\n"
+            + "U1,SNDK,t4,exec-4,20260714,BUY,2,128,-256,0,GBP,GBP,EXECUTION\n"
+            + "U1,SNDK,t5,exec-5,20260714,SELL,2,132,264,0,GBP,GBP,EXECUTION\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "ibkr-trade-confirm.csv"
+            path.write_text(content, encoding="utf-8")
+            positions = MODULE._reconstruct_ibkr_positions([path])
+
+        sndk = positions["SNDK"]
+        self.assertEqual(sndk["quantity"], 0)
+        self.assertEqual(sndk["cost_gbp"], 0)
+        self.assertEqual(sndk["unmatched_sells"], [])
+        self.assertAlmostEqual(sndk["realized_pnl_gbp"], 23)
+        self.assertEqual(
+            [(trade["position_side"], trade["quantity"]) for trade in sndk["closed_trades"]],
+            [("long", 1), ("short", 1), ("long", 2)],
+        )
+
     def test_ibkr_data_health_prefers_latest_manual_activity_revision(self) -> None:
         content = """<?xml version="1.0" encoding="UTF-8"?>
 <FlexQueryResponse>
