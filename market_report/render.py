@@ -1759,17 +1759,26 @@ def _render_portfolio_performance(monitor: ETFMonitor) -> str:
     performance = monitor.portfolio_performance
     if performance is None:
         return ""
+    stock_realized = sum(trade.realized_pnl_gbp for trade in performance.closed_trades)
+    option_realized = sum(trade.realized_pnl_gbp for trade in performance.closed_option_trades)
+    realized_detail = (
+        f"股票 {_fmt_signed_gbp(stock_realized)} · 期权 {_fmt_signed_gbp(option_realized)}"
+    )
+    realized_residual = performance.realized_pnl_gbp - stock_realized - option_realized
+    if abs(realized_residual) >= 0.01:
+        realized_detail += f" · 其他/未归因 {_fmt_signed_gbp(realized_residual)}"
     cards = (
-        ("扣费后可识别总收益", performance.total_return_gbp),
-        ("未实现盈亏", performance.unrealized_pnl_gbp),
-        ("已实现交易盈亏（净额）", performance.realized_pnl_gbp),
-        ("股息收入", performance.dividend_income_gbp),
-        ("隐含交易成本", -performance.implied_trading_cost_gbp),
+        ("扣费后可识别总收益", performance.total_return_gbp, ""),
+        ("未实现盈亏", performance.unrealized_pnl_gbp, ""),
+        ("已实现交易盈亏（净额）", performance.realized_pnl_gbp, realized_detail),
+        ("股息收入", performance.dividend_income_gbp, ""),
+        ("隐含交易成本", -performance.implied_trading_cost_gbp, ""),
     )
     rendered = "".join(
         f'<div class="portfolio-exposure"><span class="muted">{escape(label)}</span>'
-        f'<strong class="{_pnl_class(value)}">{escape(_fmt_signed_gbp(value))}</strong></div>'
-        for label, value in cards
+        f'<strong class="{_pnl_class(value)}">{escape(_fmt_signed_gbp(value))}</strong>'
+        f'{f"<span class=\"portfolio-scope\">{escape(detail)}</span>" if detail else ""}</div>'
+        for label, value, detail in cards
     )
     return (
         '<div class="portfolio-notes"><strong>收益归因（statement 导出窗口内，可识别口径）</strong></div>'
@@ -1819,7 +1828,18 @@ def _unmatched_proceeds(item) -> str:
 def _render_closed_trade_breakdown(performance) -> str:
     if not performance.closed_trades:
         return ""
-    rows = "".join(_render_closed_trade_group(symbol, trades) for symbol, trades in _closed_trade_groups(performance.closed_trades))
+    groups = _closed_trade_groups(performance.closed_trades)
+    rows = "".join(_render_closed_trade_group(symbol, trades) for symbol, trades in groups)
+    trades = performance.closed_trades
+    quantity = sum(trade.quantity for trade in trades)
+    cost_basis = sum(trade.cost_basis_gbp for trade in trades)
+    gross_proceeds = sum(trade.gross_proceeds_gbp for trade in trades)
+    net_proceeds = sum(trade.net_proceeds_gbp for trade in trades)
+    implied_cost = sum(trade.implied_trading_cost_gbp for trade in trades)
+    realized_pnl = sum(trade.realized_pnl_gbp for trade in trades)
+    average_cost_pnl = _sum_optional(
+        getattr(trade, "average_cost_realized_pnl_gbp", None) for trade in trades
+    )
     return f"""<details class="portfolio-notes">
       <summary>已平仓交易归因（FIFO近似）</summary>
       <div class="small-note">用于解释 statement 窗口内已实现盈亏来源；先按 ticker 聚合，展开后显示所有 FIFO 买入批次，0天表示同日买卖。</div>
@@ -1827,6 +1847,13 @@ def _render_closed_trade_breakdown(performance) -> str:
         <table class="portfolio-table">
           <thead><tr><th>资产</th><th>清算窗口</th><th>数量</th><th>成本基础</th><th>净卖出额</th><th>已实现盈亏</th></tr></thead>
           <tbody>{rows}</tbody>
+          <tfoot><tr>
+            <td colspan="2">已平仓股票合计<br><span class="portfolio-scope">{len(groups)} 个标的 · {len(trades)} 个已平仓批次</span></td>
+            <td>{escape(_fmt_quantity(quantity))}</td>
+            <td>{escape(_fmt_gbp(cost_basis))}</td>
+            <td>{escape(_fmt_gbp(net_proceeds))}<br><span class="portfolio-scope">毛额 {escape(_fmt_gbp(gross_proceeds))} · 成本 {escape(_fmt_gbp(implied_cost))}</span></td>
+            <td class="{_pnl_class(realized_pnl)}">{escape(_fmt_signed_gbp(realized_pnl))}<br><span class="portfolio-scope">均价口径 {escape(_fmt_signed_gbp(average_cost_pnl))}</span></td>
+          </tr></tfoot>
         </table>
       </div>
     </details>"""
