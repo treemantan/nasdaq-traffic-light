@@ -35,6 +35,7 @@ def without_portfolio(payload: dict) -> dict:
     monitor["portfolio_exposure_notes"] = []
     monitor["portfolio_mag7_exposures"] = []
     monitor["portfolio_mag7_notes"] = []
+    monitor["core_etf_plan"] = None
 
     if removed_symbols:
         summary = monitor.get("summary")

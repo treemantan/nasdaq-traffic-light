@@ -56,6 +56,7 @@ class AppConfig:
     swing_watchlist: list[str]
     options_gamma: OptionsGammaConfig
     options_sentiment: OptionsSentimentConfig
+    core_etf_plan: dict
     email: EmailConfig
 
 
@@ -73,6 +74,7 @@ def load_config(path: str) -> AppConfig:
     email = raw.get("email", {})
     options_gamma = raw.get("options_gamma", {})
     options_sentiment = raw.get("options_sentiment", {})
+    core_etf_plan = _json_env_or_mapping("CORE_ETF_PLAN_JSON", raw.get("core_etf_plan", {}))
     weights = _normalize_weights(raw.get("weights", {}))
     swing_watchlist = _env_list("SWING_WATCHLIST") or _as_list(raw.get("swing_watchlist", []))
     gamma_tickers = _env_list("OPTIONS_GAMMA_TICKERS") or _as_list(options_gamma.get("tickers", []))
@@ -137,6 +139,7 @@ def load_config(path: str) -> AppConfig:
             ),
             max_tickers=int(os.environ.get("OPTIONS_SENTIMENT_MAX_TICKERS", options_sentiment.get("max_tickers", 12))),
         ),
+        core_etf_plan=core_etf_plan,
         email=EmailConfig(
             enabled=_env_bool("EMAIL_ENABLED", bool(email.get("enabled", False))),
             smtp_host=os.environ.get("SMTP_HOST", email.get("smtp_host", "smtp.gmail.com")),
@@ -183,3 +186,13 @@ def _env_bool(name: str, default: bool) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _json_env_or_mapping(name: str, fallback: object) -> dict:
+    raw = os.environ.get(name)
+    if raw:
+        parsed = json.loads(raw)
+        if not isinstance(parsed, dict):
+            raise ValueError(f"{name} must contain a JSON object.")
+        return parsed
+    return dict(fallback) if isinstance(fallback, Mapping) else {}

@@ -11,6 +11,9 @@
     "dxy": 0.2
   },
   "swing_watchlist": [],
+  "core_etf_plan": {
+    "enabled": false
+  },
   "options_gamma": {
     "enabled": true,
     "benchmark_tickers": ["SPY", "QQQ"],

@@ -106,6 +106,10 @@ class ReportPrivacyTests(unittest.TestCase):
                 "portfolio_exposure_notes": ["私人暴露"],
                 "portfolio_mag7_exposures": [{"name": "NVDA"}],
                 "portfolio_mag7_notes": ["私人MAG7"],
+                "core_etf_plan": {
+                    "enabled": True,
+                    "decisions": [{"symbol": "VUAG.L", "suggested_order_gbp": 1000}],
+                },
             },
         }
 
@@ -122,6 +126,7 @@ class ReportPrivacyTests(unittest.TestCase):
         self.assertEqual(sanitized["etf_monitor"]["portfolio_positions"], [])
         self.assertIsNone(sanitized["etf_monitor"]["portfolio_total_value_gbp"])
         self.assertIsNone(sanitized["etf_monitor"]["portfolio_performance"])
+        self.assertIsNone(sanitized["etf_monitor"]["core_etf_plan"])
         self.assertEqual(
             sanitized["iron_condor"]["warnings"],
             ["MOVE上行，债券波动扩散。"],

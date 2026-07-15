@@ -38,6 +38,16 @@ class BuildPublicReportArtifactTests(unittest.TestCase):
                         "etf_monitor": {
                             "assets": [],
                             "portfolio_positions": [{"symbol": "SECRET"}],
+                            "core_etf_plan": {
+                                "enabled": True,
+                                "summary": "private allocation plan",
+                                "decisions": [
+                                    {
+                                        "symbol": "VUAG.L",
+                                        "suggested_order_gbp": 1000,
+                                    }
+                                ],
+                            },
                         },
                     }
                 ),
@@ -71,6 +81,7 @@ class BuildPublicReportArtifactTests(unittest.TestCase):
                 public_payload["etf_monitor"]["portfolio_positions"],
                 [],
             )
+            self.assertIsNone(public_payload["etf_monitor"]["core_etf_plan"])
             self.assertEqual(
                 (artifact_dir / "market-report-2026-06-13.html").read_text(
                     encoding="utf-8"
