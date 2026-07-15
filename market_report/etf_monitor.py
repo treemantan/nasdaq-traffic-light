@@ -328,6 +328,8 @@ class ETFAssetMonitor:
     momentum_5d: float | None = None
     momentum_1m: float | None = None
     momentum_3m: float | None = None
+    peak_1y: float | None = None
+    drawdown_1y_peak_pct: float | None = None
     sma13: float | None = None
     sma50: float | None = None
     sma200: float | None = None
@@ -388,6 +390,7 @@ class ETFMonitor:
     portfolio_exposure_notes: list[str] = field(default_factory=list)
     portfolio_mag7_exposures: list[PortfolioExposure] = field(default_factory=list)
     portfolio_mag7_notes: list[str] = field(default_factory=list)
+    core_etf_plan: dict | None = None
 
 
 DEFAULT_ETF_SPECS = [
@@ -454,7 +457,11 @@ ISHARES_PORTFOLIO_VALUATION_URLS = {
 }
 
 
-def fetch_etf_monitor(specs: list[ETFSpec] | None = None, macro_metrics: dict[str, Any] | None = None) -> ETFMonitor:
+def fetch_etf_monitor(
+    specs: list[ETFSpec] | None = None,
+    macro_metrics: dict[str, Any] | None = None,
+    core_etf_plan_config: dict[str, Any] | None = None,
+) -> ETFMonitor:
     fetched_at = datetime.now(timezone.utc)
     cache = _load_cache()
     previous_assets = dict(cache.get("assets") or {})
@@ -473,6 +480,14 @@ def fetch_etf_monitor(specs: list[ETFSpec] | None = None, macro_metrics: dict[st
     portfolio_performance = _portfolio_performance_summary(portfolio_positions)
     portfolio_exposures, portfolio_exposure_notes = _portfolio_exposure_summary(assets, portfolio_positions)
     portfolio_mag7_exposures, portfolio_mag7_notes = _portfolio_mag7_summary(assets, portfolio_positions)
+    from .core_etf_plan import build_core_etf_plan
+
+    core_etf_plan = build_core_etf_plan(
+        core_etf_plan_config or {},
+        assets,
+        portfolio_positions,
+        fetched_at.date(),
+    )
     return ETFMonitor(
         summary=_build_summary(assets),
         assets=assets,
@@ -487,6 +502,7 @@ def fetch_etf_monitor(specs: list[ETFSpec] | None = None, macro_metrics: dict[st
         portfolio_exposure_notes=portfolio_exposure_notes,
         portfolio_mag7_exposures=portfolio_mag7_exposures,
         portfolio_mag7_notes=portfolio_mag7_notes,
+        core_etf_plan=core_etf_plan,
     )
 
 
@@ -674,6 +690,8 @@ def _fetch_etf_asset(
         momentum_5d=_momentum(closes, 5),
         momentum_1m=_momentum(closes, 21),
         momentum_3m=_momentum(closes, 63),
+        peak_1y=max(closes[-252:]) if closes else None,
+        drawdown_1y_peak_pct=_drawdown_from_peak(closes[-252:]),
         sma13=_sma(closes, 13),
         sma50=_sma(closes, 50),
         sma200=_sma(closes, 200),
@@ -1318,6 +1336,8 @@ def _write_asset_cache(cache: dict[str, Any], asset: ETFAssetMonitor) -> None:
         "momentum_5d": asset.momentum_5d,
         "momentum_1m": asset.momentum_1m,
         "momentum_3m": asset.momentum_3m,
+        "peak_1y": asset.peak_1y,
+        "drawdown_1y_peak_pct": asset.drawdown_1y_peak_pct,
         "sma13": asset.sma13,
         "sma50": asset.sma50,
         "sma200": asset.sma200,
@@ -1393,6 +1413,8 @@ def _asset_from_cache(spec: ETFSpec, entry: dict[str, Any], fetched_at: datetime
         momentum_5d=_safe_float(entry.get("momentum_5d")),
         momentum_1m=_safe_float(entry.get("momentum_1m")),
         momentum_3m=_safe_float(entry.get("momentum_3m")),
+        peak_1y=_safe_float(entry.get("peak_1y")),
+        drawdown_1y_peak_pct=_safe_float(entry.get("drawdown_1y_peak_pct")),
         sma13=_safe_float(entry.get("sma13")),
         sma50=_safe_float(entry.get("sma50")),
         sma200=_safe_float(entry.get("sma200")),
@@ -3652,6 +3674,15 @@ def _distance_to_sma(value: float | None, sma: float | None) -> float | None:
     if value is None or sma in (None, 0):
         return None
     return (value / sma - 1) * 100
+
+
+def _drawdown_from_peak(values: list[float]) -> float | None:
+    if not values:
+        return None
+    peak = max(values)
+    if peak <= 0:
+        return None
+    return (values[-1] / peak - 1) * 100
 
 
 def _pct_change(value: float | None, previous: float | None) -> float | None:

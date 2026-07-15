@@ -1172,18 +1172,60 @@ def _render_etf_monitor(
     if monitor.warnings:
         warnings = "<div class=\"small-note\">数据提示：" + escape(_summarize_etf_warnings(monitor.warnings)) + "</div>"
     changes = _render_etf_notes("今日ETF变动摘要", monitor.change_summary)
+    core_plan = _render_core_etf_plan(monitor.core_etf_plan)
     portfolio = _render_portfolio_panel(monitor, news_monitor, portfolio_event_monitor, option_history)
     sensitivities = _render_sensitivity_panel(monitor)
     return f"""<section class="panel">
       <h2>UK ETF估值、趋势与拥挤度监控器</h2>
       <div class="etf-summary">{escape(monitor.summary)}</div>
       {changes}
+      {core_plan}
       {portfolio}
       {sensitivities}
       <div class="etf-groups">{groups}</div>
       <div class="small-note">PE衡量底层持仓组合的盈利估值，Forward PE基于未来盈利预期；组合P/B衡量底层持仓市值相对账面净资产的加权估值，并非ETF自身资产负债表指标。组合估值按发行商披露节奏更新，不等同于实时行情。PE位置优先显示本地历史分位；样本不足时显示“当前PE/近一年缓存最高PE”的近似比例。σ200使用63/126/252日窗口去极值后的稳健趋势波动率。持仓重叠度基于可获得的前十大持仓近似计算，并非完整穿透。估值源若标记为proxy，表示使用高度相关的同类ETF作近似参考。黄金、现金、短债和固定收益类产品不适用PE/PB，应观察实际利率、久期、收益率和流动性。</div>
       {warnings}
     </section>"""
+
+
+def _render_core_etf_plan(plan: dict | None) -> str:
+    if not plan or not plan.get("enabled"):
+        return ""
+    rows = []
+    for item in plan.get("decisions") or []:
+        target_value = item.get("target_weight_pct")
+        target = f"{target_value:.0f}%" if isinstance(target_value, (int, float)) else "N/A"
+        drawdown = _fmt_pct(item.get("drawdown_1y_peak_pct"))
+        sma200 = _fmt_pct(item.get("distance_sma200_pct"))
+        planned = _fmt_gbp(item.get("planned_addition_gbp"))
+        executed = _fmt_gbp(item.get("estimated_executed_gbp"))
+        suggested = _fmt_gbp(item.get("suggested_order_gbp"))
+        rows.append(
+            "<tr>"
+            f"<td><strong>{escape(str(item.get('symbol') or ''))}</strong></td>"
+            f"<td>{escape(target)}</td>"
+            f"<td>{escape(drawdown)} / {escape(sma200)}</td>"
+            f"<td>{escape(str(item.get('stage') or ''))}<div class=\"small-note\">{escape(str(item.get('trigger') or ''))}</div></td>"
+            f"<td>{escape(planned)} / {escape(executed)}</td>"
+            f"<td><strong>{escape(suggested)}</strong></td>"
+            f"<td><strong>{escape(str(item.get('status') or ''))}</strong><div class=\"small-note\">{escape(str(item.get('action') or ''))}</div></td>"
+            "</tr>"
+        )
+    warnings = "".join(f"<li>{escape(str(item))}</li>" for item in (plan.get("warnings") or []))
+    warning_block = f'<div class="portfolio-notes"><ul>{warnings}</ul></div>' if warnings else ""
+    body = "".join(rows) or '<tr><td colspan="7">计划已启用，但暂无可评估标的。</td></tr>'
+    return f"""<div class="portfolio-panel">
+      <div class="portfolio-title">核心ETF加仓判单</div>
+      <div class="small-note">{escape(str(plan.get("summary") or ""))}</div>
+      <div class="portfolio-table-scroll">
+        <table class="portfolio-table">
+          <thead><tr><th>ETF</th><th>目标</th><th>距1Y高点 / SMA200</th><th>触发档</th><th>计划 / 已执行估算</th><th>今日上限</th><th>判单</th></tr></thead>
+          <tbody>{body}</tbody>
+        </table>
+      </div>
+      <div class="small-note">“可下单”表示预设条件满足，不代表自动交易；下单前核对IBKR实时价格、当日事件和statement是否已反映最近成交。</div>
+      {warning_block}
+    </div>"""
 
 
 def _render_portfolio_panel(

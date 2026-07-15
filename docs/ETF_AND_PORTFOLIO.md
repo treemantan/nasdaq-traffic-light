@@ -149,6 +149,41 @@ Revolut trading statement 暂不提供稳定的逐笔 commission 字段，但可
 
 该板块用于观察大型科技平台集中度，属于可识别下限。它不是完整基金穿透：ETF 前十大持仓之外仍可能包含 MAG7 公司。
 
+## 核心 ETF 加仓判单
+
+日报可为 `VUAG.L`、`VWRL.L`、`CNX1.L` 和 `ISF.L` 生成独立的分批加仓提醒。该功能只读取这四只核心 ETF，不会把主题 ETF 或单股纳入计划。
+
+默认触发逻辑按每只 ETF 自身距近一年高点的回撤计算：
+
+- 尚未回撤 3%：累计释放计划预算的 20%
+- 回撤达到 3%：累计释放 50%
+- 回撤达到 8%：累计释放 80%
+- 计划运行达到 `fallback_days` 且价格仍在 SMA200 上方：累计释放 100%
+- 价格低于 SMA200 或行情超过 3 天未更新：暂停下单提醒，保留预算等待人工复核
+
+“累计释放”会扣除 statement 中相对 `baseline_quantity` 新增数量的估算金额，避免每次运行重复提示同一笔预算。该估算使用新增数量乘当前 GBP 价格，可能与真实成交成本略有差异；最近交易尚未进入 statement 时仍需人工核对。
+
+私人配置应保存为 GitHub Actions Secret `CORE_ETF_PLAN_JSON`，不要提交到公开配置。示例：
+
+```json
+{
+  "enabled": true,
+  "start_date": "2026-07-15",
+  "fallback_days": 56,
+  "minimum_order_gbp": 100,
+  "allocations": [
+    {
+      "symbol": "VUAG.L",
+      "target_weight": 0.40,
+      "planned_addition_gbp": 5000,
+      "baseline_quantity": 10
+    }
+  ]
+}
+```
+
+`config.example.json` 保持 `enabled: false`。GitHub Actions 会在生成私人报告时读取 Secret；公开 artifact 会再次移除整个 `core_etf_plan` 字段。报告只给出“当前档位允许新增的金额上限”，不会自动发送订单。
+
 ## 分数不是交易指令
 
 新增仓位环境分数、拥挤度、回撤分类和相似环境样本用于风险管理与研究复核，不提供买卖、仓位比例、行权价或到期日建议。

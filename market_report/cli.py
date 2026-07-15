@@ -36,7 +36,10 @@ def main() -> int:
 
     config = load_config(args.config)
     snapshot = fetch_market_snapshot()
-    etf_monitor = fetch_etf_monitor(macro_metrics=snapshot.metrics)
+    etf_monitor = fetch_etf_monitor(
+        macro_metrics=snapshot.metrics,
+        core_etf_plan_config=config.core_etf_plan,
+    )
     news_monitor = fetch_news_monitor()
     policy_risk_monitor = build_policy_risk_monitor(news_monitor)
     mag7_capital_network = build_mag7_capital_network()

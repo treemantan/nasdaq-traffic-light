@@ -583,17 +583,40 @@ def _render_etf_monitor(
         return ""
     grouped_rows = "".join(_render_etf_email_group(group) for group in _group_etf_assets(monitor.assets))
     changes = _render_email_notes("今日ETF变动摘要", monitor.change_summary)
+    core_plan = _render_core_etf_plan_email(monitor.core_etf_plan)
     portfolio = _render_portfolio_email(monitor, news_monitor, portfolio_event_monitor)
     return f"""<tr>
       <td style="padding:0 24px 18px;">
         <div style="font-size:19px;font-weight:700;color:#f3f4f6;margin:8px 0 8px;">UK ETF估值、趋势与拥挤度监控器</div>
         <div style="font-size:13px;color:#d1d5db;margin-bottom:8px;">{escape(monitor.summary)}</div>
         {changes}
+        {core_plan}
         {portfolio}
         {grouped_rows}
         <div style="font-size:12px;color:#9ca3af;margin-top:8px;">PE与组合P/B均为底层持仓组合估值，不是ETF自身资产负债表指标。组合估值按发行商披露节奏更新，不等同于实时行情。PE位置优先显示本地历史分位；样本不足时显示当前PE/近一年缓存最高PE的近似比例。σ200使用去极值后的稳健趋势波动率，避免少数极端日收益掩盖趋势拉伸。proxy 表示使用同类ETF作近似估值参考；黄金、现金、短债和固定收益类产品不适用PE/PB。</div>
       </td>
     </tr>"""
+
+
+def _render_core_etf_plan_email(plan: dict | None) -> str:
+    if not plan or not plan.get("enabled"):
+        return ""
+    cards = []
+    for item in plan.get("decisions") or []:
+        cards.append(
+            '<tr><td style="padding:8px;border-bottom:1px solid #263244;">'
+            f'<strong style="color:#f3f4f6;">{escape(str(item.get("symbol") or ""))}</strong> · '
+            f'{escape(str(item.get("status") or ""))} · 今日上限 {_fmt_gbp(item.get("suggested_order_gbp"))}<br>'
+            f'<span style="font-size:11px;color:#9ca3af;">{escape(str(item.get("stage") or ""))} · '
+            f'距1Y高点 {_fmt_pct(item.get("drawdown_1y_peak_pct"))} · '
+            f'距SMA200 {_fmt_pct(item.get("distance_sma200_pct"))} · '
+            f'{escape(str(item.get("action") or ""))}</span></td></tr>'
+        )
+    body = "".join(cards) or '<tr><td style="padding:8px;">暂无可评估标的。</td></tr>'
+    return f"""<div style="font-size:15px;font-weight:700;color:#f3f4f6;margin:14px 0 4px;">核心ETF加仓判单</div>
+      <div style="font-size:12px;color:#9ca3af;margin-bottom:6px;">{escape(str(plan.get("summary") or ""))}</div>
+      <table width="100%" cellspacing="0" cellpadding="0" style="border:1px solid #263244;border-collapse:collapse;font-size:12px;color:#d1d5db;margin-bottom:8px;">{body}</table>
+      <div style="font-size:11px;color:#9ca3af;margin-bottom:8px;">仅为预设条件提醒，不会自动交易；下单前核对IBKR实时价和最近成交。</div>"""
 
 
 def _render_portfolio_email(
