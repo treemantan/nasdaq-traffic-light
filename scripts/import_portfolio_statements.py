@@ -276,8 +276,8 @@ def _cover_intraday_ibkr_shorts_fifo(
     closed_trades: list[dict[str, Any]] = []
     while remaining > 1e-10 and short_lots:
         lot = short_lots[0]
-        if str(lot.get("date") or "") != closed_at:
-            break
+        # IBKR shorts can remain open overnight. Restricting covers to the
+        # opening date turns a next-day buy-to-cover into a false long holding.
         lot_quantity = float(lot.get("quantity") or 0.0)
         lot_proceeds = float(lot.get("net_proceeds_gbp") or 0.0)
         if lot_quantity <= 1e-10:

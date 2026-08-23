@@ -62,6 +62,27 @@ class TechnicalScorecard:
 
 
 @dataclass(frozen=True)
+class TechnicalStructureDiagnostic:
+    channel_window: int
+    channel_lower: float | None
+    channel_mid: float | None
+    channel_upper: float | None
+    channel_position_pct: float | None
+    channel_slope_20d_pct: float | None
+    efficiency_ratio_20d: float | None
+    short_term_state: str
+    medium_term_state: str
+    long_term_state: str
+    phase: str
+    continuation_tendency: str
+    reversal_risk: str
+    bar_patterns: tuple[str, ...] = ()
+    summary: str = ""
+    confirmation: str = ""
+    invalidation: str = ""
+
+
+@dataclass(frozen=True)
 class SwingAssessment:
     symbol: str
     origin: str
@@ -87,6 +108,7 @@ class SwingAssessment:
     unrealized_pnl_gbp: float | None = None
     unrealized_pnl_pct: float | None = None
     scorecard: TechnicalScorecard | None = None
+    structure: TechnicalStructureDiagnostic | None = None
     warnings: tuple[str, ...] = ()
 
 
@@ -371,6 +393,239 @@ def _calculate_scorecard(
     )
 
 
+def _build_structure_diagnostic(
+    bars: Sequence[PriceBar],
+    indicators: IndicatorSnapshot,
+    scorecard: TechnicalScorecard,
+    *,
+    asset_class: str,
+) -> TechnicalStructureDiagnostic | None:
+    if asset_class != "equity" or len(bars) < 30:
+        return None
+    window = min(90, len(bars))
+    scoped = bars[-window:]
+    closes = [bar.close for bar in scoped]
+    lower, mid, upper, slope_pct = _regression_channel(closes)
+    price = bars[-1].close
+    position_pct = (
+        (price - lower) / (upper - lower) * 100
+        if lower is not None and upper is not None and upper > lower
+        else None
+    )
+    efficiency = _efficiency_ratio([bar.close for bar in bars], 20)
+    short_state = _short_term_state(price, indicators)
+    medium_state = _medium_term_state(price, indicators)
+    long_state = _long_term_state(price, indicators)
+    patterns = _bar_patterns(bars, indicators)
+    phase = _structure_phase(short_state, medium_state, long_state, patterns)
+    continuation = _continuation_tendency(short_state, medium_state, long_state, efficiency, patterns)
+    reversal = _reversal_risk(indicators.rsi14, position_pct, short_state, long_state, patterns)
+    summary, confirmation, invalidation = _structure_narrative(
+        price,
+        lower,
+        mid,
+        upper,
+        indicators,
+        short_state,
+        medium_state,
+        long_state,
+        phase,
+        patterns,
+    )
+    return TechnicalStructureDiagnostic(
+        channel_window=window,
+        channel_lower=lower,
+        channel_mid=mid,
+        channel_upper=upper,
+        channel_position_pct=position_pct,
+        channel_slope_20d_pct=slope_pct,
+        efficiency_ratio_20d=efficiency,
+        short_term_state=short_state,
+        medium_term_state=medium_state,
+        long_term_state=long_state,
+        phase=phase,
+        continuation_tendency=continuation,
+        reversal_risk=reversal,
+        bar_patterns=patterns,
+        summary=summary,
+        confirmation=confirmation,
+        invalidation=invalidation,
+    )
+
+
+def _regression_channel(closes: Sequence[float]) -> tuple[float | None, float | None, float | None, float | None]:
+    count = len(closes)
+    if count < 20:
+        return None, None, None, None
+    x_mean = (count - 1) / 2
+    y_mean = sum(closes) / count
+    denominator = sum((index - x_mean) ** 2 for index in range(count))
+    if denominator <= 0:
+        return None, None, None, None
+    slope = sum((index - x_mean) * (value - y_mean) for index, value in enumerate(closes)) / denominator
+    intercept = y_mean - slope * x_mean
+    fitted = [intercept + slope * index for index in range(count)]
+    residual_sigma = math.sqrt(sum((value - fit) ** 2 for value, fit in zip(closes, fitted)) / count)
+    mid = fitted[-1]
+    width = max(2 * residual_sigma, abs(mid) * 0.005)
+    slope_pct = slope * 20 / mid * 100 if mid else None
+    return mid - width, mid, mid + width, slope_pct
+
+
+def _efficiency_ratio(closes: Sequence[float], window: int) -> float | None:
+    if len(closes) <= window:
+        return None
+    scoped = closes[-window - 1:]
+    path = sum(abs(current - previous) for previous, current in zip(scoped, scoped[1:]))
+    if path <= 0:
+        return 0.0
+    return abs(scoped[-1] - scoped[0]) / path
+
+
+def _short_term_state(price: float, indicators: IndicatorSnapshot) -> str:
+    ema5, ema10, ema21 = indicators.ema5, indicators.ema10, indicators.ema21
+    macd = indicators.macd
+    if None in (ema5, ema10, ema21):
+        return "数据不足"
+    if price > ema5 > ema10 > ema21 and (macd is None or macd.position != "below_signal"):
+        return "短线多头"
+    if price < ema5 < ema10 < ema21 and (macd is None or macd.position != "above_signal"):
+        return "短线空头"
+    if price > ema21:
+        return "短线修复"
+    return "短线回调"
+
+
+def _medium_term_state(price: float, indicators: IndicatorSnapshot) -> str:
+    if indicators.sma50 is None:
+        return "数据不足"
+    if price > indicators.sma50 and (indicators.return_60d or 0) > 0:
+        return "中期上升"
+    if price < indicators.sma50 and (indicators.return_60d or 0) < 0:
+        return "中期下行"
+    return "中期震荡"
+
+
+def _long_term_state(price: float, indicators: IndicatorSnapshot) -> str:
+    if indicators.sma50 is None or indicators.sma200 is None:
+        return "数据不足"
+    if price > indicators.sma200 and indicators.sma50 > indicators.sma200:
+        return "长期多头"
+    if price < indicators.sma200 and indicators.sma50 < indicators.sma200:
+        return "长期空头"
+    if price > indicators.sma200:
+        return "长期修复"
+    return "长期转弱"
+
+
+def _bar_patterns(bars: Sequence[PriceBar], indicators: IndicatorSnapshot) -> tuple[str, ...]:
+    if len(bars) < 8:
+        return ()
+    current, previous = bars[-1], bars[-2]
+    current_range = max(0.0, current.high - current.low)
+    patterns: list[str] = []
+    if current.high <= previous.high and current.low >= previous.low:
+        patterns.append("Inside Bar")
+    if current_range <= min(bar.high - bar.low for bar in bars[-7:]):
+        patterns.append("NR7")
+    if indicators.atr14 and current_range <= indicators.atr14 * 0.65:
+        patterns.append("Coil/窄幅收缩")
+    close_location = (current.close - current.low) / current_range if current_range > 0 else 0.5
+    if close_location <= 0.25:
+        patterns.append("Weak Close")
+    if current.high < previous.high:
+        patterns.append("Lower High")
+    if current.low > previous.low:
+        patterns.append("Higher Low")
+    if current.close < current.open:
+        patterns.append("Bearish Bar")
+    elif current.close > current.open:
+        patterns.append("Bullish Bar")
+    return tuple(patterns)
+
+
+def _structure_phase(short: str, medium: str, long: str, patterns: tuple[str, ...]) -> str:
+    if any(label in patterns for label in ("Inside Bar", "NR7", "Coil/窄幅收缩")):
+        return "Compression / 压缩"
+    if short == "短线多头" and medium == "中期上升":
+        return "Expansion / 上行扩张"
+    if short in {"短线空头", "短线回调"} and long == "长期多头":
+        return "Pullback / 多头回调"
+    if short == "短线空头" and medium == "中期下行":
+        return "Markdown / 下行阶段"
+    return "Transition / 转换"
+
+
+def _continuation_tendency(
+    short: str,
+    medium: str,
+    long: str,
+    efficiency: float | None,
+    patterns: tuple[str, ...],
+) -> str:
+    bullish_alignment = short == "短线多头" and medium == "中期上升" and long == "长期多头"
+    bearish_alignment = short == "短线空头" and medium == "中期下行" and long == "长期空头"
+    if (bullish_alignment or bearish_alignment) and (efficiency or 0) >= 0.35:
+        return "高（方向一致、路径效率较高）"
+    if "Weak Close" in patterns and short in {"短线空头", "短线回调"}:
+        return "中高（短线弱势延续）"
+    if short.startswith("短线") and medium != "数据不足":
+        return "中（等待量价确认）"
+    return "低/数据不足"
+
+
+def _reversal_risk(
+    rsi14: float | None,
+    channel_position_pct: float | None,
+    short: str,
+    long: str,
+    patterns: tuple[str, ...],
+) -> str:
+    extreme = (
+        rsi14 is not None and (rsi14 <= 30 or rsi14 >= 70)
+    ) or (
+        channel_position_pct is not None and (channel_position_pct <= 5 or channel_position_pct >= 95)
+    )
+    conflict = (short == "短线空头" and long == "长期多头") or (short == "短线多头" and long == "长期空头")
+    if extreme and conflict:
+        return "高（极端位置且周期冲突）"
+    if extreme or conflict or "Inside Bar" in patterns:
+        return "中（需要反转K线确认）"
+    return "低（暂无极端或周期冲突）"
+
+
+def _structure_narrative(
+    price: float,
+    lower: float | None,
+    mid: float | None,
+    upper: float | None,
+    indicators: IndicatorSnapshot,
+    short: str,
+    medium: str,
+    long: str,
+    phase: str,
+    patterns: tuple[str, ...],
+) -> tuple[str, str, str]:
+    summary = f"{short}；{medium}；{long}；当前处于{phase}。"
+    if short in {"短线空头", "短线回调"} and long == "长期多头":
+        confirmation = "等待止跌K线、重新站上EMA5，并由MACD柱线收缩或金叉确认。"
+    elif short == "短线多头":
+        confirmation = "等待放量突破或回踩EMA10/21不破，避免远离通道中轨追价。"
+    else:
+        confirmation = "等待短中周期重新同向，并观察成交量是否确认。"
+    atr_value = indicators.atr14 or 0.0
+    if lower is not None:
+        invalidation_level = lower - 0.5 * atr_value
+        invalidation = f"日线有效跌破回归通道下轨附近 {lower:.2f}；参考失效位 {invalidation_level:.2f}。"
+    elif indicators.ema21 is not None:
+        invalidation = f"日线跌破EMA21附近 {indicators.ema21:.2f} 且无法快速收复。"
+    else:
+        invalidation = "数据不足，暂不设置伪精确失效位。"
+    if "Weak Close" in patterns:
+        confirmation = "最新K线弱收盘；" + confirmation
+    return summary, confirmation, invalidation
+
+
 def assess_swing(
     history: PriceHistory,
     *,
@@ -391,6 +646,12 @@ def assess_swing(
         bars,
         indicators,
         benchmark_return_20d=benchmark_return_20d,
+        asset_class=asset_class,
+    )
+    structure = _build_structure_diagnostic(
+        bars,
+        indicators,
+        scorecard,
         asset_class=asset_class,
     )
     previous = bars[-2].close if len(bars) >= 2 else None
@@ -468,6 +729,7 @@ def assess_swing(
         unrealized_pnl_gbp=position.unrealized_pnl_gbp if position else None,
         unrealized_pnl_pct=position.unrealized_pnl_pct if position else None,
         scorecard=scorecard,
+        structure=structure,
         warnings=tuple(warnings),
     )
 
@@ -531,6 +793,7 @@ def save_technical_state(report: TechnicalSwingReport, path: Path = TECHNICAL_ST
                 "resistances": [asdict(zone) for zone in item.resistances],
                 "data_timestamp": item.data_timestamp,
                 "scorecard": asdict(item.scorecard) if item.scorecard else None,
+                "structure": asdict(item.structure) if item.structure else None,
             }
             for item in report.assessments
         ],
@@ -591,6 +854,7 @@ def technical_swing_from_payload(raw: dict) -> TechnicalSwingReport:
                 unrealized_pnl_gbp=_optional_float(item.get("unrealized_pnl_gbp")),
                 unrealized_pnl_pct=_optional_float(item.get("unrealized_pnl_pct")),
                 scorecard=_scorecard_from_payload(item.get("scorecard")),
+                structure=_structure_from_payload(item.get("structure")),
                 warnings=tuple(str(value) for value in (item.get("warnings") or [])),
             )
         )
@@ -713,6 +977,19 @@ def _standalone_card(item: SwingAssessment) -> str:
         else "N/A"
     )
     raw_data = _standalone_raw_data(item)
+    structure = ""
+    if item.structure is not None:
+        patterns = " · ".join(item.structure.bar_patterns) or "无特殊K线标签"
+        structure = f"""<details open style="margin-top:10px;color:#d1d5db;font-size:13px;">
+          <summary style="color:#bfdbfe;cursor:pointer;">透明结构诊断</summary>
+          <div>周期：{escape(item.structure.short_term_state)} / {escape(item.structure.medium_term_state)} / {escape(item.structure.long_term_state)}</div>
+          <div>阶段：{escape(item.structure.phase)}</div>
+          <div>通道下/中/上：{_fmt_optional(item.structure.channel_lower)} / {_fmt_optional(item.structure.channel_mid)} / {_fmt_optional(item.structure.channel_upper)}</div>
+          <div>延续倾向：{escape(item.structure.continuation_tendency)}；反转风险：{escape(item.structure.reversal_risk)}</div>
+          <div>确认：{escape(item.structure.confirmation)}</div>
+          <div>失效：{escape(item.structure.invalidation)}</div>
+          <div>K线：{escape(patterns)}</div>
+        </details>"""
     return f"""<article style="background:#111827;border:1px solid #334155;padding:14px;">
       <h3 style="margin:0 0 8px;color:#f8fafc;">{escape(item.symbol)} · {escape(item.technical_status)}</h3>
       <div>当前价格：{price} {escape(item.identity.currency)}</div>
@@ -724,6 +1001,7 @@ def _standalone_card(item: SwingAssessment) -> str:
       <div>最近支撑：{support_text}</div>
       <div>最近阻力：{resistance_text}</div>
       {raw_data}
+      {structure}
       {zone_details}
       <div>ATR 失效参考：{invalidation}</div>
       <p style="color:#bfdbfe;">{escape(item.note)}</p>
@@ -843,6 +1121,30 @@ def _scorecard_from_payload(raw: object) -> TechnicalScorecard | None:
             for component in (raw.get("components") or ())
             if str(component).strip()
         ),
+    )
+
+
+def _structure_from_payload(raw: object) -> TechnicalStructureDiagnostic | None:
+    if not isinstance(raw, dict):
+        return None
+    return TechnicalStructureDiagnostic(
+        channel_window=_optional_int(raw.get("channel_window")),
+        channel_lower=_optional_float(raw.get("channel_lower")),
+        channel_mid=_optional_float(raw.get("channel_mid")),
+        channel_upper=_optional_float(raw.get("channel_upper")),
+        channel_position_pct=_optional_float(raw.get("channel_position_pct")),
+        channel_slope_20d_pct=_optional_float(raw.get("channel_slope_20d_pct")),
+        efficiency_ratio_20d=_optional_float(raw.get("efficiency_ratio_20d")),
+        short_term_state=str(raw.get("short_term_state") or "数据不足"),
+        medium_term_state=str(raw.get("medium_term_state") or "数据不足"),
+        long_term_state=str(raw.get("long_term_state") or "数据不足"),
+        phase=str(raw.get("phase") or "数据不足"),
+        continuation_tendency=str(raw.get("continuation_tendency") or "数据不足"),
+        reversal_risk=str(raw.get("reversal_risk") or "数据不足"),
+        bar_patterns=tuple(str(value) for value in (raw.get("bar_patterns") or ()) if str(value).strip()),
+        summary=str(raw.get("summary") or ""),
+        confirmation=str(raw.get("confirmation") or ""),
+        invalidation=str(raw.get("invalidation") or ""),
     )
 
 

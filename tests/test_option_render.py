@@ -236,7 +236,9 @@ def test_option_panel_sums_open_strategy_net_premium_after_long_leg_cost() -> No
 
     html = render._render_option_risk_panel(positions)
 
-    assert "未平仓期权剩余净权利金/成本" in html
+    assert "未平仓期权建仓净现金流（+收取 / −支付）" in html
+    assert "建仓净现金流（+收取 / −支付）" in html
+    assert "这不是当前盈亏" in html
     assert "+£90.00" in html
 
 

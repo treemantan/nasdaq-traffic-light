@@ -36,6 +36,17 @@
     "include_holdings": true,
     "max_tickers": 12
   },
+  "mag7_iv": {
+    "enabled": true,
+    "tickers": ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "INTC", "AVGO", "MRVL", "NBIS", "BE"],
+    "target_dte": 30,
+    "max_days_to_expiry": 75,
+    "lookback_days": 365,
+    "rank_threshold": 10,
+    "percentile_threshold": 20,
+    "minimum_history_points": 20,
+    "minimum_history_span_days": 20
+  },
   "email": {
     "enabled": false,
     "smtp_host": "smtp.gmail.com",

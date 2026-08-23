@@ -13,6 +13,8 @@ from .event_risk_ledger import build_event_risk_ledger
 from .emailer import send_report_email
 from .etf_monitor import fetch_etf_monitor
 from .mag7_capital_network import build_mag7_capital_network
+from .mag7_iv_monitor import Mag7IVConfig as Mag7IVRuntimeConfig
+from .mag7_iv_monitor import build_mag7_iv_monitor
 from .memory import load_metric_history, load_previous_state, save_current_state
 from .news_monitor import fetch_news_monitor
 from .options_gamma import OptionsGammaConfig as GammaRuntimeConfig
@@ -24,15 +26,39 @@ from .portfolio_events import build_portfolio_event_monitor
 from .render import render_html_report
 from .scoring import score_snapshot
 from .shock_backtest import analyze_market_shock_history
-from .technical_swing import build_technical_swing_report
+from .technical_swing import build_technical_swing_report, parse_ticker_list
 
 
-def main() -> int:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Generate and optionally email the Macro Regime Radar report.")
     parser.add_argument("--config", default="config.json", help="Path to JSON config file.")
     parser.add_argument("--dry-run", action="store_true", help="Generate the report without sending email.")
     parser.add_argument("--output", help="Optional explicit output HTML path.")
-    args = parser.parse_args()
+    parser.add_argument(
+        "--technical-tickers",
+        "--technical-ticker",
+        dest="technical_tickers",
+        action="append",
+        default=[],
+        metavar="TICKERS",
+        help=(
+            "Temporary ticker(s) for this run's EOD technical-swing section. "
+            "Accepts comma-separated values and may be repeated."
+        ),
+    )
+    return parser
+
+
+def _merge_temporary_technical_tickers(cli_values: list[str], env_value: str = "") -> tuple[str, ...]:
+    ordered: dict[str, None] = {}
+    for raw in [env_value, *cli_values]:
+        for ticker in parse_ticker_list(raw):
+            ordered.setdefault(ticker, None)
+    return tuple(ordered)
+
+
+def main() -> int:
+    args = build_parser().parse_args()
 
     config = load_config(args.config)
     snapshot = fetch_market_snapshot()
@@ -60,10 +86,14 @@ def main() -> int:
         )
         for asset in etf_monitor.assets
     }
+    temporary_technical_tickers = _merge_temporary_technical_tickers(
+        args.technical_tickers,
+        os.environ.get("TECHNICAL_TICKERS", ""),
+    )
     technical_swing = build_technical_swing_report(
         etf_monitor.portfolio_positions,
         config.swing_watchlist,
-        os.environ.get("TECHNICAL_TICKERS", ""),
+        temporary_technical_tickers,
         asset_classes=asset_classes,
     )
     options_gamma = build_options_gamma_monitor(
@@ -94,6 +124,21 @@ def main() -> int:
         ),
         etf_monitor,
     )
+    mag7_iv_monitor = build_mag7_iv_monitor(
+        Mag7IVRuntimeConfig(
+            enabled=config.mag7_iv.enabled,
+            tickers=tuple(config.mag7_iv.tickers),
+            target_dte=config.mag7_iv.target_dte,
+            max_days_to_expiry=config.mag7_iv.max_days_to_expiry,
+            lookback_days=config.mag7_iv.lookback_days,
+            rank_threshold=config.mag7_iv.rank_threshold,
+            percentile_threshold=config.mag7_iv.percentile_threshold,
+            minimum_history_points=config.mag7_iv.minimum_history_points,
+            minimum_history_span_days=config.mag7_iv.minimum_history_span_days,
+        ),
+        config.output_dir / "cache" / "mag7_iv_history.json",
+        as_of=snapshot.as_of,
+    )
     previous_state = load_previous_state(config.output_dir, before_date=snapshot.as_of.isoformat())
     metric_history = load_metric_history(config.output_dir, before_date=snapshot.as_of.isoformat())
     previous_regime = previous_state.get("regime") if isinstance(previous_state.get("regime"), str) else None
@@ -109,6 +154,7 @@ def main() -> int:
         technical_swing=technical_swing,
         options_gamma=options_gamma,
         options_sentiment=options_sentiment,
+        mag7_iv_monitor=mag7_iv_monitor,
         policy_risk_monitor=policy_risk_monitor,
         event_risk_ledger=event_risk_ledger,
         previous_state=previous_state,
@@ -124,6 +170,8 @@ def main() -> int:
     save_current_state(config.output_dir, scored)
 
     print(f"Report written to {output_path.resolve()}")
+    if temporary_technical_tickers:
+        print(f"Temporary technical tickers: {', '.join(temporary_technical_tickers)}")
     terminal_light = {"绿灯": "green", "黄灯": "yellow", "红灯": "red"}.get(scored.light_label, scored.light_label)
     print(f"Score: {scored.overall_score}/100, light: {terminal_light}")
     terminal_data_quality = {"正常": "normal", "部分延迟": "partial-delay", "需核验": "needs-review"}.get(

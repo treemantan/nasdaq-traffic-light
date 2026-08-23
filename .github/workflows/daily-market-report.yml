@@ -31,9 +31,15 @@ on:
         required: false
         default: "full"
       technical_tickers:
-        description: "Optional comma-separated exact tickers for this Technical run, e.g. MSFT,RKLB,JEDG.L"
+        description: "Extra comma-separated tickers for this run's EOD technical-swing section, e.g. CRWD,PLTR,JEDG.L"
         required: false
         default: ""
+        type: string
+      momentum_iv_tickers:
+        description: "Optional tickers appended to this run's default EOD momentum-IV list, e.g. CRWD,PLTR; blank keeps defaults only"
+        required: false
+        default: ""
+        type: string
 
 jobs:
   build-and-send:
@@ -280,10 +286,18 @@ jobs:
         if: steps.email-mode.outputs.should_run == 'true'
         env:
           TECHNICAL_TICKERS: ${{ inputs.technical_tickers }}
+          MOMENTUM_IV_TICKERS: ${{ inputs.momentum_iv_tickers }}
+          MAG7_IV_ENABLED: ${{ steps.email-mode.outputs.email_mode == 'full' }}
           CORE_ETF_PLAN_JSON: ${{ secrets.CORE_ETF_PLAN_JSON }}
           ALPHA_VANTAGE_API_KEY: ${{ secrets.ALPHA_VANTAGE_API_KEY }}
           ALPHAVANTAGE_API_KEY: ${{ secrets.ALPHAVANTAGE_API_KEY }}
-        run: python -m market_report --config config.example.json --dry-run
+        shell: bash
+        run: |
+          args=(python -m market_report --config config.example.json --dry-run)
+          if [ -n "${TECHNICAL_TICKERS:-}" ]; then
+            args+=(--technical-tickers "$TECHNICAL_TICKERS")
+          fi
+          "${args[@]}"
 
       - name: Generate Serenity weekly report
         if: steps.email-mode.outputs.should_run == 'true' && steps.email-mode.outputs.email_mode == 'serenity'

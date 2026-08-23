@@ -35,8 +35,17 @@ class SerenityWorkflowTests(unittest.TestCase):
 
         self.assertIn("technical_tickers:", workflow)
         self.assertIn("TECHNICAL_TICKERS: ${{ inputs.technical_tickers }}", workflow)
+        self.assertIn('args+=(--technical-tickers "$TECHNICAL_TICKERS")', workflow)
+        self.assertIn("this run's EOD technical-swing section", workflow)
         self.assertIn("Generate Technical Swing report", workflow)
         self.assertIn("python scripts/generate_technical_swing_report.py", workflow)
+
+    def test_manual_run_can_append_to_momentum_iv_universe(self) -> None:
+        workflow = Path(".github/workflows/daily-market-report.yml").read_text(encoding="utf-8")
+
+        self.assertIn("momentum_iv_tickers:", workflow)
+        self.assertIn("MOMENTUM_IV_TICKERS: ${{ inputs.momentum_iv_tickers }}", workflow)
+        self.assertIn("appended to this run's default EOD momentum-IV list", workflow)
 
 
 if __name__ == "__main__":

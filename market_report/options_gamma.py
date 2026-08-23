@@ -315,6 +315,8 @@ def _fetch_yfinance_option_chain(
     symbol: str,
     config: OptionsGammaConfig,
     reason: str,
+    *,
+    target_dte: int | None = None,
 ) -> tuple[float | None, list[OptionContract], list[str]]:
     try:
         import yfinance as yf
@@ -323,7 +325,11 @@ def _fetch_yfinance_option_chain(
 
     _configure_yfinance_cache(yf)
     ticker = yf.Ticker(symbol)
-    expirations = _select_yfinance_expirations(getattr(ticker, "options", ()) or (), config)
+    expirations = _select_yfinance_expirations(
+        getattr(ticker, "options", ()) or (),
+        config,
+        target_dte=target_dte,
+    )
     spot = _spot_from_yfinance_ticker(ticker)
     contracts: list[OptionContract] = []
 
@@ -357,7 +363,12 @@ def _configure_yfinance_cache(yf: Any) -> None:
     set_cache_location(cache_dir)
 
 
-def _select_yfinance_expirations(expirations: tuple[str, ...] | list[str], config: OptionsGammaConfig) -> list[str]:
+def _select_yfinance_expirations(
+    expirations: tuple[str, ...] | list[str],
+    config: OptionsGammaConfig,
+    *,
+    target_dte: int | None = None,
+) -> list[str]:
     parsed: list[tuple[date, str]] = []
     today = datetime.now(timezone.utc).date()
     cutoff = today + timedelta(days=config.max_days_to_expiry)
@@ -368,6 +379,9 @@ def _select_yfinance_expirations(expirations: tuple[str, ...] | list[str], confi
         if today <= expiry <= cutoff:
             parsed.append((expiry, str(expiry_text)))
     parsed.sort(key=lambda item: item[0])
+    if target_dte is not None and parsed:
+        nearest = min(parsed, key=lambda item: abs((item[0] - today).days - target_dte))
+        return [nearest[1]]
     return [expiry_text for _, expiry_text in parsed[: max(1, int(config.expirations_to_include))]]
 
 
@@ -453,6 +467,55 @@ def fetch_yahoo_option_chain(symbol: str, config: OptionsGammaConfig) -> tuple[f
 
     if not contracts:
         warnings.append("Yahoo option chain 为空。")
+    return spot, contracts, warnings
+
+
+def fetch_yahoo_option_chain_near_dte(
+    symbol: str,
+    config: OptionsGammaConfig,
+    *,
+    target_dte: int = 30,
+) -> tuple[float | None, list[OptionContract], list[str]]:
+    """Fetch one Yahoo expiry: the available date nearest the requested DTE."""
+    encoded = urllib.parse.quote(symbol, safe="")
+    base_url = f"https://query2.finance.yahoo.com/v7/finance/options/{encoded}"
+    try:
+        payload = _read_json(base_url)
+        result = _first_result(payload)
+    except Exception as exc:
+        return _fetch_yfinance_option_chain(
+            symbol,
+            config,
+            f"Yahoo JSON option-chain fetch failed: {exc}",
+            target_dte=target_dte,
+        )
+
+    quote = result.get("quote") or {}
+    spot = _to_float(quote.get("regularMarketPrice") or quote.get("postMarketPrice") or quote.get("preMarketPrice"))
+    today = datetime.now(timezone.utc).date()
+    cutoff = today + timedelta(days=max(1, int(config.max_days_to_expiry)))
+    candidates: list[tuple[int, date]] = []
+    for raw_epoch in result.get("expirationDates") or []:
+        epoch = int(raw_epoch)
+        expiry = datetime.fromtimestamp(epoch, tz=timezone.utc).date()
+        if today <= expiry <= cutoff:
+            candidates.append((epoch, expiry))
+    if not candidates:
+        return spot, [], ["Yahoo 未返回目标期限内的 expirationDates。"]
+
+    expiry_epoch, expiry = min(candidates, key=lambda item: abs((item[1] - today).days - target_dte))
+    try:
+        chain_payload = _read_json(f"{base_url}?date={expiry_epoch}")
+        chain_result = _first_result(chain_payload)
+    except Exception as exc:
+        return spot, [], [f"Yahoo 目标到期日期权链抓取失败: {exc}"]
+
+    options = (chain_result.get("options") or [{}])[0]
+    contracts = [
+        *(_contract_from_yahoo(symbol, "call", expiry, raw) for raw in options.get("calls") or []),
+        *(_contract_from_yahoo(symbol, "put", expiry, raw) for raw in options.get("puts") or []),
+    ]
+    warnings = [] if contracts else ["Yahoo option chain 为空。"]
     return spot, contracts, warnings
 
 

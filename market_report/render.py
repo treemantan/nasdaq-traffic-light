@@ -9,6 +9,7 @@ from .data_sources import MarketMetric
 from .event_risk_ledger import EventRiskLedger, EventRiskLedgerEntry
 from .etf_monitor import ETFAssetMonitor, ETFMonitor, PortfolioPosition
 from .mag7_capital_network import AggregateCapitalDisclosure, CapitalRelation, Mag7CapitalNetwork
+from .mag7_iv_monitor import MAG7_CORE_TICKERS, Mag7IVAssessment, Mag7IVMonitor
 from .macro_brief import MacroDailyBrief, build_macro_daily_brief
 from .news_monitor import NewsEvent, NewsMonitor
 from .option_portfolio import option_closeout_snapshot_from_groups
@@ -16,10 +17,17 @@ from .options_gamma import OptionGammaAssessment, OptionsGammaMonitor
 from .options_sentiment import OptionsSentimentMonitor, TickerShortPremiumContext
 from .policy_risk_monitor import PolicyRiskFactor, PolicyRiskMonitor
 from .portfolio_events import PortfolioEventMonitor
+from .portfolio_review import DailyPortfolioReview, PortfolioActionCandidate, build_daily_portfolio_review
 from .scoring import IronCondorAssessment, ScoreDriver, ScoredMetric, ScoredReport
 from .shock_backtest import MarketShockBacktest, MarketShockSample
 from .technical_indicators import MacdSnapshot
-from .technical_swing import SwingAssessment, SwingZone, TechnicalScorecard, TechnicalSwingReport
+from .technical_swing import (
+    SwingAssessment,
+    SwingZone,
+    TechnicalScorecard,
+    TechnicalStructureDiagnostic,
+    TechnicalSwingReport,
+)
 from .time_utils import format_timestamp
 
 
@@ -52,6 +60,7 @@ def render_html_report(report: ScoredReport, title: str) -> str:
         report.news_monitor,
         report.portfolio_event_monitor,
         report.metric_history,
+        report.mag7_iv_monitor,
     )
     technical_swing = _render_technical_swing(report.technical_swing)
     options_sentiment = _render_options_sentiment(report.options_sentiment)
@@ -598,13 +607,96 @@ def _render_technical_swing(report: TechnicalSwingReport | None) -> str:
             + "</div>"
         )
     empty = '<div class="muted">当前没有持仓、固定观察池或临时 ticker 需要分析。</div>'
+    priority_summary = _render_technical_priority_summary(report.assessments)
     return f"""<section class="panel swing-panel">
       <h2>技术波段观察</h2>
       <div class="summary">{escape(report.summary)}</div>
+      {priority_summary}
       {''.join(sections) or empty}
       {f'<details class="swing-note"><summary>数据质量与降级说明</summary><ul>{warning_html}</ul></details>' if warning_html else ''}
       <div class="disclaimer">本模块识别趋势、支撑阻力与量价确认，仅用于观察 setup 与失效条件，不构成买卖建议。</div>
     </section>"""
+
+
+def _render_technical_priority_summary(assessments: tuple[SwingAssessment, ...]) -> str:
+    candidates = _technical_priority_candidates(assessments)
+    if not candidates:
+        return """<div class="portfolio-notes" style="margin-top:12px;">
+          <strong>高分进场研究候选</strong>
+          <div class="small-note">当前没有技术总分达到16/20的标的。继续等待趋势、动量与突破条件形成共振。</div>
+        </div>"""
+    rows = "".join(_render_technical_priority_row(item) for item in candidates)
+    leader = candidates[0]
+    return f"""<div class="portfolio-notes" style="margin-top:12px;">
+      <strong>高分进场研究候选 · {len(candidates)}个</strong>
+      <div class="small-note">当前优先研究：{escape(leader.symbol)}（{leader.scorecard.total_score if leader.scorecard else 0}/20）。仅筛选技术结构，不代表已完成估值、财报事件或仓位风险审查。</div>
+      <div class="portfolio-table-scroll" style="margin-top:7px;">
+        <table class="portfolio-table">
+          <thead><tr><th>优先级/标的</th><th>技术评分</th><th>趋势与状态</th><th>20D / 相对QQQ</th><th>进场研究条件</th><th>失效/不追条件</th><th>数据</th></tr></thead>
+          <tbody>{rows}</tbody>
+        </table>
+      </div>
+      <div class="small-note">筛选门槛：总分≥16/20；最多显示前5名。正式进场前仍需复核基本面、估值、财报/事件窗口、期权IV与组合集中度。</div>
+    </div>"""
+
+
+def _technical_priority_candidates(
+    assessments: tuple[SwingAssessment, ...],
+    *,
+    threshold: int = 16,
+    limit: int = 5,
+) -> list[SwingAssessment]:
+    candidates = [
+        item
+        for item in assessments
+        if item.scorecard is not None
+        and item.scorecard.total_score >= threshold
+        and item.current_price is not None
+        and item.asset_class == "equity"
+    ]
+    candidates.sort(
+        key=lambda item: (
+            -(item.scorecard.total_score if item.scorecard else 0),
+            -item.scorecard.relative_strength_20d
+            if item.scorecard and item.scorecard.relative_strength_20d is not None
+            else float("inf"),
+            item.symbol,
+        )
+    )
+    return candidates[:limit]
+
+
+def _render_technical_priority_row(item: SwingAssessment) -> str:
+    score = item.scorecard.total_score if item.scorecard else 0
+    rank = "A · 优先研究" if score >= 18 else "B · 等待触发"
+    support = _nearest_swing_zone(item.supports, item.current_price)
+    support_text = _fmt_swing_zone(support)
+    return_20d = item.indicators.return_20d
+    relative = item.scorecard.relative_strength_20d if item.scorecard else None
+    trigger = _technical_entry_research_trigger(item, support)
+    invalidation = (
+        f"ATR失效位 {_fmt_plain(item.invalidation_level)}；若跌破支撑 {support_text} 或评分降至16以下则取消。"
+        if support is not None
+        else f"ATR失效位 {_fmt_plain(item.invalidation_level)}；无可靠支撑区时不追高。"
+    )
+    origin = "持仓" if item.origin == "holding" else "观察池"
+    return f"""<tr>
+      <td><strong>{escape(rank)}</strong><br><span class="portfolio-scope">{escape(item.symbol)} · {escape(origin)}</span></td>
+      <td><strong>{score}/20</strong><br><span class="portfolio-scope">{escape(item.scorecard.interpretation if item.scorecard else '')}</span></td>
+      <td>{escape(item.trend)}<br><strong>{escape(item.technical_status)}</strong></td>
+      <td>{escape(_fmt_pct(return_20d))} / {escape(_fmt_pct(relative))}</td>
+      <td>{escape(trigger)}</td><td>{escape(invalidation)}</td>
+      <td>{escape(item.data_quality)}<br><span class="portfolio-scope">{escape(item.data_timestamp)}</span></td>
+    </tr>"""
+
+
+def _technical_entry_research_trigger(item: SwingAssessment, support: SwingZone | None) -> str:
+    support_text = _fmt_swing_zone(support)
+    if item.technical_status == "突破候选":
+        return "优先研究突破后的量能确认或首次回踩；避免在远离支撑时追价。"
+    if "强势" in item.trend or (item.scorecard and item.scorecard.total_score >= 18):
+        return f"趋势强，研究靠近支撑 {support_text} 的分批切入，或等待放量确认。"
+    return f"进入观察队列；等待靠近支撑 {support_text} 或短周期动量再次转强。"
 
 
 def _render_swing_card(item: SwingAssessment) -> str:
@@ -614,6 +706,7 @@ def _render_swing_card(item: SwingAssessment) -> str:
     zone_details = _render_swing_zone_details("支撑", support, item.current_price)
     zone_details += _render_swing_zone_details("阻力", resistance, item.current_price)
     scorecard_details = _render_swing_scorecard(item.scorecard)
+    structure_details = _render_swing_structure(item.structure)
     raw_data = _render_swing_raw_data(item)
     holding = ""
     if item.origin == "holding":
@@ -642,11 +735,45 @@ def _render_swing_card(item: SwingAssessment) -> str:
         {holding}
       </div>
       {raw_data}
+      {structure_details}
       {zone_details}
       {scorecard_details}
       <div class="swing-note">{escape(item.volume_confirmation)}。{escape(item.note)}</div>
       <div class="swing-note">来源：{escape(item.data_source)} · 数据时间：{escape(item.data_timestamp)} · 状态：{escape(item.data_quality)}{warning}</div>
     </article>"""
+
+
+def _render_swing_structure(structure: TechnicalStructureDiagnostic | None) -> str:
+    if structure is None:
+        return ""
+    patterns = " · ".join(structure.bar_patterns) if structure.bar_patterns else "无特殊K线标签"
+    channel = (
+        f"{_fmt_plain(structure.channel_lower)} / {_fmt_plain(structure.channel_mid)} / {_fmt_plain(structure.channel_upper)}"
+    )
+    position = _fmt_pct(structure.channel_position_pct)
+    slope = _fmt_pct(structure.channel_slope_20d_pct)
+    efficiency = (
+        f"{structure.efficiency_ratio_20d * 100:.1f}/100"
+        if structure.efficiency_ratio_20d is not None
+        else "N/A"
+    )
+    return f"""<details class="swing-zone-details" open>
+      <summary>透明结构诊断</summary>
+      <div class="swing-values">
+        <div class="swing-value"><span>短 / 中 / 长周期</span><strong>{escape(structure.short_term_state)} / {escape(structure.medium_term_state)} / {escape(structure.long_term_state)}</strong></div>
+        <div class="swing-value"><span>趋势阶段</span><strong>{escape(structure.phase)}</strong></div>
+        <div class="swing-value"><span>{structure.channel_window}日回归通道 下/中/上</span><strong>{escape(channel)}</strong></div>
+        <div class="swing-value"><span>通道位置 / 20D斜率</span><strong>{escape(position)} / {escape(slope)}</strong></div>
+        <div class="swing-value"><span>20D路径效率</span><strong>{escape(efficiency)}</strong></div>
+        <div class="swing-value"><span>延续倾向 / 反转风险</span><strong>{escape(structure.continuation_tendency)} / {escape(structure.reversal_risk)}</strong></div>
+      </div>
+      <ul>
+        <li><strong>结构结论：</strong>{escape(structure.summary)}</li>
+        <li><strong>确认条件：</strong>{escape(structure.confirmation)}</li>
+        <li><strong>失效条件：</strong>{escape(structure.invalidation)}</li>
+        <li><strong>K线标签：</strong>{escape(patterns)}</li>
+      </ul>
+    </details>"""
 
 
 def _nearest_swing_zone(zones: tuple[SwingZone, ...], price: float | None) -> SwingZone | None:
@@ -1164,6 +1291,7 @@ def _render_etf_monitor(
     news_monitor: NewsMonitor | None = None,
     portfolio_event_monitor: PortfolioEventMonitor | None = None,
     option_history: list[dict] | None = None,
+    mag7_iv_monitor: Mag7IVMonitor | None = None,
 ) -> str:
     if monitor is None:
         return ""
@@ -1173,7 +1301,9 @@ def _render_etf_monitor(
         warnings = "<div class=\"small-note\">数据提示：" + escape(_summarize_etf_warnings(monitor.warnings)) + "</div>"
     changes = _render_etf_notes("今日ETF变动摘要", monitor.change_summary)
     core_plan = _render_core_etf_plan(monitor.core_etf_plan)
-    portfolio = _render_portfolio_panel(monitor, news_monitor, portfolio_event_monitor, option_history)
+    portfolio = _render_portfolio_panel(
+        monitor, news_monitor, portfolio_event_monitor, option_history, mag7_iv_monitor
+    )
     sensitivities = _render_sensitivity_panel(monitor)
     return f"""<section class="panel">
       <h2>UK ETF估值、趋势与拥挤度监控器</h2>
@@ -1233,6 +1363,7 @@ def _render_portfolio_panel(
     news_monitor: NewsMonitor | None = None,
     portfolio_event_monitor: PortfolioEventMonitor | None = None,
     option_history: list[dict] | None = None,
+    mag7_iv_monitor: Mag7IVMonitor | None = None,
 ) -> str:
     if not monitor.portfolio_positions:
         return _render_etf_notes("实际组合视角", monitor.portfolio_summary + monitor.portfolio_warnings)
@@ -1269,6 +1400,7 @@ def _render_portfolio_panel(
         else ""
     )
     performance_panel = _render_portfolio_performance(monitor)
+    daily_review_panel = _render_daily_portfolio_review(monitor, mag7_iv_monitor)
     option_panel = _render_option_risk_panel(monitor.portfolio_positions, option_history)
     event_panel = _render_portfolio_event_calendar(portfolio_event_monitor)
     event_panel += _render_portfolio_event_review(monitor.portfolio_positions, news_monitor)
@@ -1281,6 +1413,7 @@ def _render_portfolio_panel(
         </div>
         <div class="portfolio-total"><span class="muted">持仓估算市值</span><strong>{escape(total)}</strong></div>
       </div>
+      {daily_review_panel}
       <div class="portfolio-table-scroll">
         <table class="portfolio-table">
           <thead>
@@ -1299,6 +1432,115 @@ def _render_portfolio_panel(
       {event_panel}
       <div class="portfolio-notes"><ul>{note_html}</ul></div>
     </div>"""
+
+
+def _render_mag7_iv_monitor(monitor: Mag7IVMonitor | None) -> str:
+    if monitor is None:
+        return ""
+    mag7_rows = "".join(
+        _render_mag7_iv_row(item) for item in monitor.assessments if item.symbol in MAG7_CORE_TICKERS
+    )
+    focus_rows = "".join(
+        _render_mag7_iv_row(item) for item in monitor.assessments if item.symbol not in MAG7_CORE_TICKERS
+    )
+    mag7_table = _render_iv_group_table("MAG7 IV", mag7_rows)
+    focus_symbols = [item.symbol for item in monitor.assessments if item.symbol not in MAG7_CORE_TICKERS]
+    focus_title = "动量股 IV" + (" · " + " / ".join(focus_symbols) if focus_symbols else "")
+    focus_table = _render_iv_group_table(focus_title, focus_rows)
+    warnings = "".join(f"<li>{escape(item)}</li>" for item in monitor.warnings)
+    warning_block = f'<div class="small-note"><ul>{warnings}</ul></div>' if warnings else ""
+    return f"""<div class="portfolio-notes">
+      <strong>EOD 期权隐含波动率观察</strong>
+      <div class="small-note">{escape(monitor.summary)}</div>
+      {mag7_table}
+      {focus_table}
+      <div class="small-note">口径：选择最接近30天到期的ATM Call/Put IV中位数；IV Rank = 当前IV在滚动52周最低/最高区间的位置，IV Percentile = 过去观测中低于当前IV的比例。只有两者同时低于阈值且历史样本达标，才标记买方研究窗口。低IV不等于低风险；财报前IV可能快速抬升，方向判断仍需看趋势、催化与最大亏损。</div>
+      {warning_block}
+    </div>"""
+
+
+def _render_iv_group_table(title: str, rows: str) -> str:
+    body = rows or '<tr><td colspan="7">今日没有可显示标的。</td></tr>'
+    return f"""<div class="portfolio-title" style="margin-top:10px;">{escape(title)}</div>
+      <div class="portfolio-table-scroll" style="margin-top:5px;">
+        <table class="portfolio-table">
+          <thead><tr><th>标的</th><th>约30D ATM IV</th><th>IV Rank</th><th>IV Percentile</th><th>历史覆盖</th><th>状态</th><th>行动含义</th></tr></thead>
+          <tbody>{body}</tbody>
+        </table>
+      </div>"""
+
+
+def _render_mag7_iv_row(item: Mag7IVAssessment) -> str:
+    iv = f"{item.atm_iv_pct:.1f}%" if item.atm_iv_pct is not None else "N/A"
+    rank = f"{item.iv_rank:.1f}" if item.iv_rank is not None else "N/A"
+    percentile = f"{item.iv_percentile:.1f}%" if item.iv_percentile is not None else "N/A"
+    dte = f"{item.days_to_expiry}D · {item.expiry}" if item.days_to_expiry is not None else "N/A"
+    status = {
+        "low_iv_window": "低IV买方窗口",
+        "building_history": "历史积累中",
+        "normal": "正常观察",
+        "unavailable": "数据不可用",
+    }.get(item.status, item.status)
+    return f"""<tr>
+      <td><strong>{escape(item.symbol)}</strong><div class="portfolio-scope">{escape(dte)}</div></td>
+      <td>{escape(iv)}</td><td>{escape(rank)}</td><td>{escape(percentile)}</td>
+      <td>{item.history_points}点 / {item.history_span_days}天</td>
+      <td><strong>{escape(status)}</strong></td><td>{escape(item.interpretation)}</td>
+    </tr>"""
+
+
+def _render_daily_portfolio_review(
+    monitor: ETFMonitor,
+    mag7_iv_monitor: Mag7IVMonitor | None = None,
+) -> str:
+    review = build_daily_portfolio_review(monitor.portfolio_positions, monitor.portfolio_total_value_gbp)
+    if review is None:
+        return ""
+    add_rows = _render_daily_action_rows(review.add_candidates, empty="今日没有满足条件的加仓候选。")
+    reduce_rows = _render_daily_action_rows(review.reduce_candidates, empty="今日没有触发减仓/风险处理复核的持仓。")
+    return f"""<div class="portfolio-notes">
+      <strong>每日 EOD 组合审视 · {escape(review.health_label)} {review.health_score:.1f}/10</strong>
+      <div class="small-note">数据截止：{escape(review.data_cutoff)}；数据质量：{escape(review.data_quality)}。</div>
+      <div class="portfolio-exposure-grid" style="margin-top:8px;">
+        <div class="portfolio-exposure"><span class="muted">今天最该做的一件事</span><strong>{escape(review.most_important_action)}</strong></div>
+        <div class="portfolio-exposure"><span class="muted">当前最大风险</span><strong>{escape(review.max_risk)}</strong></div>
+        <div class="portfolio-exposure"><span class="muted">集中度</span><strong>{escape(review.concentration)}</strong></div>
+      </div>
+      <div class="portfolio-table-scroll" style="margin-top:8px;">
+        <table class="portfolio-table">
+          <thead><tr><th>加仓观察候选</th><th>当前权重</th><th>触发条件</th><th>依据</th><th>失效条件</th></tr></thead>
+          <tbody>{add_rows}</tbody>
+        </table>
+      </div>
+      <div class="portfolio-table-scroll" style="margin-top:8px;">
+        <table class="portfolio-table">
+          <thead><tr><th>减仓/风险处理</th><th>当前权重</th><th>触发条件</th><th>依据</th><th>取消条件</th></tr></thead>
+          <tbody>{reduce_rows}</tbody>
+        </table>
+      </div>
+      <div class="small-note">{escape(review.hold_summary)}</div>
+      <div class="small-note">{escape(review.caveat)}</div>
+      {_render_mag7_iv_monitor(mag7_iv_monitor)}
+    </div>"""
+
+
+def _render_daily_action_rows(
+    candidates: tuple[PortfolioActionCandidate, ...],
+    *,
+    empty: str,
+) -> str:
+    if not candidates:
+        return f'<tr><td colspan="5">{escape(empty)}</td></tr>'
+    return "".join(
+        f"""<tr>
+          <td><strong>{escape(item.symbol)}</strong><br><span class="portfolio-scope">{escape(item.action)}</span></td>
+          <td>{item.weight_pct:.2f}%</td>
+          <td>{escape(item.trigger)}</td>
+          <td>{escape(item.rationale)}</td>
+          <td>{escape(item.invalidation)}</td>
+        </tr>"""
+        for item in candidates
+    )
 
 
 def _render_option_risk_panel(
@@ -1337,7 +1579,7 @@ def _render_option_risk_panel(
       <div class="small-note">期权已从普通股票/ETF持仓中剥离。当前使用IBKR statement成交现金流识别成本、方向、到期与行权价；如Flex/OpenPosition提供mark或market value，则显示当前MTM。delta、gamma、theta、vega和POP仍需要IBKR期权行情或模型输入，未取得时不做伪精确估算。</div>
       <div class="portfolio-table-scroll">
         <table class="portfolio-table">
-          <thead><tr><th>策略/标的</th><th>到期</th><th>结构</th><th>剩余仓位成本/权利金</th><th>盈亏边界</th><th>数据状态</th></tr></thead>
+          <thead><tr><th>策略/标的</th><th>到期</th><th>结构</th><th>建仓净现金流（+收取 / −支付）</th><th>盈亏边界</th><th>数据状态</th></tr></thead>
           <tbody>{strategy_rows}</tbody>
         </table>
       </div>
@@ -1360,10 +1602,11 @@ def _render_open_option_premium_summary(legs: list[dict[str, object]]) -> str:
     return (
         '<div class="portfolio-exposure-grid" style="margin-top:8px;">'
         '<div class="portfolio-exposure">'
-        '<span class="muted">未平仓期权剩余净权利金/成本</span>'
+        '<span class="muted">未平仓期权建仓净现金流（+收取 / −支付）</span>'
         f'<strong class="{_pnl_class(net_premium_gbp)}">{escape(_fmt_signed_gbp(net_premium_gbp))}</strong>'
         '<span class="portfolio-scope">优先按当前 OpenPosition 成本基础汇总；缺失时回退至扣费后成交现金流。'
-        'spread 已扣除 long legs 成本。不等同于已实现收益，若到期归零且未被执行/指派才可全部保留。</span>'
+        '正数表示净收取权利金，负数表示净支付权利金；spread 已按所有 long/short legs 抵销。'
+        '这不是当前盈亏，当前盈亏请查看下方 MTM 未实现。</span>'
         '</div></div>'
     )
 

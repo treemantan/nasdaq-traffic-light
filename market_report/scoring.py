@@ -8,6 +8,7 @@ from .data_sources import MarketMetric, MarketSnapshot
 from .event_risk_ledger import EventRiskLedger
 from .etf_monitor import ETFMonitor
 from .mag7_capital_network import Mag7CapitalNetwork
+from .mag7_iv_monitor import Mag7IVMonitor
 from .news_monitor import NewsMonitor
 from .options_gamma import OptionsGammaMonitor
 from .options_sentiment import OptionsSentimentMonitor
@@ -85,6 +86,7 @@ class ScoredReport:
     technical_swing: TechnicalSwingReport | None = None
     options_gamma: OptionsGammaMonitor | None = None
     options_sentiment: OptionsSentimentMonitor | None = None
+    mag7_iv_monitor: Mag7IVMonitor | None = None
     policy_risk_monitor: PolicyRiskMonitor | None = None
     event_risk_ledger: EventRiskLedger | None = None
     news_monitor: NewsMonitor | None = None
@@ -112,6 +114,7 @@ def score_snapshot(
     technical_swing: TechnicalSwingReport | None = None,
     options_gamma: OptionsGammaMonitor | None = None,
     options_sentiment: OptionsSentimentMonitor | None = None,
+    mag7_iv_monitor: Mag7IVMonitor | None = None,
     policy_risk_monitor: PolicyRiskMonitor | None = None,
     event_risk_ledger: EventRiskLedger | None = None,
     previous_state: dict | None = None,
@@ -156,6 +159,7 @@ def score_snapshot(
         ),
         options_gamma=options_gamma,
         options_sentiment=options_sentiment,
+        mag7_iv_monitor=mag7_iv_monitor,
         policy_risk_monitor=policy_risk_monitor,
         event_risk_ledger=event_risk_ledger,
         news_monitor=news_monitor,

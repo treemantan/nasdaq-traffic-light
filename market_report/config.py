@@ -48,6 +48,19 @@ class OptionsSentimentConfig:
 
 
 @dataclass(frozen=True)
+class Mag7IVConfig:
+    enabled: bool
+    tickers: list[str]
+    target_dte: int
+    max_days_to_expiry: int
+    lookback_days: int
+    rank_threshold: float
+    percentile_threshold: float
+    minimum_history_points: int
+    minimum_history_span_days: int
+
+
+@dataclass(frozen=True)
 class AppConfig:
     report_title: str
     report_timezone: str
@@ -56,6 +69,7 @@ class AppConfig:
     swing_watchlist: list[str]
     options_gamma: OptionsGammaConfig
     options_sentiment: OptionsSentimentConfig
+    mag7_iv: Mag7IVConfig
     core_etf_plan: dict
     email: EmailConfig
 
@@ -74,6 +88,7 @@ def load_config(path: str) -> AppConfig:
     email = raw.get("email", {})
     options_gamma = raw.get("options_gamma", {})
     options_sentiment = raw.get("options_sentiment", {})
+    mag7_iv = raw.get("mag7_iv", {})
     core_etf_plan = _json_env_or_mapping("CORE_ETF_PLAN_JSON", raw.get("core_etf_plan", {}))
     weights = _normalize_weights(raw.get("weights", {}))
     swing_watchlist = _env_list("SWING_WATCHLIST") or _as_list(raw.get("swing_watchlist", []))
@@ -88,6 +103,7 @@ def load_config(path: str) -> AppConfig:
     sentiment_benchmarks = _env_list("OPTIONS_SENTIMENT_BENCHMARKS") or _as_list(
         options_sentiment.get("benchmark_tickers", ["SPY", "QQQ"])
     )
+    mag7_iv_tickers = _resolve_mag7_iv_tickers(mag7_iv.get("tickers"))
 
     recipients = _env_list("REPORT_RECIPIENTS") or _as_list(email.get("to", []))
     username = os.environ.get("SMTP_USERNAME", email.get("username", ""))
@@ -139,6 +155,17 @@ def load_config(path: str) -> AppConfig:
             ),
             max_tickers=int(os.environ.get("OPTIONS_SENTIMENT_MAX_TICKERS", options_sentiment.get("max_tickers", 12))),
         ),
+        mag7_iv=Mag7IVConfig(
+            enabled=_env_bool("MAG7_IV_ENABLED", bool(mag7_iv.get("enabled", True))),
+            tickers=mag7_iv_tickers,
+            target_dte=int(mag7_iv.get("target_dte", 30)),
+            max_days_to_expiry=int(mag7_iv.get("max_days_to_expiry", 75)),
+            lookback_days=int(mag7_iv.get("lookback_days", 365)),
+            rank_threshold=float(mag7_iv.get("rank_threshold", 10)),
+            percentile_threshold=float(mag7_iv.get("percentile_threshold", 20)),
+            minimum_history_points=int(mag7_iv.get("minimum_history_points", 20)),
+            minimum_history_span_days=int(mag7_iv.get("minimum_history_span_days", 20)),
+        ),
         core_etf_plan=core_etf_plan,
         email=EmailConfig(
             enabled=_env_bool("EMAIL_ENABLED", bool(email.get("enabled", False))),
@@ -175,6 +202,18 @@ def _as_list(value: object) -> list[str]:
     if isinstance(value, list):
         return [str(x).strip() for x in value if str(x).strip()]
     return []
+
+
+def _resolve_mag7_iv_tickers(configured: object = None) -> list[str]:
+    mag7 = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA"]
+    default_focus = ["INTC", "AVGO", "MRVL", "NBIS", "BE"]
+    full_override = _env_list("MAG7_IV_TICKERS")
+    focus_override = _env_list("MOMENTUM_IV_TICKERS")
+    if full_override:
+        selected = full_override
+    else:
+        selected = (_as_list(configured) or mag7 + default_focus) + focus_override
+    return list(dict.fromkeys(ticker.upper() for ticker in selected if ticker))
 
 
 def _env_list(name: str) -> list[str]:

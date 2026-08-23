@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import asdict, replace
 from datetime import datetime, timedelta, timezone
 
 from market_report.etf_monitor import PortfolioPosition
@@ -7,13 +8,17 @@ from market_report.price_history import InstrumentIdentity, PriceHistory
 from market_report.technical_indicators import PriceBar
 from market_report.technical_swing import (
     SwingZone,
+    TechnicalSwingReport,
     _classify_status,
     _zones_for_report,
     assess_swing,
     build_technical_swing_report,
     detect_pivots,
+    technical_swing_from_payload,
     resolve_swing_universe,
 )
+from market_report.render import _render_technical_swing
+from market_report.render_email import _render_technical_swing_email
 
 
 def _history(symbol: str = "MSFT", closes: list[float] | None = None) -> PriceHistory:
@@ -140,6 +145,64 @@ def test_swing_scorecard_uses_multi_timeframe_momentum_and_benchmark() -> None:
     assert assessment.scorecard.total_score >= 16
     assert assessment.scorecard.above_ema5 is True
     assert "高动量" in assessment.scorecard.interpretation
+
+
+def test_high_score_summary_prioritizes_entry_research_candidates() -> None:
+    values = [100 + index * 0.4 for index in range(220)]
+    assessment = assess_swing(_history("MSFT", closes=values), origin="watchlist", benchmark_return_20d=1.0)
+    report = TechnicalSwingReport(
+        generated_at="2026-08-22T00:00:00+00:00",
+        assessments=(assessment,),
+        summary="test",
+    )
+
+    for rendered in (_render_technical_swing(report), _render_technical_swing_email(report)):
+        assert "高分进场研究候选" in rendered
+        assert "MSFT" in rendered
+        assert f"{assessment.scorecard.total_score}/20" in rendered
+        assert "不是买入建议" in rendered or "不代表已完成" in rendered
+
+
+def test_structure_diagnostic_builds_regression_channel_and_cycle_states() -> None:
+    values = [100 + index * 0.3 for index in range(220)]
+    assessment = assess_swing(_history("MSFT", closes=values), origin="watchlist", benchmark_return_20d=1.0)
+
+    assert assessment.structure is not None
+    structure = assessment.structure
+    assert structure.channel_window == 90
+    assert structure.channel_lower < structure.channel_mid < structure.channel_upper
+    assert structure.short_term_state == "短线多头"
+    assert structure.medium_term_state == "中期上升"
+    assert structure.long_term_state == "长期多头"
+    assert "确认" not in structure.summary
+    assert structure.confirmation
+    assert structure.invalidation
+
+
+def test_structure_diagnostic_detects_inside_nr7_and_survives_payload_render() -> None:
+    history = _history("CRWD")
+    bars = list(history.bars)
+    previous = bars[-2]
+    bars[-1] = PriceBar(
+        timestamp=bars[-1].timestamp,
+        open=previous.close,
+        high=previous.close + 0.20,
+        low=previous.close - 0.20,
+        close=previous.close + 0.05,
+        volume=bars[-1].volume,
+    )
+    assessment = assess_swing(replace(history, bars=tuple(bars)), origin="watchlist", benchmark_return_20d=1.0)
+    report = TechnicalSwingReport("2026-08-22T00:00:00+00:00", (assessment,), (), "test")
+    restored = technical_swing_from_payload(asdict(report))
+
+    assert assessment.structure is not None
+    assert "Inside Bar" in assessment.structure.bar_patterns
+    assert "NR7" in assessment.structure.bar_patterns
+    assert restored.assessments[0].structure == assessment.structure
+    rendered = _render_technical_swing(restored)
+    assert "透明结构诊断" in rendered
+    assert "回归通道" in rendered
+    assert "延续倾向 / 反转风险" in rendered
 
 
 def test_breakdown_uses_support_zone_above_current_close() -> None:

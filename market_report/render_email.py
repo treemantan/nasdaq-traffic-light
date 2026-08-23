@@ -6,11 +6,13 @@ from .data_sources import MarketMetric
 from .etf_monitor import ETFAssetMonitor, ETFMonitor, PortfolioPosition
 from .event_risk_ledger import EventRiskLedger, EventRiskLedgerEntry
 from .mag7_capital_network import Mag7CapitalNetwork
+from .mag7_iv_monitor import MAG7_CORE_TICKERS, Mag7IVMonitor
 from .macro_brief import MacroDailyBrief, build_macro_daily_brief
 from .news_monitor import NewsMonitor
 from .options_sentiment import OptionsSentimentMonitor, TickerShortPremiumContext
 from .policy_risk_monitor import PolicyRiskFactor, PolicyRiskMonitor
 from .portfolio_events import PortfolioEventMonitor
+from .portfolio_review import build_daily_portfolio_review
 from .scoring import IronCondorAssessment, ScoreDriver, ScoredMetric, ScoredReport
 from .shock_backtest import MarketShockBacktest, MarketShockSample
 
@@ -38,7 +40,9 @@ def render_email_report(report: ScoredReport) -> str:
     event_risk_ledger = _render_event_risk_ledger(report.event_risk_ledger)
     news_monitor = _render_news_monitor(report.news_monitor)
     mag7_capital_network = _render_mag7_capital_network(report.mag7_capital_network)
-    etf_monitor = _render_etf_monitor(report.etf_monitor, report.news_monitor, report.portfolio_event_monitor)
+    etf_monitor = _render_etf_monitor(
+        report.etf_monitor, report.news_monitor, report.portfolio_event_monitor, report.mag7_iv_monitor
+    )
     technical_swing = _render_technical_swing_email(report.technical_swing)
     macro_brief = _render_macro_daily_brief_email(build_macro_daily_brief(report))
     accent = report.light_color
@@ -183,12 +187,14 @@ def _render_technical_swing_email(report) -> str:
     holdings = [item for item in report.assessments if item.origin == "holding"]
     watchlist = [item for item in report.assessments if item.origin != "holding"]
     rows = "".join(_render_swing_email_row(item) for item in holdings + watchlist)
+    priority_summary = _render_technical_priority_summary_email(report.assessments)
     return f"""<tr>
       <td style="padding:0 24px 18px;">
         <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#151f2d;border:1px solid #263244;border-radius:8px;">
           <tr><td style="padding:14px;">
             <div style="font-size:19px;font-weight:700;color:#f3f4f6;">技术波段观察</div>
             <div style="font-size:12px;color:#9ca3af;margin-top:4px;">日线收盘框架；支撑与阻力为区域，不构成买卖指令。持仓与观察池使用同一套 EMA、均线、ATR、成交量和枢轴算法。</div>
+            {priority_summary}
             <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;font-size:12px;color:#d1d5db;margin-top:10px;">
               <tr>
                 <th align="left" style="padding:7px;border-bottom:1px solid #263244;color:#9ca3af;">标的</th>
@@ -204,15 +210,78 @@ def _render_technical_swing_email(report) -> str:
     </tr>"""
 
 
+def _render_technical_priority_summary_email(assessments) -> str:
+    candidates = _technical_priority_candidates_email(assessments)
+    if not candidates:
+        return '<div style="font-size:12px;color:#9ca3af;margin-top:8px;"><strong>高分进场研究候选：</strong>暂无总分达到16/20的标的。</div>'
+    rows = "".join(
+        '<tr>'
+        f'<td style="padding:7px;border:1px solid #263244;"><strong style="color:#f3f4f6;">{escape(item.symbol)}</strong><br><span style="color:#9ca3af;">{"持仓" if item.origin == "holding" else "观察池"}</span></td>'
+        f'<td style="padding:7px;border:1px solid #263244;"><strong>{item.scorecard.total_score}/20</strong><br>{escape(item.scorecard.interpretation)}</td>'
+        f'<td style="padding:7px;border:1px solid #263244;">{escape(item.trend)}<br>{escape(item.technical_status)}</td>'
+        f'<td style="padding:7px;border:1px solid #263244;">20D {_fmt_pct(item.indicators.return_20d)}<br>vs QQQ {_fmt_pct(item.scorecard.relative_strength_20d)}</td>'
+        f'<td style="padding:7px;border:1px solid #263244;">{escape(_technical_priority_action_email(item))}</td>'
+        '</tr>'
+        for item in candidates
+    )
+    return f"""<div style="margin-top:10px;border:1px solid #334155;background:#111827;padding:9px;">
+      <div style="font-size:13px;font-weight:700;color:#f3f4f6;">高分进场研究候选 · {len(candidates)}个</div>
+      <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;font-size:11px;color:#d1d5db;margin-top:6px;">
+        <tr><th style="padding:7px;border:1px solid #263244;">标的</th><th style="padding:7px;border:1px solid #263244;">评分</th><th style="padding:7px;border:1px solid #263244;">趋势</th><th style="padding:7px;border:1px solid #263244;">动量</th><th style="padding:7px;border:1px solid #263244;">下一步</th></tr>
+        {rows}
+      </table>
+      <div style="font-size:11px;color:#9ca3af;margin-top:5px;">门槛≥16/20，最多5名；这是研究优先级，不是买入建议。进场前需复核估值、事件、IV和仓位风险。</div>
+    </div>"""
+
+
+def _technical_priority_candidates_email(assessments, threshold: int = 16, limit: int = 5):
+    candidates = [
+        item
+        for item in assessments
+        if item.scorecard is not None
+        and item.scorecard.total_score >= threshold
+        and item.current_price is not None
+        and item.asset_class == "equity"
+    ]
+    candidates.sort(
+        key=lambda item: (
+            -item.scorecard.total_score,
+            -item.scorecard.relative_strength_20d
+            if item.scorecard.relative_strength_20d is not None
+            else float("inf"),
+            item.symbol,
+        )
+    )
+    return candidates[:limit]
+
+
+def _technical_priority_action_email(item) -> str:
+    support = _nearest_swing_email_zone(item.supports, item.current_price, support=True)
+    support_text = _fmt_swing_email_zone(support)
+    if item.technical_status == "突破候选":
+        return "等待放量确认或首次回踩，不追价"
+    return f"研究靠近支撑 {support_text} 的分批切入；ATR失效位 {_fmt_plain(item.invalidation_level)}"
+
+
 def _render_swing_email_row(item) -> str:
     support = _nearest_swing_email_zone(item.supports, item.current_price, support=True)
     resistance = _nearest_swing_email_zone(item.resistances, item.current_price, support=False)
     support_text = _fmt_swing_email_zone(support)
     resistance_text = _fmt_swing_email_zone(resistance)
     origin = "持仓" if item.origin == "holding" else "观察"
+    structure = item.structure
+    structure_text = ""
+    if structure is not None:
+        patterns = " / ".join(structure.bar_patterns[:3]) if structure.bar_patterns else "无特殊K线"
+        structure_text = (
+            f'<br><span style="color:#9ca3af;">{escape(structure.phase)} · '
+            f'{escape(structure.short_term_state)} / {escape(structure.long_term_state)} · '
+            f'延续 {escape(structure.continuation_tendency)} · 反转 {escape(structure.reversal_risk)} · '
+            f'{escape(patterns)}</span>'
+        )
     return f"""<tr>
       <td style="padding:8px;border-bottom:1px solid #263244;"><strong style="color:#f3f4f6;">{escape(item.symbol)}</strong><br><span style="color:#9ca3af;">{origin} · {escape(item.data_quality)}</span></td>
-      <td style="padding:8px;border-bottom:1px solid #263244;">{escape(item.trend)}<br><strong style="color:#bfdbfe;">{escape(item.technical_status)}</strong></td>
+      <td style="padding:8px;border-bottom:1px solid #263244;">{escape(item.trend)}<br><strong style="color:#bfdbfe;">{escape(item.technical_status)}</strong>{structure_text}</td>
       <td style="padding:8px;border-bottom:1px solid #263244;">支撑 {support_text}<br>阻力 {resistance_text}</td>
       <td style="padding:8px;border-bottom:1px solid #263244;">{escape(item.volume_label)}<br>{escape(item.volume_confirmation)}</td>
     </tr>"""
@@ -578,13 +647,14 @@ def _render_etf_monitor(
     monitor: ETFMonitor | None,
     news_monitor: NewsMonitor | None = None,
     portfolio_event_monitor: PortfolioEventMonitor | None = None,
+    mag7_iv_monitor: Mag7IVMonitor | None = None,
 ) -> str:
     if monitor is None:
         return ""
     grouped_rows = "".join(_render_etf_email_group(group) for group in _group_etf_assets(monitor.assets))
     changes = _render_email_notes("今日ETF变动摘要", monitor.change_summary)
     core_plan = _render_core_etf_plan_email(monitor.core_etf_plan)
-    portfolio = _render_portfolio_email(monitor, news_monitor, portfolio_event_monitor)
+    portfolio = _render_portfolio_email(monitor, news_monitor, portfolio_event_monitor, mag7_iv_monitor)
     return f"""<tr>
       <td style="padding:0 24px 18px;">
         <div style="font-size:19px;font-weight:700;color:#f3f4f6;margin:8px 0 8px;">UK ETF估值、趋势与拥挤度监控器</div>
@@ -623,6 +693,7 @@ def _render_portfolio_email(
     monitor: ETFMonitor,
     news_monitor: NewsMonitor | None = None,
     portfolio_event_monitor: PortfolioEventMonitor | None = None,
+    mag7_iv_monitor: Mag7IVMonitor | None = None,
 ) -> str:
     if not monitor.portfolio_positions:
         return _render_email_notes("实际组合视角", monitor.portfolio_summary + monitor.portfolio_warnings)
@@ -662,11 +733,13 @@ def _render_portfolio_email(
         else ""
     )
     performance_panel = _render_portfolio_performance_email(monitor)
+    daily_review_panel = _render_daily_portfolio_review_email(monitor, mag7_iv_monitor)
     event_panel = _render_portfolio_event_calendar_email(portfolio_event_monitor)
     event_panel += _render_portfolio_event_review_email(monitor.portfolio_positions, news_monitor)
     return f"""
         <div style="font-size:15px;font-weight:700;color:#f3f4f6;margin:14px 0 4px;">实际组合持仓（Revolut statement 估算）</div>
         <div style="font-size:12px;color:#9ca3af;margin-bottom:6px;">持仓估算市值 {_fmt_gbp(monitor.portfolio_total_value_gbp)}。基于导出的 statement 与 Yahoo 最近价格估算，不等同于券商实时账户净值。</div>
+        {daily_review_panel}
         {performance_panel}
         <div style="font-size:12px;color:#9ca3af;margin:4px 0 8px;">邮件客户端通常不稳定支持横向滚动表格；下方改用邮件友好的卡片布局。完整可滚动表格仍保留在 HTML 报告中。</div>
         <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;font-size:12px;color:#d1d5db;margin-bottom:6px;">
@@ -676,6 +749,85 @@ def _render_portfolio_email(
         {mag7_panel}
         {event_panel}
         <ul style="color:#9ca3af;padding-left:18px;margin:5px 0 10px;font-size:12px;">{notes}</ul>"""
+
+
+def _render_mag7_iv_monitor_email(monitor: Mag7IVMonitor | None) -> str:
+    if monitor is None:
+        return ""
+    prioritized = sorted(
+        monitor.assessments,
+        key=lambda item: (
+            0 if item.symbol in MAG7_CORE_TICKERS else 1,
+            {"low_iv_window": 0, "normal": 1, "building_history": 2, "unavailable": 3}.get(item.status, 4),
+            item.symbol,
+        ),
+    )
+    rows = []
+    current_group = None
+    for item in prioritized:
+        group = "MAG7 IV" if item.symbol in MAG7_CORE_TICKERS else "动量股 IV"
+        if group != current_group:
+            rows.append(
+                f'<tr><td colspan="5" style="padding:7px;border:1px solid #263244;font-weight:700;color:#f3f4f6;">{escape(group)}</td></tr>'
+            )
+            current_group = group
+        iv = f"{item.atm_iv_pct:.1f}%" if item.atm_iv_pct is not None else "N/A"
+        rank = f"{item.iv_rank:.1f}" if item.iv_rank is not None else "N/A"
+        percentile = f"{item.iv_percentile:.1f}%" if item.iv_percentile is not None else "N/A"
+        status = {
+            "low_iv_window": "低IV买方窗口",
+            "building_history": "积累中",
+            "normal": "观察",
+            "unavailable": "不可用",
+        }.get(item.status, item.status)
+        rows.append(
+            '<tr>'
+            f'<td style="padding:7px;border:1px solid #263244;"><strong>{escape(item.symbol)}</strong></td>'
+            f'<td style="padding:7px;border:1px solid #263244;">{escape(iv)}</td>'
+            f'<td style="padding:7px;border:1px solid #263244;">{escape(rank)}</td>'
+            f'<td style="padding:7px;border:1px solid #263244;">{escape(percentile)}</td>'
+            f'<td style="padding:7px;border:1px solid #263244;">{escape(status)}</td>'
+            '</tr>'
+        )
+    body = "".join(rows) or '<tr><td style="padding:7px;">今日无可用标的。</td></tr>'
+    return f"""<div style="border:1px solid #334155;background:#111827;padding:10px;margin:8px 0 10px;">
+      <div style="font-size:14px;font-weight:700;color:#f3f4f6;margin-bottom:5px;">EOD 期权隐含波动率观察</div>
+      <div style="font-size:11px;color:#9ca3af;margin-bottom:6px;">{escape(monitor.summary)}</div>
+      <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;font-size:11px;color:#d1d5db;">
+        <tr><th style="padding:7px;border:1px solid #263244;">标的</th><th style="padding:7px;border:1px solid #263244;">ATM IV</th><th style="padding:7px;border:1px solid #263244;">Rank</th><th style="padding:7px;border:1px solid #263244;">Percentile</th><th style="padding:7px;border:1px solid #263244;">状态</th></tr>
+        {body}
+      </table>
+      <div style="font-size:11px;color:#9ca3af;margin-top:5px;">仅当 IV Rank &lt; 10 且 IV Percentile ≤ 20、历史覆盖达标时提示。Call/Put 方向仍需结合趋势与事件，低IV本身不是交易建议。</div>
+    </div>"""
+
+
+def _render_daily_portfolio_review_email(
+    monitor: ETFMonitor,
+    mag7_iv_monitor: Mag7IVMonitor | None = None,
+) -> str:
+    review = build_daily_portfolio_review(monitor.portfolio_positions, monitor.portfolio_total_value_gbp)
+    if review is None:
+        return ""
+    adds = "".join(
+        f"<li><strong>{escape(item.symbol)}</strong>：{escape(item.trigger)}；{escape(item.rationale)}</li>"
+        for item in review.add_candidates[:3]
+    ) or "<li>今日没有满足条件的加仓候选。</li>"
+    reduces = "".join(
+        f"<li><strong>{escape(item.symbol)}</strong>：{escape(item.action)}；{escape(item.rationale)}</li>"
+        for item in review.reduce_candidates[:3]
+    ) or "<li>今日没有触发减仓/风险处理复核的持仓。</li>"
+    return f"""<div style="border:1px solid #334155;background:#111827;padding:10px;margin:8px 0 10px;">
+      <div style="font-size:14px;font-weight:700;color:#f3f4f6;margin-bottom:5px;">每日 EOD 组合审视 · {escape(review.health_label)} {review.health_score:.1f}/10</div>
+      <div style="font-size:12px;color:#d1d5db;"><strong>今天最重要：</strong>{escape(review.most_important_action)}</div>
+      <div style="font-size:12px;color:#d1d5db;"><strong>最大风险：</strong>{escape(review.max_risk)}</div>
+      <div style="font-size:12px;color:#d1d5db;"><strong>集中度：</strong>{escape(review.concentration)}</div>
+      <div style="font-size:12px;font-weight:700;color:#d1d5db;margin-top:6px;">加仓观察</div>
+      <ul style="color:#9ca3af;padding-left:18px;margin:3px 0;font-size:12px;">{adds}</ul>
+      <div style="font-size:12px;font-weight:700;color:#d1d5db;margin-top:6px;">减仓/风险处理</div>
+      <ul style="color:#9ca3af;padding-left:18px;margin:3px 0;font-size:12px;">{reduces}</ul>
+      <div style="font-size:11px;color:#9ca3af;margin-top:5px;">数据截止：{escape(review.data_cutoff)}；{escape(review.data_quality)}。{escape(review.caveat)}</div>
+      {_render_mag7_iv_monitor_email(mag7_iv_monitor)}
+    </div>"""
 
 
 def _render_portfolio_performance_email(monitor: ETFMonitor) -> str:
