@@ -1307,10 +1307,12 @@ def _fmt_backtest(asset: ETFAssetMonitor) -> str:
             _fmt_pct(backtest.similar_forward_6m),
         ]
     )
+    phase_count = backtest.similar_phase_count or backtest.similar_count
     return (
         f"相似市场环境：{backtest.similar_count}个样本，{backtest.similarity_confidence}，"
         f"特征覆盖率{_fmt_rate(backtest.similar_avg_feature_coverage_pct)}；之后1/3/6M {similar_path}，"
-        f"3M胜率{_fmt_rate(backtest.similar_hit_rate_3m)}，回撤{_fmt_pct(backtest.similar_max_drawdown_3m)}；"
+        f"3M胜率{_fmt_rate(backtest.similar_hit_rate_3m)}（{phase_count}个独立阶段），"
+        f"回撤{_fmt_pct(backtest.similar_max_drawdown_3m)}；"
         f"阈值质检：{backtest.reliability}，{backtest.best_threshold_label}"
     )
 

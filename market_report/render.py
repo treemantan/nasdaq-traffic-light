@@ -2785,7 +2785,8 @@ def _render_backtest_details(asset: ETFAssetMonitor) -> str:
     )
     return (
         f"<div>当前相似市场环境：{backtest.similar_count}个历史样本，聚合为{phase_count}个独立历史阶段；"
-        f"之后1/3/6M {escape(similar_path)}，3M胜率 {escape(_fmt_rate(backtest.similar_hit_rate_3m))}，"
+        f"之后1/3/6M {escape(similar_path)}，3M胜率 {escape(_fmt_rate(backtest.similar_hit_rate_3m))}"
+        f"（{phase_count}个独立阶段），"
         f"3M回撤 {escape(_fmt_pct(backtest.similar_max_drawdown_3m))}。</div>"
         f"<div>相似度可信度：{escape(backtest.similarity_confidence)}；代表样本平均特征覆盖率 "
         f"{escape(_fmt_rate(backtest.similar_avg_feature_coverage_pct))}。</div>"
@@ -2895,7 +2896,8 @@ def _fmt_backtest(asset: ETFAssetMonitor) -> str:
     phase_count = backtest.similar_phase_count or backtest.similar_count
     return (
         f"当前相似市场环境：{backtest.similar_count}个历史样本，聚合为{phase_count}个独立历史阶段；"
-        f"之后1/3/6M {similar_path}，3M胜率 {_fmt_rate(backtest.similar_hit_rate_3m)}，"
+        f"之后1/3/6M {similar_path}，3M胜率 {_fmt_rate(backtest.similar_hit_rate_3m)}"
+        f"（{phase_count}个独立阶段），"
         f"3M回撤 {_fmt_pct(backtest.similar_max_drawdown_3m)}。"
         f"相似度可信度：{backtest.similarity_confidence}，特征覆盖率{_fmt_rate(backtest.similar_avg_feature_coverage_pct)}。"
         f"{_fmt_tail_phase_summary(backtest)}"

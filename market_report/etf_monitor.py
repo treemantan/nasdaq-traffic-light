@@ -12,6 +12,7 @@ from html import unescape
 from bisect import bisect_right
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta, timezone
+from io import StringIO
 from pathlib import Path
 from typing import Any
 
@@ -37,7 +38,28 @@ MARKET_ENV_SYMBOLS = {
     "gold": "GC=F",
     "oil": "CL=F",
 }
+FRED_MARKET_ENV_SYMBOLS = {
+    "real_yield": "DFII10",
+}
 _MARKET_ENV_HISTORY_CACHE: dict[str, list[tuple[date, float]]] | None = None
+
+
+@dataclass(frozen=True)
+class _HistoricalMacroMetric:
+    value: float
+    previous_value: float | None = None
+
+    @property
+    def change(self) -> float | None:
+        if self.previous_value is None:
+            return None
+        return self.value - self.previous_value
+
+    @property
+    def change_pct(self) -> float | None:
+        if self.previous_value in (None, 0):
+            return None
+        return (self.value / self.previous_value - 1) * 100
 
 
 @dataclass(frozen=True)
@@ -876,8 +898,61 @@ def _fetch_market_env_histories() -> dict[str, list[tuple[date, float]]]:
                 histories[key] = history
         except Exception:
             continue
+    for key, symbol in FRED_MARKET_ENV_SYMBOLS.items():
+        try:
+            history = _fetch_fred_history(symbol)
+            if len(history) >= 260:
+                histories[key] = history
+        except Exception:
+            continue
     _MARKET_ENV_HISTORY_CACHE = histories
     return histories
+
+
+def _fetch_fred_history(symbol: str) -> list[tuple[date, float]]:
+    url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={urllib.parse.quote(symbol)}&cosd=2010-01-01"
+    rows: list[tuple[date, float]] = []
+    for row in csv.DictReader(StringIO(_read_text(url))):
+        raw_day = row.get("DATE") or row.get("observation_date")
+        raw_value = row.get(symbol)
+        value = _safe_float(raw_value)
+        if not raw_day or value is None:
+            continue
+        try:
+            rows.append((date.fromisoformat(raw_day), value))
+        except ValueError:
+            continue
+    return sorted(rows, key=lambda item: item[0])
+
+
+def _historical_macro_metrics(
+    market_histories: dict[str, list[tuple[date, float]]] | None,
+    as_of: date,
+) -> dict[str, _HistoricalMacroMetric]:
+    if not market_histories:
+        return {}
+    mapping = {
+        "qqq": "nasdaq",
+        "vix": "vix",
+        "dxy": "dxy",
+        "tnx": "treasury_10y",
+        "gold": "gold",
+        "real_yield": "real_yield_10y",
+    }
+    metrics: dict[str, _HistoricalMacroMetric] = {}
+    for source_key, metric_key in mapping.items():
+        history = market_histories.get(source_key) or []
+        index = _history_index_at_or_before(history, as_of)
+        if index is None:
+            continue
+        value = history[index][1]
+        previous_value = history[index - 1][1] if index > 0 else None
+        # Yahoo publishes ^TNX as yield x10 (for example 41.5 means 4.15%).
+        if source_key == "tnx":
+            value /= 10
+            previous_value = previous_value / 10 if previous_value is not None else None
+        metrics[metric_key] = _HistoricalMacroMetric(value, previous_value)
+    return metrics
 
 
 def _rolling_sensitivities(
@@ -1503,13 +1578,15 @@ def _backtest_entry_environment(
 
     records: list[dict[str, Any]] = []
     closes = [close for _, close in history]
-    current_features = _entry_similarity_features(spec, history, None, market_histories)
+    current_macro = macro_metrics or _historical_macro_metrics(market_histories, history[-1][0])
+    current_features = _entry_similarity_features(spec, history, current_macro, market_histories)
     start = 252
     end = len(history) - 126
     for index in range(start, end, 5):
         window = history[: index + 1]
-        snapshot = _historical_entry_snapshot(spec, window, None)
-        features = _entry_similarity_features(spec, window, None, market_histories)
+        historical_macro = _historical_macro_metrics(market_histories, history[index][0])
+        snapshot = _historical_entry_snapshot(spec, window, historical_macro)
+        features = _entry_similarity_features(spec, window, historical_macro, market_histories)
         if snapshot is None:
             continue
         score = int(snapshot["score"])
@@ -1749,7 +1826,10 @@ def _market_env_features(
             continue
         closes = [close for _, close in history[: index + 1]]
         value = closes[-1]
-        if key == "vix":
+        if key == "real_yield":
+            features["mkt_real_yield_level"] = value
+            features["mkt_real_yield_1m"] = value - closes[-22]
+        elif key == "vix":
             features["mkt_vix_level"] = value
             features["mkt_vix_5d"] = _momentum(closes, 5)
             features["mkt_vix_1m"] = _momentum(closes, 21)
@@ -1822,6 +1902,8 @@ FEATURE_SCALES = {
     "mkt_dxy_3m": 5.0,
     "mkt_10y_level": 8.0,
     "mkt_10y_1m": 8.0,
+    "mkt_real_yield_level": 0.6,
+    "mkt_real_yield_1m": 0.35,
     "mkt_gold_1m": 6.0,
     "mkt_gold_3m": 10.0,
     "mkt_oil_1m": 8.0,
@@ -1851,6 +1933,8 @@ FEATURE_WEIGHTS = {
     "mkt_dxy_3m": 0.8,
     "mkt_10y_level": 1.0,
     "mkt_10y_1m": 1.0,
+    "mkt_real_yield_level": 1.1,
+    "mkt_real_yield_1m": 1.0,
     "mkt_gold_1m": 0.6,
     "mkt_gold_3m": 0.5,
     "mkt_oil_1m": 0.5,
@@ -3401,7 +3485,80 @@ def _fixed_income_entry_quality(asset: ETFAssetMonitor) -> tuple[int, str, str, 
 
 
 def _gold_entry_quality(asset: ETFAssetMonitor, macro_metrics: dict[str, Any] | None = None) -> tuple[int, str, str, str]:
+    technical_score, phase = _gold_technical_score(asset)
+    macro_score, missing = _gold_macro_score(macro_metrics)
+    heat_penalty = _gold_heat_penalty(asset.crowding_score)
+    final_score = _clamp(technical_score * 0.65 + macro_score * 0.35 - heat_penalty)
+    label = _gold_entry_label(phase)
+    note = _gold_entry_note(technical_score, macro_score, asset.crowding_score, phase, missing)
+    risk = _gold_risk_note(phase, heat_penalty)
+    return final_score, label, note, risk
+
+
+def _gold_technical_score(asset: ETFAssetMonitor) -> tuple[int, str]:
     score = 50.0
+    above_13 = asset.value is not None and asset.sma13 is not None and asset.value >= asset.sma13
+    above_50 = asset.value is not None and asset.sma50 is not None and asset.value >= asset.sma50
+    above_200 = asset.value is not None and asset.sma200 is not None and asset.value >= asset.sma200
+
+    if asset.value is not None and asset.sma200 is not None:
+        score += 15 if above_200 else -8
+    if asset.value is not None and asset.sma50 is not None:
+        score += 6 if above_50 else -5
+    if asset.sma50 is not None and asset.sma200 is not None:
+        score += 8 if asset.sma50 >= asset.sma200 else 0
+    if asset.value is not None and asset.sma13 is not None:
+        score += 5 if above_13 else -3
+
+    if asset.momentum_1m is not None:
+        if 2 <= asset.momentum_1m <= 10:
+            score += 12
+        elif 0 < asset.momentum_1m < 2:
+            score += 5
+        elif 10 < asset.momentum_1m <= 16:
+            score += 5
+        elif asset.momentum_1m > 16:
+            score -= 4
+        elif asset.momentum_1m < -5:
+            score -= 12
+        else:
+            score -= 5
+    if asset.momentum_3m is not None:
+        if asset.momentum_3m > 0:
+            score += 8
+        elif asset.momentum_3m <= -8:
+            score -= 8
+    if asset.rsi14 is not None:
+        if 52 <= asset.rsi14 <= 68:
+            score += 10
+        elif 45 <= asset.rsi14 < 52:
+            score += 3
+        elif 68 < asset.rsi14 < 75:
+            score += 2
+        elif asset.rsi14 >= 75:
+            score -= 12
+        elif asset.rsi14 <= 35:
+            score -= 8
+
+    overheated = (
+        (asset.rsi14 is not None and asset.rsi14 >= 72)
+        or (asset.momentum_1m is not None and asset.momentum_1m >= 15)
+        or asset.crowding_score >= 75
+    )
+    if overheated and above_200:
+        phase = "hot"
+    elif above_200 and (asset.momentum_1m or 0) > 0 and (asset.rsi14 or 0) >= 52:
+        phase = "confirmed"
+    elif above_50 and (asset.momentum_1m or 0) > 0 and (asset.rsi14 or 0) >= 45:
+        phase = "recovering"
+    elif above_13 and max(asset.momentum_5d or 0, asset.momentum_1m or 0) > 0 and (asset.rsi14 or 0) >= 40:
+        phase = "turning"
+    else:
+        phase = "weak"
+    return _clamp(score), phase
+
+
+def _gold_macro_score(macro_metrics: dict[str, Any] | None) -> tuple[int, list[str]]:
     real_yield = _metric_value(macro_metrics, "real_yield_10y")
     real_yield_change = _metric_change(macro_metrics, "real_yield_10y")
     dxy_change_pct = _metric_change_pct(macro_metrics, "dxy")
@@ -3410,52 +3567,44 @@ def _gold_entry_quality(asset: ETFAssetMonitor, macro_metrics: dict[str, Any] | 
     vix_change_pct = _metric_change_pct(macro_metrics, "vix")
     gold_change_pct = _metric_change_pct(macro_metrics, "gold")
 
-    if asset.value is not None and asset.sma200 is not None:
-        score += 8 if asset.value >= asset.sma200 else -8
-    if asset.sma50 is not None and asset.sma200 is not None:
-        score += 4 if asset.sma50 >= asset.sma200 else -4
-    if asset.trend_sigma_200d is not None:
-        if asset.trend_sigma_200d >= 2:
-            score -= 8
-        elif 0 <= asset.trend_sigma_200d <= 1.5:
-            score += 4
-    if asset.rsi14 is not None:
-        if 45 <= asset.rsi14 <= 65:
-            score += 5
-        elif asset.rsi14 >= 75:
-            score -= 10
-        elif asset.rsi14 <= 30:
-            score -= 5
-
+    rate_cluster = 0.0
     if real_yield is not None:
-        if real_yield >= 2.1:
-            score -= 10
-        elif real_yield <= 1.7:
-            score += 6
+        if real_yield >= 2.5:
+            rate_cluster -= 6
+        elif real_yield >= 2.0:
+            rate_cluster -= 4
+        elif real_yield <= 1.5:
+            rate_cluster += 5
     if real_yield_change is not None:
-        if real_yield_change > 0.03:
-            score -= 10
-        elif real_yield_change < -0.03:
-            score += 10
+        if real_yield_change > 0.05:
+            rate_cluster -= 5
+        elif real_yield_change > 0.02:
+            rate_cluster -= 3
+        elif real_yield_change < -0.05:
+            rate_cluster += 5
+        elif real_yield_change < -0.02:
+            rate_cluster += 3
     if dxy_change_pct is not None:
         if dxy_change_pct > 0.3:
-            score -= 8
+            rate_cluster -= 4
         elif dxy_change_pct <= 0:
-            score += 5
+            rate_cluster += 3
     if ten_year_change is not None and dxy_change_pct is not None and ten_year_change > 0.04 and dxy_change_pct > 0:
-        score -= 6
+        rate_cluster -= 3
+
+    cross_asset = 0.0
     if nasdaq_change_pct is not None and gold_change_pct is not None and nasdaq_change_pct < -0.5 and gold_change_pct > 0:
-        score += 5
+        cross_asset += 5
     if vix_change_pct is not None:
         if 3 <= vix_change_pct <= 10 and (dxy_change_pct or 0) <= 0.3:
-            score += 3
+            cross_asset += 3
         elif vix_change_pct > 12 and (dxy_change_pct or 0) > 0.3:
-            score -= 6
+            cross_asset -= 4
     if gold_change_pct is not None:
         if gold_change_pct > 0:
-            score += 3
+            cross_asset += 3
         elif gold_change_pct < -1:
-            score -= 4
+            cross_asset -= 3
 
     missing = [
         label
@@ -3466,40 +3615,58 @@ def _gold_entry_quality(asset: ETFAssetMonitor, macro_metrics: dict[str, Any] | 
         )
         if _metric_value(macro_metrics, key) is None
     ]
-    if missing:
-        score -= min(8, len(missing) * 3)
-
-    final_score = _clamp(score)
-    return final_score, _gold_entry_label(final_score), _gold_entry_note(final_score, missing), _gold_risk_note(final_score)
+    completeness_penalty = min(6, len(missing) * 2)
+    score = 50 + max(-12, min(12, rate_cluster)) + max(-6, min(8, cross_asset)) - completeness_penalty
+    return max(30, min(70, round(score))), missing
 
 
-def _gold_entry_label(score: int) -> str:
-    if score >= 70:
-        return "黄金配置环境偏友好"
-    if score >= 55:
-        return "黄金配置环境中性偏友好"
-    if score >= 45:
-        return "黄金配置环境中性，等待宏观确认"
-    return "实际利率/美元压力偏高"
+def _gold_heat_penalty(crowding_score: int) -> int:
+    if crowding_score >= 85:
+        return 18
+    if crowding_score >= 75:
+        return 10
+    if crowding_score >= 65:
+        return 4
+    return 0
 
 
-def _gold_entry_note(score: int, missing: list[str]) -> str:
+def _gold_entry_label(phase: str) -> str:
+    return {
+        "hot": "黄金趋势确认，但热度偏高",
+        "confirmed": "黄金趋势回暖已确认",
+        "recovering": "黄金热度回暖，右侧确认早期",
+        "turning": "黄金尝试转暖，等待50日线确认",
+        "weak": "黄金技术结构偏弱",
+    }[phase]
+
+
+def _gold_entry_note(
+    technical_score: int,
+    macro_score: int,
+    crowding_score: int,
+    phase: str,
+    missing: list[str],
+) -> str:
     limitation = f" 部分输入缺失：{'、'.join(missing)}，结论需降权。" if missing else ""
-    if score >= 70:
-        return "实际利率、美元或金价趋势组合对黄金相对友好，配置环境优于中性水平。" + limitation
-    if score >= 55:
-        return "黄金趋势尚可，宏观压力未明显扩散，但仍需观察实际利率和美元是否重新走强。" + limitation
-    if score >= 45:
-        return "黄金配置环境接近中性，趋势信号与宏观约束尚未形成清晰共振。" + limitation
-    return "实际利率或美元压力偏高，黄金配置环境承压，需要等待宏观阻力缓和。" + limitation
+    phase_note = {
+        "hot": "趋势仍强，但短线位置与拥挤度已要求降低追价意愿。",
+        "confirmed": "价格、动量和RSI已形成右侧共振。",
+        "recovering": "1个月动量和中期均线开始修复，已捕捉到热度回暖。",
+        "turning": "短周期率先转强，但中期趋势尚未完全确认。",
+        "weak": "价格与动量尚未形成可验证的回暖结构。",
+    }[phase]
+    return (
+        f"技术结构{technical_score}/100（权重65%），宏观环境{macro_score}/100（权重35%），"
+        f"拥挤度{crowding_score}/100并单独控制追高。{phase_note}{limitation}"
+    )
 
 
-def _gold_risk_note(score: int) -> str:
-    if score >= 70:
-        return "风险管理重点：若实际利率与美元重新同步上行，黄金的配置分数应快速下调。"
-    if score >= 55:
-        return "风险管理重点：确认金价强势是否由实际利率回落驱动，而非单日避险波动。"
-    return "风险管理重点：优先观察实际利率、美元和长端收益率是否停止同步走强。"
+def _gold_risk_note(phase: str, heat_penalty: int) -> str:
+    if heat_penalty:
+        return f"风险管理重点：趋势有效但已触发{heat_penalty}分热度惩罚，优先等待回踩均线或RSI冷却。"
+    if phase in {"confirmed", "recovering"}:
+        return "风险管理重点：观察回暖能否延续，并防范实际利率与美元重新同步上行。"
+    return "风险管理重点：等待50/200日线、1个月动量与RSI形成至少两项右侧确认。"
 
 
 def _entry_note(asset: ETFAssetMonitor, score: int) -> str:

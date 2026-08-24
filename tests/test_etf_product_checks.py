@@ -5,6 +5,7 @@ import json
 import tempfile
 import unittest
 import os
+from dataclasses import replace
 from datetime import date, datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
@@ -19,6 +20,8 @@ from market_report.etf_monitor import (
     _asset_trend_label,
     _classify_portfolio_supplement,
     _entry_quality,
+    _gold_entry_quality,
+    _HistoricalMacroMetric,
     _fetch_yahoo_price_data,
     _load_portfolio_summary,
     _parse_ishares_portfolio_valuation,
@@ -32,6 +35,58 @@ from market_report.render import _fmt_valuation_block, _group_etf_assets, _max_h
 
 
 class ETFProductCheckTests(unittest.TestCase):
+    def test_gold_score_recognizes_early_technical_recovery_despite_macro_headwind(self) -> None:
+        asset = replace(
+            self._asset("SGLN.L", (), equity_like=False, theme="Gold", value=95, sma200=100),
+            sma13=94,
+            sma50=93,
+            momentum_5d=2,
+            momentum_1m=3,
+            momentum_3m=-2,
+            rsi14=55,
+            crowding_score=45,
+        )
+        macro = {
+            "real_yield_10y": _HistoricalMacroMetric(2.4, 2.35),
+            "dxy": _HistoricalMacroMetric(101.0, 100.5),
+            "treasury_10y": _HistoricalMacroMetric(4.7, 4.64),
+            "gold": _HistoricalMacroMetric(4050, 4040),
+            "nasdaq": _HistoricalMacroMetric(22000, 22150),
+        }
+
+        score, label, note, risk = _gold_entry_quality(asset, macro)
+
+        self.assertGreaterEqual(score, 45)
+        self.assertIn("回暖", label)
+        self.assertIn("技术结构", note)
+        self.assertIn("宏观环境", note)
+        self.assertIn("回暖", risk)
+
+    def test_gold_score_flags_confirmed_but_overheated_trend(self) -> None:
+        asset = replace(
+            self._asset("SGLN.L", (), equity_like=False, theme="Gold", value=130, sma200=100),
+            sma13=125,
+            sma50=115,
+            momentum_5d=4,
+            momentum_1m=20,
+            momentum_3m=30,
+            rsi14=78,
+            crowding_score=88,
+        )
+        favorable_macro = {
+            "real_yield_10y": _HistoricalMacroMetric(1.3, 1.4),
+            "dxy": _HistoricalMacroMetric(98, 99),
+            "treasury_10y": _HistoricalMacroMetric(3.8, 3.85),
+            "gold": _HistoricalMacroMetric(4100, 4050),
+        }
+
+        score, label, note, risk = _gold_entry_quality(asset, favorable_macro)
+
+        self.assertIn("热度偏高", label)
+        self.assertLess(score, 70)
+        self.assertIn("热度惩罚", risk)
+        self.assertIn("拥挤度88/100", note)
+
     def test_yahoo_price_data_prefers_regular_market_quote(self) -> None:
         payload = {
             "chart": {

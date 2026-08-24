@@ -12,14 +12,44 @@ from market_report.etf_monitor import (
     _cluster_similar_samples,
     _entry_similarity_features,
     _historical_driver_notes,
+    _historical_macro_metrics,
+    _fetch_fred_history,
     _rolling_sensitivities,
     _similar_samples,
     _similarity_confidence,
     _similar_stats,
 )
+from unittest.mock import patch
 
 
 class ETFBacktestTests(unittest.TestCase):
+    def test_historical_macro_metrics_do_not_look_past_as_of_date(self) -> None:
+        histories = {
+            "real_yield": [
+                (date(2026, 7, 23), 1.9),
+                (date(2026, 7, 24), 2.0),
+                (date(2026, 7, 27), 2.8),
+            ],
+            "dxy": [(date(2026, 7, 23), 100), (date(2026, 7, 24), 101), (date(2026, 7, 27), 110)],
+            "tnx": [(date(2026, 7, 23), 46.4), (date(2026, 7, 24), 47.0)],
+        }
+
+        metrics = _historical_macro_metrics(histories, date(2026, 7, 24))
+
+        self.assertEqual(metrics["real_yield_10y"].value, 2.0)
+        self.assertEqual(metrics["real_yield_10y"].previous_value, 1.9)
+        self.assertEqual(metrics["dxy"].value, 101)
+        self.assertEqual(metrics["treasury_10y"].value, 4.7)
+        self.assertAlmostEqual(metrics["treasury_10y"].change, 0.06)
+
+    def test_fetch_fred_history_parses_valid_rows_and_skips_missing_values(self) -> None:
+        payload = "observation_date,DFII10\n2026-07-23,1.90\n2026-07-24,.\n2026-07-27,2.05\n"
+
+        with patch("market_report.etf_monitor._read_text", return_value=payload):
+            history = _fetch_fred_history("DFII10")
+
+        self.assertEqual(history, [(date(2026, 7, 23), 1.9), (date(2026, 7, 27), 2.05)])
+
     def test_etf_backtest_uses_threshold_and_forward_windows(self) -> None:
         start = date(2020, 1, 1)
         history = []

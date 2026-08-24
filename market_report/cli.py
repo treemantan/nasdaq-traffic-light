@@ -57,6 +57,17 @@ def _merge_temporary_technical_tickers(cli_values: list[str], env_value: str = "
     return tuple(ordered)
 
 
+def _eod_technical_watchlist(watchlist, etf_monitor) -> tuple[str, ...]:
+    """Add monitored gold ETFs to the persistent EOD technical universe."""
+    ordered: dict[str, None] = {}
+    for ticker in parse_ticker_list(watchlist):
+        ordered.setdefault(ticker.upper(), None)
+    for asset in etf_monitor.assets:
+        if asset.theme.lower() == "gold":
+            ordered.setdefault(asset.symbol.upper(), None)
+    return tuple(ordered)
+
+
 def main() -> int:
     args = build_parser().parse_args()
 
@@ -78,7 +89,9 @@ def main() -> int:
     )
     asset_classes = {
         asset.symbol.upper(): (
-            "cash_like"
+            "equity"
+            if asset.theme.lower() == "gold"
+            else "cash_like"
             if "cash-like" in asset.theme.lower() or "ultrashort" in asset.theme.lower()
             else "fixed_income"
             if not asset.equity_like
@@ -90,9 +103,10 @@ def main() -> int:
         args.technical_tickers,
         os.environ.get("TECHNICAL_TICKERS", ""),
     )
+    eod_technical_watchlist = _eod_technical_watchlist(config.swing_watchlist, etf_monitor)
     technical_swing = build_technical_swing_report(
         etf_monitor.portfolio_positions,
-        config.swing_watchlist,
+        eod_technical_watchlist,
         temporary_technical_tickers,
         asset_classes=asset_classes,
     )

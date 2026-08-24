@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import unittest
+from types import SimpleNamespace
 
-from market_report.cli import _merge_temporary_technical_tickers, build_parser
+from market_report.cli import _eod_technical_watchlist, _merge_temporary_technical_tickers, build_parser
 
 
 class CliFlagTests(unittest.TestCase):
@@ -23,6 +24,20 @@ class CliFlagTests(unittest.TestCase):
         tickers = _merge_temporary_technical_tickers(["CRWD,PLTR"], "TSLA,CRWD")
 
         self.assertEqual(tickers, ("TSLA", "CRWD", "PLTR"))
+
+    def test_eod_technical_watchlist_always_includes_monitored_gold_etfs(self) -> None:
+        monitor = SimpleNamespace(
+            assets=(
+                SimpleNamespace(symbol="SGLN.L", theme="Gold"),
+                SimpleNamespace(symbol="PHAU.L", theme="Gold"),
+                SimpleNamespace(symbol="SGBX.L", theme="Gold"),
+                SimpleNamespace(symbol="VWRL.L", theme="Global Equity"),
+            )
+        )
+
+        tickers = _eod_technical_watchlist(("CRWD", "SGLN.L"), monitor)
+
+        self.assertEqual(tickers, ("CRWD", "SGLN.L", "PHAU.L", "SGBX.L"))
 
 
 if __name__ == "__main__":
