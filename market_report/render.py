@@ -27,6 +27,7 @@ from .technical_swing import (
     TechnicalScorecard,
     TechnicalStructureDiagnostic,
     TechnicalSwingReport,
+    nearest_swing_zone,
 )
 from .time_utils import format_timestamp
 
@@ -61,6 +62,7 @@ def render_html_report(report: ScoredReport, title: str) -> str:
         report.portfolio_event_monitor,
         report.metric_history,
         report.mag7_iv_monitor,
+        report.technical_swing,
     )
     technical_swing = _render_technical_swing(report.technical_swing)
     options_sentiment = _render_options_sentiment(report.options_sentiment)
@@ -702,7 +704,7 @@ def _technical_entry_research_trigger(item: SwingAssessment, support: SwingZone 
 def _render_swing_card(item: SwingAssessment) -> str:
     indicators = item.indicators
     support = _nearest_swing_zone(item.supports, item.current_price)
-    resistance = _nearest_swing_zone(item.resistances, item.current_price)
+    resistance = _nearest_swing_zone(item.resistances, item.current_price, support=False)
     zone_details = _render_swing_zone_details("支撑", support, item.current_price)
     zone_details += _render_swing_zone_details("阻力", resistance, item.current_price)
     scorecard_details = _render_swing_scorecard(item.scorecard)
@@ -776,10 +778,13 @@ def _render_swing_structure(structure: TechnicalStructureDiagnostic | None) -> s
     </details>"""
 
 
-def _nearest_swing_zone(zones: tuple[SwingZone, ...], price: float | None) -> SwingZone | None:
-    if not zones or price is None:
-        return None
-    return min(zones, key=lambda zone: abs((zone.lower + zone.upper) / 2 - price))
+def _nearest_swing_zone(
+    zones: tuple[SwingZone, ...],
+    price: float | None,
+    *,
+    support: bool = True,
+) -> SwingZone | None:
+    return nearest_swing_zone(zones, price, support=support)
 
 
 def _fmt_swing_zone(zone: SwingZone | None) -> str:
@@ -1292,6 +1297,7 @@ def _render_etf_monitor(
     portfolio_event_monitor: PortfolioEventMonitor | None = None,
     option_history: list[dict] | None = None,
     mag7_iv_monitor: Mag7IVMonitor | None = None,
+    technical_swing: TechnicalSwingReport | None = None,
 ) -> str:
     if monitor is None:
         return ""
@@ -1302,7 +1308,7 @@ def _render_etf_monitor(
     changes = _render_etf_notes("今日ETF变动摘要", monitor.change_summary)
     core_plan = _render_core_etf_plan(monitor.core_etf_plan)
     portfolio = _render_portfolio_panel(
-        monitor, news_monitor, portfolio_event_monitor, option_history, mag7_iv_monitor
+        monitor, news_monitor, portfolio_event_monitor, option_history, mag7_iv_monitor, technical_swing
     )
     sensitivities = _render_sensitivity_panel(monitor)
     return f"""<section class="panel">
@@ -1364,6 +1370,7 @@ def _render_portfolio_panel(
     portfolio_event_monitor: PortfolioEventMonitor | None = None,
     option_history: list[dict] | None = None,
     mag7_iv_monitor: Mag7IVMonitor | None = None,
+    technical_swing: TechnicalSwingReport | None = None,
 ) -> str:
     if not monitor.portfolio_positions:
         return _render_etf_notes("实际组合视角", monitor.portfolio_summary + monitor.portfolio_warnings)
@@ -1400,7 +1407,7 @@ def _render_portfolio_panel(
         else ""
     )
     performance_panel = _render_portfolio_performance(monitor)
-    daily_review_panel = _render_daily_portfolio_review(monitor, mag7_iv_monitor)
+    daily_review_panel = _render_daily_portfolio_review(monitor, mag7_iv_monitor, technical_swing)
     option_panel = _render_option_risk_panel(monitor.portfolio_positions, option_history)
     event_panel = _render_portfolio_event_calendar(portfolio_event_monitor)
     event_panel += _render_portfolio_event_review(monitor.portfolio_positions, news_monitor)
@@ -1492,8 +1499,13 @@ def _render_mag7_iv_row(item: Mag7IVAssessment) -> str:
 def _render_daily_portfolio_review(
     monitor: ETFMonitor,
     mag7_iv_monitor: Mag7IVMonitor | None = None,
+    technical_swing: TechnicalSwingReport | None = None,
 ) -> str:
-    review = build_daily_portfolio_review(monitor.portfolio_positions, monitor.portfolio_total_value_gbp)
+    review = build_daily_portfolio_review(
+        monitor.portfolio_positions,
+        monitor.portfolio_total_value_gbp,
+        technical_swing=technical_swing,
+    )
     if review is None:
         return ""
     add_rows = _render_daily_action_rows(review.add_candidates, empty="今日没有满足条件的加仓候选。")

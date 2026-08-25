@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Iterable
 
+from .technical_swing import SwingAssessment, SwingZone, TechnicalSwingReport, nearest_swing_zone
+
 
 @dataclass(frozen=True)
 class PortfolioActionCandidate:
@@ -37,6 +39,7 @@ def build_daily_portfolio_review(
     portfolio_total_value_gbp: float | None,
     *,
     as_of: date | None = None,
+    technical_swing: TechnicalSwingReport | None = None,
 ) -> DailyPortfolioReview | None:
     items = [item for item in positions if (_num(getattr(item, "quantity", None)) or 0.0) > 0]
     if not items:
@@ -81,7 +84,11 @@ def build_daily_portfolio_review(
         else None
     )
 
-    add_candidates = [] if stale else _add_candidates(items, option_underlyings)
+    swing_by_symbol = {
+        item.symbol.upper(): item
+        for item in (technical_swing.assessments if technical_swing is not None else ())
+    }
+    add_candidates = [] if stale else _add_candidates(items, option_underlyings, swing_by_symbol)
     reduce_candidates = [] if stale else _reduce_candidates(items, option_risks)
     severe = [item for item in items if _trend_broken(item)]
 
@@ -156,7 +163,11 @@ def build_daily_portfolio_review(
     )
 
 
-def _add_candidates(items: list[object], option_underlyings: set[str]) -> list[PortfolioActionCandidate]:
+def _add_candidates(
+    items: list[object],
+    option_underlyings: set[str],
+    swing_by_symbol: dict[str, SwingAssessment],
+) -> list[PortfolioActionCandidate]:
     candidates: list[PortfolioActionCandidate] = []
     for item in items:
         symbol = str(getattr(item, "symbol", ""))
@@ -174,15 +185,28 @@ def _add_candidates(items: list[object], option_underlyings: set[str]) -> list[P
             or _trend_broken(item)
         ):
             continue
-        support = _nearest_support(item)
-        current = _num(getattr(item, "current_price_native", None))
-        near_support = bool(current and support and abs(current / support - 1) <= 0.05)
-        priority = int(min(abs(drawdown), 40) + max(10 - _weight(item), 0) + (8 if near_support else 0))
-        trigger = (
-            f"接近 {_fmt_native(support, item)} 支撑后企稳"
-            if support
-            else "等待 EMA21/SMA50 附近企稳或重新转强"
+        swing = swing_by_symbol.get(symbol.upper())
+        support_zone = (
+            nearest_swing_zone(swing.supports, swing.current_price, support=True)
+            if swing is not None
+            else None
         )
+        legacy_support = _nearest_support(item) if support_zone is None else None
+        current = _num(getattr(item, "current_price_native", None))
+        near_support = _is_near_support(current, support_zone, legacy_support)
+        priority = int(min(abs(drawdown), 40) + max(10 - _weight(item), 0) + (8 if near_support else 0))
+        if support_zone is not None:
+            trigger = (
+                f"接近 {_fmt_native_zone(support_zone, item)} 最近技术支撑区"
+                f"（强度 {support_zone.score}/100）后企稳"
+            )
+        elif legacy_support is not None:
+            trigger = (
+                f"接近 {_fmt_native(legacy_support, item)} 旧版20/60日参考位后企稳"
+                "（当日技术支撑区不可用）"
+            )
+        else:
+            trigger = "等待 EMA21/SMA50 附近企稳或重新转强"
         rationale = (
             f"权重 {_weight(item):.1f}%，距年内高点 {drawdown:.1f}%，"
             f"仍高于 SMA200 {distance_200:.1f}%"
@@ -310,10 +334,28 @@ def _nearest_support(item: object) -> float | None:
     return max(supports) if supports else None
 
 
+def _is_near_support(
+    current: float | None,
+    zone: SwingZone | None,
+    legacy_support: float | None,
+) -> bool:
+    if current is None or current <= 0:
+        return False
+    if zone is not None:
+        return zone.lower <= current <= zone.upper or (current > zone.upper and current / zone.upper - 1 <= 0.05)
+    return bool(legacy_support and abs(current / legacy_support - 1) <= 0.05)
+
+
 def _fmt_native(value: float, item: object) -> str:
     currency = str(getattr(item, "native_currency", "") or "")
     symbol = "£" if currency == "GBP" else "$" if currency == "USD" else f"{currency} "
     return f"{symbol}{value:,.2f}"
+
+
+def _fmt_native_zone(zone: SwingZone, item: object) -> str:
+    currency = str(getattr(item, "native_currency", "") or "")
+    symbol = "£" if currency == "GBP" else "$" if currency == "USD" else f"{currency} "
+    return f"{symbol}{zone.lower:,.2f}–{zone.upper:,.2f}"
 
 
 def _option_legs(items: list[object]) -> list[dict[str, object]]:

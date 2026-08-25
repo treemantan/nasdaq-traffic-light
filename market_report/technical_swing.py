@@ -1210,14 +1210,26 @@ def _infer_asset_class(item: SwingUniverseItem) -> str:
     return "equity"
 
 
-def _nearest_zone(zones: Sequence[SwingZone], price: float, *, below: bool) -> SwingZone | None:
+def nearest_swing_zone(
+    zones: Sequence[SwingZone],
+    price: float | None,
+    *,
+    support: bool,
+) -> SwingZone | None:
+    """Return the canonical nearest support/resistance zone used across report sections."""
+    if price is None:
+        return None
     candidates = [
         zone for zone in zones
-        if (zone.lower <= price if below else zone.upper >= price)
+        if (zone.lower <= price if support else zone.upper >= price)
     ]
     if not candidates:
         return None
     return min(candidates, key=lambda zone: abs(((zone.lower + zone.upper) / 2) - price))
+
+
+def _nearest_zone(zones: Sequence[SwingZone], price: float, *, below: bool) -> SwingZone | None:
+    return nearest_swing_zone(zones, price, support=below)
 
 
 def _zones_for_report(zones: Sequence[SwingZone], price: float, *, support: bool, limit: int = 3) -> tuple[SwingZone, ...]:

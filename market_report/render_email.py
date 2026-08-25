@@ -15,6 +15,7 @@ from .portfolio_events import PortfolioEventMonitor
 from .portfolio_review import build_daily_portfolio_review
 from .scoring import IronCondorAssessment, ScoreDriver, ScoredMetric, ScoredReport
 from .shock_backtest import MarketShockBacktest, MarketShockSample
+from .technical_swing import TechnicalSwingReport, nearest_swing_zone
 
 
 EMAIL_GROUPS = [
@@ -41,7 +42,11 @@ def render_email_report(report: ScoredReport) -> str:
     news_monitor = _render_news_monitor(report.news_monitor)
     mag7_capital_network = _render_mag7_capital_network(report.mag7_capital_network)
     etf_monitor = _render_etf_monitor(
-        report.etf_monitor, report.news_monitor, report.portfolio_event_monitor, report.mag7_iv_monitor
+        report.etf_monitor,
+        report.news_monitor,
+        report.portfolio_event_monitor,
+        report.mag7_iv_monitor,
+        report.technical_swing,
     )
     technical_swing = _render_technical_swing_email(report.technical_swing)
     macro_brief = _render_macro_daily_brief_email(build_macro_daily_brief(report))
@@ -288,15 +293,7 @@ def _render_swing_email_row(item) -> str:
 
 
 def _nearest_swing_email_zone(zones, price, *, support: bool):
-    if price is None or not zones:
-        return None
-    if support:
-        candidates = [zone for zone in zones if zone.lower <= price]
-    else:
-        candidates = [zone for zone in zones if zone.upper >= price]
-    if not candidates:
-        return None
-    return min(candidates, key=lambda zone: abs((zone.lower + zone.upper) / 2 - price))
+    return nearest_swing_zone(zones, price, support=support)
 
 
 def _fmt_swing_email_zone(zone) -> str:
@@ -648,13 +645,16 @@ def _render_etf_monitor(
     news_monitor: NewsMonitor | None = None,
     portfolio_event_monitor: PortfolioEventMonitor | None = None,
     mag7_iv_monitor: Mag7IVMonitor | None = None,
+    technical_swing: TechnicalSwingReport | None = None,
 ) -> str:
     if monitor is None:
         return ""
     grouped_rows = "".join(_render_etf_email_group(group) for group in _group_etf_assets(monitor.assets))
     changes = _render_email_notes("今日ETF变动摘要", monitor.change_summary)
     core_plan = _render_core_etf_plan_email(monitor.core_etf_plan)
-    portfolio = _render_portfolio_email(monitor, news_monitor, portfolio_event_monitor, mag7_iv_monitor)
+    portfolio = _render_portfolio_email(
+        monitor, news_monitor, portfolio_event_monitor, mag7_iv_monitor, technical_swing
+    )
     return f"""<tr>
       <td style="padding:0 24px 18px;">
         <div style="font-size:19px;font-weight:700;color:#f3f4f6;margin:8px 0 8px;">UK ETF估值、趋势与拥挤度监控器</div>
@@ -694,6 +694,7 @@ def _render_portfolio_email(
     news_monitor: NewsMonitor | None = None,
     portfolio_event_monitor: PortfolioEventMonitor | None = None,
     mag7_iv_monitor: Mag7IVMonitor | None = None,
+    technical_swing: TechnicalSwingReport | None = None,
 ) -> str:
     if not monitor.portfolio_positions:
         return _render_email_notes("实际组合视角", monitor.portfolio_summary + monitor.portfolio_warnings)
@@ -733,7 +734,7 @@ def _render_portfolio_email(
         else ""
     )
     performance_panel = _render_portfolio_performance_email(monitor)
-    daily_review_panel = _render_daily_portfolio_review_email(monitor, mag7_iv_monitor)
+    daily_review_panel = _render_daily_portfolio_review_email(monitor, mag7_iv_monitor, technical_swing)
     event_panel = _render_portfolio_event_calendar_email(portfolio_event_monitor)
     event_panel += _render_portfolio_event_review_email(monitor.portfolio_positions, news_monitor)
     return f"""
@@ -804,8 +805,13 @@ def _render_mag7_iv_monitor_email(monitor: Mag7IVMonitor | None) -> str:
 def _render_daily_portfolio_review_email(
     monitor: ETFMonitor,
     mag7_iv_monitor: Mag7IVMonitor | None = None,
+    technical_swing: TechnicalSwingReport | None = None,
 ) -> str:
-    review = build_daily_portfolio_review(monitor.portfolio_positions, monitor.portfolio_total_value_gbp)
+    review = build_daily_portfolio_review(
+        monitor.portfolio_positions,
+        monitor.portfolio_total_value_gbp,
+        technical_swing=technical_swing,
+    )
     if review is None:
         return ""
     adds = "".join(

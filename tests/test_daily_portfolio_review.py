@@ -3,11 +3,13 @@ from __future__ import annotations
 import json
 import unittest
 from datetime import date
+from types import SimpleNamespace
 
 from market_report.etf_monitor import ETFMonitor, PortfolioPosition
 from market_report.portfolio_review import build_daily_portfolio_review
 from market_report.render import _render_daily_portfolio_review
 from market_report.render_email import _render_daily_portfolio_review_email
+from market_report.technical_swing import SwingZone, TechnicalSwingReport
 
 
 def _position(symbol: str, weight: float, **kwargs) -> PortfolioPosition:
@@ -52,6 +54,56 @@ class DailyPortfolioReviewTests(unittest.TestCase):
         self.assertEqual(review.add_candidates[0].symbol, "MU")
         self.assertIn("$95.00", review.add_candidates[0].trigger)
         self.assertIn("时效合格", review.data_quality)
+
+    def test_eod_add_trigger_reuses_technical_swing_support_zone(self) -> None:
+        positions = [
+            _position(
+                "MU",
+                4.2,
+                drawdown_from_year_peak_pct=-20.0,
+                distance_sma200_pct=65.0,
+                rsi14=45.0,
+                support_20d_native=739.0,
+                current_price_native=925.0,
+                ibkr_data_status="live",
+                ibkr_activity_as_of="2026-08-25",
+            )
+        ]
+        assessment = SimpleNamespace(
+            symbol="MU",
+            current_price=925.0,
+            supports=(SwingZone("support", 889.54, 917.30, 80, 3, ("pivot",)),),
+        )
+        technical_swing = TechnicalSwingReport(
+            generated_at="2026-08-25T21:00:00+00:00",
+            assessments=(assessment,),
+        )
+
+        review = build_daily_portfolio_review(
+            positions,
+            30_000.0,
+            as_of=date(2026, 8, 25),
+            technical_swing=technical_swing,
+        )
+
+        assert review is not None
+        self.assertIn("$889.54–917.30", review.add_candidates[0].trigger)
+        self.assertIn("强度 80/100", review.add_candidates[0].trigger)
+        self.assertNotIn("$739", review.add_candidates[0].trigger)
+
+        monitor = ETFMonitor(
+            summary="test",
+            assets=[],
+            warnings=[],
+            portfolio_positions=positions,
+            portfolio_total_value_gbp=30_000.0,
+        )
+        for rendered in (
+            _render_daily_portfolio_review(monitor, technical_swing=technical_swing),
+            _render_daily_portfolio_review_email(monitor, technical_swing=technical_swing),
+        ):
+            self.assertIn("$889.54–917.30", rendered)
+            self.assertNotIn("$739", rendered)
 
     def test_stale_statement_suppresses_add_and_reduce_actions(self) -> None:
         positions = [
