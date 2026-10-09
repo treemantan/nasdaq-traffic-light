@@ -198,7 +198,7 @@ def _render_technical_swing_email(report) -> str:
         <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#151f2d;border:1px solid #263244;border-radius:8px;">
           <tr><td style="padding:14px;">
             <div style="font-size:19px;font-weight:700;color:#f3f4f6;">技术波段观察</div>
-            <div style="font-size:12px;color:#9ca3af;margin-top:4px;">日线收盘框架；支撑与阻力为区域，不构成买卖指令。持仓与观察池使用同一套 EMA、均线、ATR、成交量和枢轴算法。</div>
+            <div style="font-size:12px;color:#9ca3af;margin-top:4px;">{escape(report.summary)} 盘中动态K线尚未收盘确认；旧日线仅供参考。支撑与阻力为区域，不构成买卖指令。</div>
             {priority_summary}
             <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;font-size:12px;color:#d1d5db;margin-top:10px;">
               <tr>
@@ -247,6 +247,7 @@ def _technical_priority_candidates_email(assessments, threshold: int = 16, limit
         and item.scorecard.total_score >= threshold
         and item.current_price is not None
         and item.asset_class == "equity"
+        and item.data_quality not in {"daily/prior-close", "daily/intraday-stale", "daily/stale", "cache"}
     ]
     candidates.sort(
         key=lambda item: (
@@ -261,6 +262,8 @@ def _technical_priority_candidates_email(assessments, threshold: int = 16, limit
 
 
 def _technical_priority_action_email(item) -> str:
+    if item.data_quality == "daily/intraday":
+        return "盘中动态K线，待收盘复核；当前仅作观察"
     support = _nearest_swing_email_zone(item.supports, item.current_price, support=True)
     support_text = _fmt_swing_email_zone(support)
     if item.technical_status == "突破候选":
@@ -274,6 +277,12 @@ def _render_swing_email_row(item) -> str:
     support_text = _fmt_swing_email_zone(support)
     resistance_text = _fmt_swing_email_zone(resistance)
     origin = "持仓" if item.origin == "holding" else "观察"
+    data_status = {
+        "daily/intraday": "盘中动态K线（未确认）",
+        "daily/intraday-stale": "盘中行情过时（仅参考）",
+        "daily/prior-close": "上一根完整日线（仅参考）",
+        "daily/regular-close-fallback": "当日收盘报价补齐（待核对）",
+    }.get(item.data_quality, item.data_quality)
     structure = item.structure
     structure_text = ""
     if structure is not None:
@@ -285,7 +294,7 @@ def _render_swing_email_row(item) -> str:
             f'{escape(patterns)}</span>'
         )
     return f"""<tr>
-      <td style="padding:8px;border-bottom:1px solid #263244;"><strong style="color:#f3f4f6;">{escape(item.symbol)}</strong><br><span style="color:#9ca3af;">{origin} · {escape(item.data_quality)}</span></td>
+      <td style="padding:8px;border-bottom:1px solid #263244;"><strong style="color:#f3f4f6;">{escape(item.symbol)}</strong><br><span style="color:#9ca3af;">{origin} · {escape(data_status)}<br>数据截至 {escape(item.data_timestamp)}</span></td>
       <td style="padding:8px;border-bottom:1px solid #263244;">{escape(item.trend)}<br><strong style="color:#bfdbfe;">{escape(item.technical_status)}</strong>{structure_text}</td>
       <td style="padding:8px;border-bottom:1px solid #263244;">支撑 {support_text}<br>阻力 {resistance_text}</td>
       <td style="padding:8px;border-bottom:1px solid #263244;">{escape(item.volume_label)}<br>{escape(item.volume_confirmation)}</td>

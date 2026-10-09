@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import math
 import os
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from html import escape
 from pathlib import Path
@@ -639,7 +639,11 @@ def assess_swing(
     warnings = list(history.warnings)
     if requested != resolved:
         warnings.append(f"请求 ticker {requested} 与数据源返回 {resolved} 不一致，已停止技术判断。")
-    bars = history.bars
+    provisional = history.quality in {"daily/intraday", "daily/intraday-stale"}
+    bars = (
+        history.bars[:-1] + (replace(history.bars[-1], volume=None),)
+        if provisional else history.bars
+    )
     indicators = indicator_snapshot(bars)
     price = bars[-1].close
     scorecard = _calculate_scorecard(
@@ -656,11 +660,22 @@ def assess_swing(
     )
     previous = bars[-2].close if len(bars) >= 2 else None
     change_pct = ((price / previous) - 1) * 100 if previous else None
-    volume_ratio = (
-        bars[-1].volume / indicators.average_volume_20
-        if bars[-1].volume is not None and indicators.average_volume_20
-        else None
-    )
+    if provisional:
+        progress = history.volume_progress
+        volume_ratio = (
+            history.bars[-1].volume / progress / indicators.average_volume_20
+            if history.quality == "daily/intraday"
+            and history.bars[-1].volume is not None
+            and progress is not None and progress >= 0.08
+            and indicators.average_volume_20
+            else None
+        )
+    else:
+        volume_ratio = (
+            bars[-1].volume / indicators.average_volume_20
+            if bars[-1].volume is not None and indicators.average_volume_20
+            else None
+        )
     trend = classify_trend(price, indicators, asset_class)
     pivots = detect_pivots(bars)
     supports = cluster_pivots(
@@ -681,7 +696,9 @@ def assess_swing(
     )
     nearest_support = _nearest_zone(supports, price, below=True)
     nearest_resistance = _nearest_zone(resistances, price, below=False)
-    volume_label = classify_volume(volume_ratio)
+    volume_label = (
+        "预估日量（线性）" if volume_ratio is not None else "盘中量能估算不足"
+    ) if provisional else classify_volume(volume_ratio)
     status = _classify_status(
         price,
         change_pct,
@@ -689,7 +706,7 @@ def assess_swing(
         nearest_resistance,
         supports,
         resistances,
-        volume_ratio,
+        None if provisional else volume_ratio,
         trend,
         asset_class,
     )
@@ -698,7 +715,10 @@ def assess_swing(
         if nearest_support and indicators.atr14 is not None and asset_class != "cash_like"
         else None
     )
-    confirmation = _volume_confirmation(change_pct, volume_ratio)
+    confirmation = (
+        "盘中成交量按已过交易时间线性投影，未校正开盘/尾盘U型分布；放量/缩量等待收盘确认"
+        if provisional else _volume_confirmation(change_pct, volume_ratio)
+    )
     note = _risk_note(asset_class, trend, status, nearest_support, nearest_resistance)
     if requested != resolved:
         status = "ticker身份待核验"
@@ -751,8 +771,14 @@ def build_technical_swing_report(
     for item in universe:
         try:
             asset_class = classes.get(item.symbol) or _infer_asset_class(item)
+            history = fetch(item.symbol)
+            if history.quality == "cache":
+                warnings.append(
+                    f"{item.symbol} 技术分析已停用：行情为{history.quality}，不能生成当日技术或加仓信号。"
+                )
+                continue
             assessment = assess_swing(
-                fetch(item.symbol),
+                history,
                 origin=item.origin,
                 position=item.position,
                 asset_class=asset_class,
@@ -760,13 +786,24 @@ def build_technical_swing_report(
             )
             assessments.append(assessment)
             warnings.extend(assessment.warnings)
+            if history.quality in {"daily/prior-close", "daily/intraday-stale", "daily/stale"}:
+                warnings.append(
+                    f"{item.symbol} 当日动态K线不可用：仅显示旧日线/过时行情参考，不生成当日加仓信号。"
+                )
         except Exception as exc:
             warnings.append(f"{item.symbol} 技术分析暂不可用：{type(exc).__name__}: {exc}")
     generated_at = datetime.now(timezone.utc).isoformat()
+    provisional_count = sum(item.data_quality == "daily/intraday" for item in assessments)
+    reference_count = sum(
+        item.data_quality in {"daily/prior-close", "daily/intraday-stale", "daily/stale"}
+        for item in assessments
+    )
     summary = (
         f"已分析{len(assessments)}个标的，其中持仓"
         f"{sum(item.origin == 'holding' for item in assessments)}个、观察池"
         f"{sum(item.origin != 'holding' for item in assessments)}个。"
+        f"盘中动态K线 {provisional_count} 个（未收盘确认）；"
+        f"旧日线/盘中行情缺失 {reference_count} 个（仅作参考，不生成当日加仓信号）。"
     )
     report = TechnicalSwingReport(generated_at, tuple(assessments), tuple(dict.fromkeys(warnings)), summary)
     save_technical_state(report)
@@ -775,7 +812,10 @@ def build_technical_swing_report(
 
 def _fetch_benchmark_return(fetch: Callable[[str], PriceHistory]) -> float | None:
     try:
-        return indicator_snapshot(fetch("QQQ").bars).return_20d
+        history = fetch("QQQ")
+        if history.quality in {"cache", "daily/prior-close", "daily/intraday-stale", "daily/stale"}:
+            return None
+        return indicator_snapshot(history.bars).return_20d
     except Exception:
         return None
 

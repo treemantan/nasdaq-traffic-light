@@ -655,6 +655,7 @@ def _technical_priority_candidates(
         and item.scorecard.total_score >= threshold
         and item.current_price is not None
         and item.asset_class == "equity"
+        and item.data_quality not in {"daily/prior-close", "daily/intraday-stale", "daily/stale", "cache"}
     ]
     candidates.sort(
         key=lambda item: (
@@ -693,6 +694,8 @@ def _render_technical_priority_row(item: SwingAssessment) -> str:
 
 
 def _technical_entry_research_trigger(item: SwingAssessment, support: SwingZone | None) -> str:
+    if item.data_quality == "daily/intraday":
+        return "盘中动态K线，待收盘复核；当前仅作观察。"
     support_text = _fmt_swing_zone(support)
     if item.technical_status == "突破候选":
         return "优先研究突破后的量能确认或首次回踩；避免在远离支撑时追价。"

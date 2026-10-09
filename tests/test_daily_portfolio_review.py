@@ -4,6 +4,7 @@ import json
 import unittest
 from datetime import date
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from market_report.etf_monitor import ETFMonitor, PortfolioPosition
 from market_report.portfolio_review import build_daily_portfolio_review
@@ -98,12 +99,95 @@ class DailyPortfolioReviewTests(unittest.TestCase):
             portfolio_positions=positions,
             portfolio_total_value_gbp=30_000.0,
         )
-        for rendered in (
-            _render_daily_portfolio_review(monitor, technical_swing=technical_swing),
-            _render_daily_portfolio_review_email(monitor, technical_swing=technical_swing),
-        ):
-            self.assertIn("$889.54–917.30", rendered)
-            self.assertNotIn("$739", rendered)
+        class ReportDate(date):
+            @classmethod
+            def today(cls) -> date:
+                return cls(2026, 8, 25)
+
+        with patch("market_report.portfolio_review.date", ReportDate):
+            for rendered in (
+                _render_daily_portfolio_review(monitor, technical_swing=technical_swing),
+                _render_daily_portfolio_review_email(monitor, technical_swing=technical_swing),
+            ):
+                self.assertIn("$889.54–917.30", rendered)
+                self.assertNotIn("$739", rendered)
+
+    def test_missing_fresh_swing_suppresses_legacy_add_candidate(self) -> None:
+        positions = [
+            _position(
+                "MU",
+                4.2,
+                drawdown_from_year_peak_pct=-20.0,
+                distance_sma200_pct=65.0,
+                rsi14=45.0,
+                support_20d_native=95.0,
+                current_price_native=98.0,
+                ibkr_data_status="live",
+                ibkr_activity_as_of="2026-10-08",
+            )
+        ]
+        technical_swing = TechnicalSwingReport(
+            generated_at="2026-10-09T00:00:00+00:00",
+            assessments=(),
+            warnings=("MU 技术分析已停用：日线数据过期。",),
+        )
+
+        review = build_daily_portfolio_review(
+            positions,
+            30_000.0,
+            as_of=date(2026, 10, 8),
+            technical_swing=technical_swing,
+        )
+
+        assert review is not None
+        self.assertEqual(review.add_candidates, ())
+        self.assertNotIn("MU", review.most_important_action)
+
+    def test_prior_close_swing_is_visible_but_cannot_trigger_eod_add(self) -> None:
+        positions = [
+            _position(
+                "MU", 4.2, drawdown_from_year_peak_pct=-20.0,
+                distance_sma200_pct=65.0, rsi14=45.0,
+                support_20d_native=95.0, current_price_native=98.0,
+                ibkr_data_status="live", ibkr_activity_as_of="2026-10-08",
+            )
+        ]
+        swing = SimpleNamespace(symbol="MU", data_quality="daily/prior-close")
+        technical_swing = TechnicalSwingReport(
+            generated_at="2026-10-09T00:00:00+00:00", assessments=(swing,)
+        )
+
+        review = build_daily_portfolio_review(
+            positions, 30_000.0, as_of=date(2026, 10, 8), technical_swing=technical_swing
+        )
+
+        assert review is not None
+        self.assertEqual(review.add_candidates, ())
+
+    def test_fresh_intraday_swing_labels_conditional_add_as_provisional(self) -> None:
+        positions = [
+            _position(
+                "MU", 4.2, drawdown_from_year_peak_pct=-20.0,
+                distance_sma200_pct=65.0, rsi14=45.0,
+                support_20d_native=95.0, current_price_native=98.0,
+                ibkr_data_status="live", ibkr_activity_as_of="2026-10-08",
+            )
+        ]
+        swing = SimpleNamespace(
+            symbol="MU", data_quality="daily/intraday", current_price=98.0,
+            supports=(SwingZone("support", 95.0, 96.0, 75, 2, ("pivot",)),),
+        )
+        technical_swing = TechnicalSwingReport(
+            generated_at="2026-10-08T17:00:00+00:00", assessments=(swing,)
+        )
+
+        review = build_daily_portfolio_review(
+            positions, 30_000.0, as_of=date(2026, 10, 8), technical_swing=technical_swing
+        )
+
+        assert review is not None
+        self.assertEqual(review.add_candidates[0].symbol, "MU")
+        self.assertIn("盘中动态K线，须待收盘复核", review.add_candidates[0].trigger)
 
     def test_stale_statement_suppresses_add_and_reduce_actions(self) -> None:
         positions = [

@@ -88,7 +88,12 @@ def build_daily_portfolio_review(
         item.symbol.upper(): item
         for item in (technical_swing.assessments if technical_swing is not None else ())
     }
-    add_candidates = [] if stale else _add_candidates(items, option_underlyings, swing_by_symbol)
+    add_candidates = [] if stale else _add_candidates(
+        items,
+        option_underlyings,
+        swing_by_symbol,
+        require_swing=technical_swing is not None,
+    )
     reduce_candidates = [] if stale else _reduce_candidates(items, option_risks)
     severe = [item for item in items if _trend_broken(item)]
 
@@ -167,6 +172,8 @@ def _add_candidates(
     items: list[object],
     option_underlyings: set[str],
     swing_by_symbol: dict[str, SwingAssessment],
+    *,
+    require_swing: bool = False,
 ) -> list[PortfolioActionCandidate]:
     candidates: list[PortfolioActionCandidate] = []
     for item in items:
@@ -186,6 +193,14 @@ def _add_candidates(
         ):
             continue
         swing = swing_by_symbol.get(symbol.upper())
+        if require_swing and swing is None:
+            # The technical report omitted this symbol because its history was unavailable
+            # or stale. Do not replace that failed freshness check with legacy support.
+            continue
+        if swing is not None and getattr(swing, "data_quality", "") in {
+            "daily/prior-close", "daily/intraday-stale", "daily/stale", "cache"
+        }:
+            continue
         support_zone = (
             nearest_swing_zone(swing.supports, swing.current_price, support=True)
             if swing is not None
@@ -207,6 +222,8 @@ def _add_candidates(
             )
         else:
             trigger = "等待 EMA21/SMA50 附近企稳或重新转强"
+        if swing is not None and getattr(swing, "data_quality", "") == "daily/intraday":
+            trigger += "（盘中动态K线，须待收盘复核）"
         rationale = (
             f"权重 {_weight(item):.1f}%，距年内高点 {drawdown:.1f}%，"
             f"仍高于 SMA200 {distance_200:.1f}%"

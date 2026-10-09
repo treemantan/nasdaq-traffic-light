@@ -113,6 +113,61 @@ def test_pipeline_keeps_other_tickers_when_one_fetch_fails() -> None:
     assert "BAD" in " ".join(report.warnings)
 
 
+def test_pipeline_shows_stale_history_only_as_reference() -> None:
+    def fetcher(symbol: str) -> PriceHistory:
+        history = _history(symbol)
+        return replace(history, quality="daily/stale") if symbol == "MSFT" else history
+
+    report = build_technical_swing_report([], ["MSFT", "GOOD"], None, fetcher=fetcher)
+
+    assert [item.symbol for item in report.assessments] == ["MSFT", "GOOD"]
+    assert "MSFT 当日动态K线不可用" in " ".join(report.warnings)
+    assert "旧日线/盘中行情缺失 1 个" in report.summary
+
+
+def test_intraday_volume_projection_is_estimate_not_breakout_confirmation() -> None:
+    history = _history("MSFT")
+    raw_bars = history.bars[:-1] + (replace(history.bars[-1], volume=1_500_000),)
+    provisional = replace(
+        history, bars=raw_bars, quality="daily/intraday", volume_progress=0.5
+    )
+    without_volume = replace(history, bars=raw_bars[:-1] + (replace(raw_bars[-1], volume=None),))
+
+    assessment = assess_swing(provisional, origin="watchlist")
+    baseline = assess_swing(without_volume, origin="watchlist")
+
+    assert assessment.volume_ratio is not None and assessment.volume_ratio > 2
+    assert assessment.volume_label == "预估日量（线性）"
+    assert "等待收盘确认" in assessment.volume_confirmation
+    assert assessment.scorecard is not None and baseline.scorecard is not None
+    assert assessment.scorecard.breakout_score == baseline.scorecard.breakout_score
+
+
+def test_email_labels_intraday_and_prior_close_with_data_timestamps() -> None:
+    intraday_history = replace(
+        _history("MSFT"), quality="daily/intraday", volume_progress=0.5,
+        observation_at=datetime(2026, 10, 8, 17, 0, tzinfo=timezone.utc),
+    )
+    prior_history = replace(
+        _history("AMD"), quality="daily/prior-close",
+        observation_at=datetime(2026, 10, 7, 20, 0, tzinfo=timezone.utc),
+    )
+    report = TechnicalSwingReport(
+        generated_at="2026-10-08T17:10:00+00:00",
+        assessments=(
+            assess_swing(intraday_history, origin="watchlist"),
+            assess_swing(prior_history, origin="watchlist"),
+        ),
+        summary="盘中动态K线 1 个；旧日线 1 个。",
+    )
+
+    rendered = _render_technical_swing_email(report)
+
+    assert "盘中动态K线（未确认）" in rendered
+    assert "上一根完整日线（仅参考）" in rendered
+    assert "2026-10-07T20:00:00+00:00" in rendered
+
+
 def test_breakout_uses_resistance_zone_below_current_close() -> None:
     resistance = SwingZone(
         kind="resistance",
